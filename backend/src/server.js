@@ -2,13 +2,13 @@ const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
 
-const connectDB = require("./config/db");
+// const connectDB = require("./config/db");
 
 dotenv.config();
 
 const app = express();
 
-connectDB();
+// connectDB();
 const enquiryRoutes = require("./routes/enquiryRoutes");
 const contactRoutes = require("./routes/contactRoutes");
 const followUpRoutes = require("./routes/followUpRoutes");
@@ -42,6 +42,6 @@ app.use("/api/order", orderRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/api/revenue", revenueRoutes);
 
-const PORT = process.env.PORT || 5000;
+// const PORT = process.env.PORT || 5000;
 
 module.exports = app;
