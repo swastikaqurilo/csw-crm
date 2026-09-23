@@ -12,9 +12,10 @@ const createContact = async (req, res) => {
   } catch (error) {
     if (error.code === 11000) {
       const field = Object.keys(error.keyValue || {})[0] || "field";
+
       return res.status(409).json({
         success: false,
-        message: "Contact already exists",
+        message: `Contact already exists: ${field}`,
         field,
       });
     }
@@ -136,9 +137,10 @@ const updateContact = async (req, res) => {
   } catch (error) {
     if (error.code === 11000) {
       const field = Object.keys(error.keyValue || {})[0] || "field";
+
       return res.status(409).json({
         success: false,
-        message: "Contact already exists",
+        message: `Contact already exists: ${field}`,
         field,
       });
     }

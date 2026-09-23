@@ -1,5 +1,10 @@
 import api from './axios';
 
+export const login = (data) => api.post('/auth/login', data);
+export const register = (data) => api.post('/auth/register', data);
+export const getMe = () => api.get('/auth/me');
+export const logout = () => api.post('/auth/logout');
+
 export const getEnquiries = (params) => api.get('/enquiries', { params });
 export const getEnquiryById = (id) => api.get(`/enquiries/${id}`);
 export const createEnquiry = (data) => api.post('/enquiries', data);
@@ -63,3 +68,38 @@ export const exportRevenueLedger = (params) =>
     params,
     responseType: 'blob',
   });
+
+  // People
+export const getPeople = (params) =>
+  api.get('/people', { params });
+
+export const getPersonById = (id) =>
+  api.get(`/people/${id}`);
+
+export const createPerson = (data) =>
+  api.post('/people', data);
+
+export const updatePerson = (id, data) =>
+  api.put(`/people/${id}`, data);
+
+export const deletePerson = (id) =>
+  api.delete(`/people/${id}`);
+
+// Expenses
+export const getExpenses = (params) =>
+  api.get('/expense', { params });
+
+export const getExpenseById = (id) =>
+  api.get(`/expense/${id}`);
+
+export const createExpense = (data) =>
+  api.post('/expense', data);
+
+export const updateExpense = (id, data) =>
+  api.put(`/expense/${id}`, data);
+
+export const markExpenseAsPaid = (id, data) =>
+  api.patch(`/expense/${id}/pay`, data);
+
+export const deleteExpense = (id) =>
+  api.delete(`/expense/${id}`);

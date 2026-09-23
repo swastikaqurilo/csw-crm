@@ -31,7 +31,7 @@ const contactSchema = new Schema(
       match: [
         /^\S+@\S+\.\S+$/,
         "Please provide a valid email",
-        ],
+      ],
     },
     phone: {
       type: String,
@@ -66,17 +66,18 @@ contactSchema.pre("save", async function () {
 
   const Contact = this.constructor;
 
-  const last = await Contact.findOne(
-    {},
-    {},
-    { sort: { createdAt: -1 } }
-  );
+  const lastContact = await Contact.findOne(
+    {
+      contactId: /^CON-\d+$/,
+    },
+    { contactId: 1 }
+  ).sort({ contactId: -1 });
 
   let nextNumber = 1;
 
-  if (last && last.contactId) {
+  if (lastContact?.contactId) {
     const lastNumber = parseInt(
-      last.contactId.split("-")[1],
+      lastContact.contactId.replace("CON-", ""),
       10
     );
 
@@ -86,6 +87,8 @@ contactSchema.pre("save", async function () {
   }
 
   this.contactId = `CON-${String(nextNumber).padStart(3, "0")}`;
+
+  console.log("Generated contact ID:", this.contactId);
 });
 
 contactSchema.index({ name: "text", company: "text", email: "text" });

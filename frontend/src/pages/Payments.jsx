@@ -9,6 +9,14 @@ import {
   Download,
   FileText,
   ArrowUpRight,
+  CreditCard,
+  Clock3,
+  CheckCircle2,
+  CalendarDays,
+  Building2,
+  ReceiptText,
+  Wallet,
+  CircleDollarSign,
 } from "lucide-react";
 
 import {
@@ -82,14 +90,26 @@ function formatDateInput(value) {
   return date.toISOString().split("T")[0];
 }
 
-function getStatusClass(status) {
-  if (status === "Completed") return "status-resolved";
-  if (status === "Pending") return "status-in-progress";
-  if (status === "Failed") return "status-new";
-  if (status === "Bounced") return "status-contacted";
-  if (status === "Cancelled") return "status-contacted";
+function getStatusClasses(status) {
+  switch (status) {
+    case "Completed":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
 
-  return "status-contacted";
+    case "Pending":
+      return "border-amber-200 bg-amber-50 text-amber-700";
+
+    case "Failed":
+      return "border-red-200 bg-red-50 text-red-700";
+
+    case "Bounced":
+      return "border-orange-200 bg-orange-50 text-orange-700";
+
+    case "Cancelled":
+      return "border-slate-200 bg-slate-100 text-slate-600";
+
+    default:
+      return "border-slate-200 bg-slate-100 text-slate-600";
+  }
 }
 
 function getPaymentReference(payment) {
@@ -107,6 +127,34 @@ function getCustomerName(payment) {
 function getOrderNumber(payment) {
   return payment?.order?.orderNumber || "—";
 }
+
+function getStatusIcon(status) {
+  switch (status) {
+    case "Completed":
+      return CheckCircle2;
+
+    case "Pending":
+      return Clock3;
+
+    case "Failed":
+      return X;
+
+    default:
+      return Clock3;
+  }
+}
+
+const inputClass =
+  "h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-[#0f172a] focus:ring-2 focus:ring-slate-900/10 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400";
+
+const labelClass =
+  "mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.04em] text-slate-600";
+
+const secondaryButtonClass =
+  "inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50";
+
+const primaryButtonClass =
+  "inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-[#0f172a] px-4 text-sm font-medium text-white shadow-sm transition-all hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50";
 
 function Payments() {
   const [payments, setPayments] = useState([]);
@@ -141,6 +189,8 @@ function Payments() {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
 
+  const PAYMENTS_PER_PAGE = 8;
+
   /*
    * FETCH PAYMENTS
    */
@@ -151,7 +201,7 @@ function Payments() {
 
       const response = await getPayments({
         page,
-        limit: 20,
+        limit: PAYMENTS_PER_PAGE,
         ...(search.trim()
           ? { search: search.trim() }
           : {}),
@@ -352,10 +402,7 @@ function Payments() {
 
       setModalOpen(true);
     } catch (err) {
-      console.error(
-        "Failed to load payment:",
-        err
-      );
+      console.error("Failed to load payment:", err);
 
       window.alert(
         err?.response?.data?.message ||
@@ -454,9 +501,7 @@ function Payments() {
 
     if (form.paymentMode === "Cheque") {
       if (!form.chequeNumber.trim()) {
-        window.alert(
-          "Cheque number is required."
-        );
+        window.alert("Cheque number is required.");
         return false;
       }
 
@@ -548,10 +593,7 @@ function Payments() {
         fetchOrders(),
       ]);
     } catch (err) {
-      console.error(
-        "Payment save error:",
-        err
-      );
+      console.error("Payment save error:", err);
 
       window.alert(
         err?.response?.data?.message ||
@@ -591,10 +633,7 @@ function Payments() {
         fetchOrders(),
       ]);
     } catch (err) {
-      console.error(
-        "Payment delete error:",
-        err
-      );
+      console.error("Payment delete error:", err);
 
       window.alert(
         err?.response?.data?.message ||
@@ -622,26 +661,28 @@ function Payments() {
   };
 
   return (
-    <div className="payments-page">
+    <div className="w-full space-y-5 pb-6">
       {/* HEADER */}
-      <div className="page-heading">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
-          <div className="pay-breadcrumb">
-            TREASURY & SETTLEMENTS · LEDGER GATEWAY
+          <div className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
+            Treasury & Settlements · Ledger Gateway
           </div>
 
-          <h1>Payments & Settlements</h1>
+          <h1 className="text-[26px] font-semibold tracking-tight text-slate-900">
+            Payments & Settlements
+          </h1>
 
-          <p>
+          <p className="mt-1.5 max-w-2xl text-sm leading-6 text-slate-500">
             Track customer receivables, banking
             reconciliations, and real-time
             receivables across commercial contracts.
           </p>
         </div>
 
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-2">
           <button
-            className="btn btn-secondary"
+            className={secondaryButtonClass}
             type="button"
             onClick={handlePrint}
           >
@@ -650,7 +691,7 @@ function Payments() {
           </button>
 
           <button
-            className="btn btn-primary"
+            className={primaryButtonClass}
             type="button"
             onClick={openAddModal}
           >
@@ -662,101 +703,128 @@ function Payments() {
 
       {/* ERROR */}
       {error && (
-        <div
-          className="card"
-          style={{
-            marginBottom: 16,
-            padding: 16,
-            color: "#b42318",
-          }}
-        >
-          {error}
+        <div className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <div className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-red-500" />
+
+          <span>{error}</span>
         </div>
       )}
 
       {/* KPI CARDS */}
-      <div className="stats-grid">
-        <div className="stat-card">
-          <div className="stat-top">
-            <span className="pay-kpi-label">
-              TOTAL PAYMENTS COLLECTED
-            </span>
-          </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {/* TOTAL COLLECTED */}
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+          <div className="flex items-start justify-between">
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-slate-400">
+                Total Payments Collected
+              </span>
 
-          <div className="stat-value">
-            {summaryLoading
-              ? "—"
-              : formatCurrency(
-                  summary.totalCollected
-                )}
-          </div>
+              <div className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
+                {summaryLoading
+                  ? "—"
+                  : formatCurrency(
+                      summary.totalCollected
+                    )}
+              </div>
 
-          <div className="stat-change text-success">
-            <ArrowUpRight size={12} />
-            {summary.totalCollectedCount} completed
-            payments
-          </div>
-        </div>
+              <div className="mt-1.5 flex items-center gap-1 text-[11px] font-medium text-emerald-600">
+                <ArrowUpRight size={12} />
 
-        <div className="stat-card">
-          <div className="stat-top">
-            <span className="pay-kpi-label">
-              COMPLETED PAYMENTS
-            </span>
-          </div>
+                {summary.totalCollectedCount} completed
+                payments
+              </div>
+            </div>
 
-          <div className="stat-value">
-            {summaryLoading
-              ? "—"
-              : summary.totalCollectedCount}
-          </div>
-
-          <div className="stat-change">
-            Active payment records
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-700">
+              <Wallet size={17} />
+            </div>
           </div>
         </div>
 
-        <div className="stat-card">
-          <div className="stat-top">
-            <span className="pay-kpi-label">
-              PENDING SETTLEMENTS
-            </span>
-          </div>
+        {/* COMPLETED */}
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+          <div className="flex items-start justify-between">
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-slate-400">
+                Completed Payments
+              </span>
 
-          <div className="stat-value">
-            {summaryLoading
-              ? "—"
-              : formatCurrency(pendingAmount)}
-          </div>
+              <div className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
+                {summaryLoading
+                  ? "—"
+                  : summary.totalCollectedCount}
+              </div>
 
-          <div className="stat-change text-warning">
-            Pending payment records
+              <div className="mt-1.5 text-[11px] font-medium text-slate-500">
+                Active payment records
+              </div>
+            </div>
+
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+              <CheckCircle2 size={17} />
+            </div>
           </div>
         </div>
 
-        <div className="stat-card">
-          <div className="stat-top">
-            <span className="pay-kpi-label">
-              RECEIVED TODAY
-            </span>
-          </div>
+        {/* PENDING */}
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+          <div className="flex items-start justify-between">
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-slate-400">
+                Pending Settlements
+              </span>
 
-          <div className="stat-value">
-            {summaryLoading
-              ? "—"
-              : formatCurrency(summary.totalToday)}
-          </div>
+              <div className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
+                {summaryLoading
+                  ? "—"
+                  : formatCurrency(pendingAmount)}
+              </div>
 
-          <div className="stat-change">
-            {summary.totalTodayCount} completed today
+              <div className="mt-1.5 text-[11px] font-medium text-amber-600">
+                Pending payment records
+              </div>
+            </div>
+
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
+              <Clock3 size={17} />
+            </div>
+          </div>
+        </div>
+
+        {/* TODAY */}
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+          <div className="flex items-start justify-between">
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-slate-400">
+                Received Today
+              </span>
+
+              <div className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
+                {summaryLoading
+                  ? "—"
+                  : formatCurrency(summary.totalToday)}
+              </div>
+
+              <div className="mt-1.5 text-[11px] font-medium text-slate-500">
+                {summary.totalTodayCount} completed today
+              </div>
+            </div>
+
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-700">
+              <CalendarDays size={17} />
+            </div>
           </div>
         </div>
       </div>
 
       {/* FILTER BAR */}
-      <div className="pay-filter-bar">
-        <div className="pay-search">
-          <Search size={15} />
+      <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-[0_1px_2px_rgba(15,23,42,0.03)] lg:flex-row">
+        <div className="relative min-w-0 flex-1">
+          <Search
+            size={15}
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+          />
 
           <input
             value={search}
@@ -765,11 +833,12 @@ function Payments() {
               setPage(1);
             }}
             placeholder="Search by payment ID, transaction ID, cheque..."
+            className="h-10 w-full rounded-lg border border-slate-200 bg-slate-50/50 pl-9 pr-3 text-sm text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-[#0f172a] focus:bg-white focus:ring-2 focus:ring-slate-900/10"
           />
         </div>
 
         <select
-          className="filter-select"
+          className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition-all focus:border-[#0f172a] focus:ring-2 focus:ring-slate-900/10"
           value={methodFilter}
           onChange={(e) => {
             setMethodFilter(e.target.value);
@@ -786,7 +855,7 @@ function Payments() {
         </select>
 
         <select
-          className="filter-select"
+          className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition-all focus:border-[#0f172a] focus:ring-2 focus:ring-slate-900/10"
           value={statusFilter}
           onChange={(e) => {
             setStatusFilter(e.target.value);
@@ -803,22 +872,62 @@ function Payments() {
         </select>
       </div>
 
-      {/* MAIN TABLE + DETAIL */}
-      <div className="pay-workspace">
+      {/* MAIN WORKSPACE */}
+      <div className="w-full overflow-hidden rounded-xl border border-slate-200 bg-white">
         {/* TABLE */}
-        <div className="card">
-          <div className="table-wrap">
-            <table className="table">
+        <div className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+          <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">
+                Payment Ledger
+              </h2>
+
+              <p className="mt-0.5 text-[11px] text-slate-500">
+                Customer payment and settlement records
+              </p>
+            </div>
+
+            <div className="flex h-8 items-center gap-1.5 rounded-md bg-slate-100 px-2.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+              <ReceiptText size={13} />
+              {total} Records
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1050px] text-left">
               <thead>
-                <tr>
-                  <th>PAYMENT REF</th>
-                  <th>ORDER</th>
-                  <th>CUSTOMER ACCOUNT</th>
-                  <th>SETTLED AMOUNT</th>
-                  <th>BOOKING DATE</th>
-                  <th>METHOD & INSTRUMENT</th>
-                  <th>STATUS</th>
-                  <th>ACTIONS</th>
+                <tr className="border-b border-slate-200 bg-slate-50/70">
+                  <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
+                    Payment Ref
+                  </th>
+
+                  <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
+                    Order
+                  </th>
+
+                  <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
+                    Customer Account
+                  </th>
+
+                  <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
+                    Settled Amount
+                  </th>
+
+                  <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
+                    Booking Date
+                  </th>
+
+                  <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
+                    Method & Instrument
+                  </th>
+
+                  <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
+                    Status
+                  </th>
+
+                  <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
+                    Actions
+                  </th>
                 </tr>
               </thead>
 
@@ -827,24 +936,37 @@ function Payments() {
                   <tr>
                     <td
                       colSpan="8"
-                      style={{
-                        textAlign: "center",
-                        padding: 40,
-                      }}
+                      className="px-4 py-12 text-center"
                     >
-                      Loading payments...
+                      <div className="flex flex-col items-center gap-2">
+                        <div className="h-7 w-7 animate-spin rounded-full border-2 border-slate-200 border-t-[#0f172a]" />
+
+                        <span className="text-xs text-slate-500">
+                          Loading payments...
+                        </span>
+                      </div>
                     </td>
                   </tr>
                 ) : payments.length === 0 ? (
                   <tr>
                     <td
                       colSpan="8"
-                      style={{
-                        textAlign: "center",
-                        padding: 40,
-                      }}
+                      className="px-4 py-12 text-center"
                     >
-                      No payments found.
+                      <div className="flex flex-col items-center">
+                        <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-400">
+                          <CreditCard size={18} />
+                        </div>
+
+                        <p className="text-sm font-medium text-slate-700">
+                          No payments found
+                        </p>
+
+                        <p className="mt-1 text-xs text-slate-400">
+                          Try changing your filters or search
+                          criteria.
+                        </p>
+                      </div>
                     </td>
                   </tr>
                 ) : (
@@ -852,84 +974,91 @@ function Payments() {
                     const customer =
                       getCustomerName(payment);
 
+                    const StatusIcon = getStatusIcon(
+                      payment.status
+                    );
+
                     return (
                       <tr
                         key={payment._id}
-                        className={
-                          selectedId === payment._id
-                            ? "selected"
-                            : ""
-                        }
                         onClick={() =>
                           setSelectedId(payment._id)
                         }
+                        className={`cursor-pointer border-b border-slate-100 transition-colors last:border-b-0 ${
+                          selectedId === payment._id
+                            ? "bg-slate-50"
+                            : "hover:bg-slate-50/70"
+                        }`}
                       >
-                        <td>
-                          <span className="font-mono font-semibold text-sm text-brand">
+                        <td className="px-4 py-3.5">
+                          <span className="font-mono text-xs font-semibold text-[#0f172a]">
                             {payment.paymentNumber}
                           </span>
                         </td>
 
-                        <td>
-                          <strong className="text-sm">
+                        <td className="px-4 py-3.5">
+                          <span className="text-xs font-semibold text-slate-700">
                             {getOrderNumber(payment)}
-                          </strong>
+                          </span>
                         </td>
 
-                        <td>
-                          <div className="flex items-center gap-2">
-                            <div className="avatar avatar-sm">
+                        <td className="px-4 py-3.5">
+                          <div className="flex items-center gap-2.5">
+                            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-slate-100 text-[11px] font-bold text-slate-600">
                               {customer
                                 .charAt(0)
                                 .toUpperCase()}
                             </div>
 
-                            <span className="text-sm font-medium">
+                            <span className="max-w-[180px] truncate text-xs font-medium text-slate-700">
                               {customer}
                             </span>
                           </div>
                         </td>
 
-                        <td>
-                          <strong>
+                        <td className="px-4 py-3.5 text-right">
+                          <span className="text-xs font-semibold text-slate-900">
                             {formatCurrency(
                               payment.amount
                             )}
-                          </strong>
+                          </span>
                         </td>
 
-                        <td className="text-sm text-muted">
-                          {formatDate(
-                            payment.paymentDate
-                          )}
+                        <td className="px-4 py-3.5">
+                          <span className="text-xs text-slate-500">
+                            {formatDate(
+                              payment.paymentDate
+                            )}
+                          </span>
                         </td>
 
-                        <td>
-                          <div className="text-sm">
+                        <td className="px-4 py-3.5">
+                          <div className="text-xs font-medium text-slate-700">
                             {payment.paymentMode}
                           </div>
 
-                          <div className="text-xs text-muted font-mono">
+                          <div className="mt-0.5 max-w-[150px] truncate font-mono text-[10px] text-slate-400">
                             {getPaymentReference(
                               payment
                             )}
                           </div>
                         </td>
 
-                        <td>
+                        <td className="px-4 py-3.5">
                           <span
-                            className={`status ${getStatusClass(
+                            className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] font-semibold ${getStatusClasses(
                               payment.status
                             )}`}
                           >
+                            <StatusIcon size={11} />
                             {payment.status}
                           </span>
                         </td>
 
-                        <td>
-                          <div className="flex gap-1">
+                        <td className="px-4 py-3.5">
+                          <div className="flex items-center gap-1">
                             <button
-                              className="btn btn-ghost btn-sm"
+                              className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -941,7 +1070,7 @@ function Payments() {
                             </button>
 
                             <button
-                              className="btn btn-ghost btn-sm"
+                              className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -953,7 +1082,7 @@ function Payments() {
                             </button>
 
                             <button
-                              className="btn btn-ghost btn-sm"
+                              className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-red-50 hover:text-red-600"
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -974,295 +1103,83 @@ function Payments() {
             </table>
           </div>
 
+          
           {/* PAGINATION */}
-          <div className="pagination">
-            <span>
-              Showing {payments.length} of {total}{" "}
-              payment records
-            </span>
+<div className="flex flex-col gap-3 border-t border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+  <span className="text-[11px] text-slate-500">
+    Showing{" "}
+    <span className="font-semibold text-slate-700">
+      {total === 0 ? 0 : (page - 1) * PAYMENTS_PER_PAGE + 1}
+    </span>{" "}
+    to{" "}
+    <span className="font-semibold text-slate-700">
+      {Math.min(page * PAYMENTS_PER_PAGE, total)}
+    </span>{" "}
+    of{" "}
+    <span className="font-semibold text-slate-700">
+      {total}
+    </span>{" "}
+    payment records
+  </span>
 
-            <div className="pagination-buttons">
-              <button
-                type="button"
-                disabled={page <= 1}
-                onClick={() => goToPage(page - 1)}
-              >
-                Previous
-              </button>
+  <div className="flex items-center gap-1">
+    {/* PREVIOUS */}
+    <button
+      type="button"
+      disabled={page <= 1}
+      onClick={() => goToPage(page - 1)}
+      className="h-8 rounded-md border border-slate-200 bg-white px-3 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      Previous
+    </button>
 
-              <button
-                type="button"
-                className="active"
-                disabled
-              >
-                {page}
-              </button>
+    {/* PAGE NUMBERS */}
+    {Array.from(
+      { length: pages },
+      (_, index) => index + 1
+    ).map((pageNumber) => (
+      <button
+        key={pageNumber}
+        type="button"
+        onClick={() => goToPage(pageNumber)}
+        className={`flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-[11px] font-semibold transition-colors ${
+          page === pageNumber
+            ? "bg-[#0f172a] text-white"
+            : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+        }`}
+      >
+        {pageNumber}
+      </button>
+    ))}
 
-              <button
-                type="button"
-                disabled={page >= pages}
-                onClick={() => goToPage(page + 1)}
-              >
-                Next
-              </button>
-            </div>
-          </div>
+    {/* NEXT */}
+    <button
+      type="button"
+      disabled={page >= pages}
+      onClick={() => goToPage(page + 1)}
+      className="h-8 rounded-md border border-slate-200 bg-white px-3 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      Next
+    </button>
+  </div>
+</div>
         </div>
 
-        {/* DETAIL PANEL */}
-        {selectedPayment && (
-          <aside className="pay-detail card">
-            <div className="pay-detail-header">
-              <div>
-                <div className="pay-detail-label">
-                  ACTIVE RECONCILIATION
-                </div>
-
-                <h3>
-                  {selectedPayment.paymentNumber}
-                </h3>
-              </div>
-
-              <span
-                className={`status ${getStatusClass(
-                  selectedPayment.status
-                )}`}
-              >
-                {selectedPayment.status}
-              </span>
-            </div>
-
-            <div className="pay-detail-body">
-              {/* PAYMENT OVERVIEW */}
-              <div className="pay-detail-section">
-                <div className="pay-detail-row">
-                  <span>Linked Order</span>
-                  <strong>
-                    {getOrderNumber(selectedPayment)}
-                  </strong>
-                </div>
-
-                <div className="pay-detail-row">
-                  <span>Customer</span>
-                  <strong>
-                    {getCustomerName(selectedPayment)}
-                  </strong>
-                </div>
-
-                <div className="pay-detail-row">
-                  <span>Payment Amount</span>
-                  <strong>
-                    {formatCurrency(
-                      selectedPayment.amount
-                    )}
-                  </strong>
-                </div>
-
-                <div className="pay-detail-row">
-                  <span>Payment Date</span>
-                  <strong>
-                    {formatDate(
-                      selectedPayment.paymentDate
-                    )}
-                  </strong>
-                </div>
-
-                <div className="pay-detail-row">
-                  <span>Payment Mode</span>
-                  <strong>
-                    {selectedPayment.paymentMode}
-                  </strong>
-                </div>
-              </div>
-
-              {/* ORDER PAYMENT STATUS */}
-              <div className="pay-detail-section">
-                <div className="pay-detail-label">
-                  PAYMENT MILESTONE STATUS
-                </div>
-
-                {selectedPayment?.order ? (
-                  (() => {
-                    const grandTotal = Number(
-                      selectedPayment.order
-                        .grandTotal || 0
-                    );
-
-                    const amountPaid = Number(
-                      selectedPayment.order
-                        .amountPaid || 0
-                    );
-
-                    const progress =
-                      grandTotal > 0
-                        ? Math.min(
-                            100,
-                            Math.max(
-                              0,
-                              (amountPaid /
-                                grandTotal) *
-                                100
-                            )
-                          )
-                        : 0;
-
-                    const remaining = Math.max(
-                      0,
-                      grandTotal - amountPaid
-                    );
-
-                    return (
-                      <>
-                        <div className="pay-progress">
-                          <div
-                            className="pay-progress-bar"
-                            style={{
-                              width: `${progress}%`,
-                            }}
-                          />
-                        </div>
-
-                        <div className="pay-progress-meta">
-                          <span>
-                            {progress.toFixed(1)}%
-                            Realized
-                          </span>
-
-                          <span>
-                            Remaining:{" "}
-                            {formatCurrency(
-                              remaining
-                            )}
-                          </span>
-                        </div>
-                      </>
-                    );
-                  })()
-                ) : (
-                  <div className="text-sm text-muted">
-                    Order information unavailable.
-                  </div>
-                )}
-              </div>
-
-              {/* PAYMENT AUDIT */}
-              <div className="pay-detail-section">
-                <div className="pay-detail-label">
-                  LEDGER AUDIT TRACK
-                </div>
-
-                <div className="pay-audit-item">
-                  <strong>
-                    {selectedPayment.paymentMode ||
-                      "—"}
-                  </strong>
-
-                  <span>
-                    Reference:{" "}
-                    {getPaymentReference(
-                      selectedPayment
-                    )}
-                  </span>
-
-                  <span className="text-muted">
-                    Recorded{" "}
-                    {formatDate(
-                      selectedPayment.createdAt
-                    )}
-                  </span>
-                </div>
-              </div>
-
-              {/* PAYMENT DETAILS */}
-              <div className="pay-detail-section">
-                <div className="pay-detail-label">
-                  PAYMENT DETAILS
-                </div>
-
-                <div className="pay-gst-grid">
-                  <div>
-                    <span>Amount</span>
-                    <strong>
-                      {formatCurrency(
-                        selectedPayment.amount
-                      )}
-                    </strong>
-                  </div>
-
-                  <div>
-                    <span>Currency</span>
-                    <strong>
-                      {selectedPayment.currency ||
-                        "INR"}
-                    </strong>
-                  </div>
-
-                  <div>
-                    <span>Applied to Order</span>
-                    <strong>
-                      {selectedPayment.appliedToOrder
-                        ? "Yes"
-                        : "No"}
-                    </strong>
-                  </div>
-
-                  <div>
-                    <span>Reconciled</span>
-                    <strong>
-                      {selectedPayment.isReconciled
-                        ? "Yes"
-                        : "No"}
-                    </strong>
-                  </div>
-                </div>
-              </div>
-
-              {/* NOTES */}
-              {selectedPayment.notes && (
-                <div className="pay-detail-section">
-                  <div className="pay-detail-label">
-                    NOTES
-                  </div>
-
-                  <div className="pay-audit-item">
-                    <span>
-                      {selectedPayment.notes}
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="pay-detail-footer">
-              <button
-                className="btn btn-secondary btn-sm"
-                type="button"
-                onClick={handlePrint}
-              >
-                <FileText size={13} />
-                Print Receipt
-              </button>
-
-              <button
-                className="btn btn-primary btn-sm"
-                type="button"
-                onClick={() =>
-                  openEditModal(selectedPayment)
-                }
-              >
-                <Pencil size={13} />
-                Edit Payment
-              </button>
-            </div>
-          </aside>
-        )}
       </div>
 
       {/* POLICY NOTE */}
-      <div className="pay-policy-note">
-        <strong>Payment Recording Policy</strong>
+      <div className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-3 sm:flex-row sm:items-start sm:gap-4">
+        <div className="flex shrink-0 items-center gap-2">
+          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-white text-slate-700 shadow-sm">
+            <ReceiptText size={14} />
+          </div>
 
-        <span>
+          <strong className="text-xs font-semibold text-slate-800">
+            Payment Recording Policy
+          </strong>
+        </div>
+
+        <span className="text-[11px] leading-5 text-slate-500">
           Completed payments are automatically applied
           to the linked order balance. Pending, Failed,
           Bounced, and Cancelled payments are recorded
@@ -1271,218 +1188,30 @@ function Payments() {
         </span>
       </div>
 
-      {/* VIEW MODAL */}
-      {viewPayment && (
-        <div
-          className="modal-overlay"
-          onClick={() => setViewPayment(null)}
-        >
-          <div
-            className="modal"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="modal-header">
-              <div>
-                <h3>
-                  {viewPayment.paymentNumber}
-                </h3>
-
-                <p className="text-muted text-sm">
-                  Payment transaction details
-                </p>
-              </div>
-
-              <button
-                className="icon-button"
-                type="button"
-                onClick={() => setViewPayment(null)}
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="modal-body">
-              <div className="grid grid-2 gap-4">
-                <div className="form-group">
-                  <span className="form-label">
-                    Payment Number
-                  </span>
-
-                  <strong>
-                    {viewPayment.paymentNumber}
-                  </strong>
-                </div>
-
-                <div className="form-group">
-                  <span className="form-label">
-                    Order
-                  </span>
-
-                  <strong>
-                    {getOrderNumber(viewPayment)}
-                  </strong>
-                </div>
-
-                <div className="form-group">
-                  <span className="form-label">
-                    Customer
-                  </span>
-
-                  <strong>
-                    {getCustomerName(viewPayment)}
-                  </strong>
-                </div>
-
-                <div className="form-group">
-                  <span className="form-label">
-                    Amount
-                  </span>
-
-                  <strong>
-                    {formatCurrency(
-                      viewPayment.amount
-                    )}
-                  </strong>
-                </div>
-
-                <div className="form-group">
-                  <span className="form-label">
-                    Date
-                  </span>
-
-                  <strong>
-                    {formatDate(
-                      viewPayment.paymentDate
-                    )}
-                  </strong>
-                </div>
-
-                <div className="form-group">
-                  <span className="form-label">
-                    Payment Mode
-                  </span>
-
-                  <strong>
-                    {viewPayment.paymentMode}
-                  </strong>
-                </div>
-
-                <div className="form-group">
-                  <span className="form-label">
-                    Transaction / Cheque Reference
-                  </span>
-
-                  <strong className="font-mono">
-                    {getPaymentReference(
-                      viewPayment
-                    )}
-                  </strong>
-                </div>
-
-                <div className="form-group">
-                  <span className="form-label">
-                    Status
-                  </span>
-
-                  <span
-                    className={`status ${getStatusClass(
-                      viewPayment.status
-                    )}`}
-                  >
-                    {viewPayment.status}
-                  </span>
-                </div>
-
-                {viewPayment.bankName && (
-                  <div className="form-group">
-                    <span className="form-label">
-                      Bank Name
-                    </span>
-
-                    <strong>
-                      {viewPayment.bankName}
-                    </strong>
-                  </div>
-                )}
-
-                {viewPayment.chequeNumber && (
-                  <div className="form-group">
-                    <span className="form-label">
-                      Cheque Number
-                    </span>
-
-                    <strong>
-                      {viewPayment.chequeNumber}
-                    </strong>
-                  </div>
-                )}
-
-                {viewPayment.notes && (
-                  <div
-                    className="form-group"
-                    style={{
-                      gridColumn: "1 / -1",
-                    }}
-                  >
-                    <span className="form-label">
-                      Notes
-                    </span>
-
-                    <strong>
-                      {viewPayment.notes}
-                    </strong>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="modal-footer">
-              <button
-                className="btn btn-secondary"
-                type="button"
-                onClick={() =>
-                  setViewPayment(null)
-                }
-              >
-                Close
-              </button>
-
-              <button
-                className="btn btn-primary"
-                type="button"
-                onClick={() => {
-                  setViewPayment(null);
-                  openEditModal(viewPayment);
-                }}
-              >
-                <Pencil size={15} />
-                Edit Payment
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* ADD / EDIT MODAL */}
       {modalOpen && (
         <div
-          className="modal-overlay"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[2px]"
           onClick={closeModal}
         >
           <div
-            className="modal"
+            className="w-full max-w-[600px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl"
             onClick={(e) => e.stopPropagation()}
-            style={{ maxWidth: 600 }}
           >
-            <div className="modal-header">
+            {/* HEADER */}
+            <div className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
               <div>
-                <h3>
+                <div className="text-[9px] font-bold uppercase tracking-[0.1em] text-slate-400">
+                  Treasury Entry
+                </div>
+
+                <h3 className="mt-1 text-base font-semibold text-slate-900">
                   {editingPayment
                     ? "Edit Payment"
                     : "Record New Payment"}
                 </h3>
 
-                <p className="text-muted text-sm">
+                <p className="mt-1 text-xs text-slate-500">
                   {editingPayment
                     ? "Update the payment information."
                     : "Record money received from a customer."}
@@ -1490,7 +1219,7 @@ function Payments() {
               </div>
 
               <button
-                className="icon-button"
+                className="flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-900"
                 type="button"
                 onClick={closeModal}
               >
@@ -1499,21 +1228,16 @@ function Payments() {
             </div>
 
             <form onSubmit={handleSubmit}>
-              <div className="modal-body">
-                <div className="grid grid-2 gap-4">
+              <div className="max-h-[70vh] overflow-y-auto px-5 py-5">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   {/* ORDER */}
-                  <div
-                    className="form-group"
-                    style={{
-                      gridColumn: "1 / -1",
-                    }}
-                  >
-                    <label className="form-label">
+                  <div className="sm:col-span-2">
+                    <label className={labelClass}>
                       Order *
                     </label>
 
                     <select
-                      className="select"
+                      className={inputClass}
                       name="order"
                       value={form.order}
                       onChange={handleOrderChange}
@@ -1546,23 +1270,25 @@ function Payments() {
 
                   {/* ORDER BALANCE */}
                   {selectedOrder && (
-                    <div
-                      className="form-group"
-                      style={{
-                        gridColumn: "1 / -1",
-                        padding: 14,
-                        borderRadius: 8,
-                        background:
-                          "var(--color-surface-2, #f8fafc)",
-                      }}
-                    >
-                      <div className="grid grid-2 gap-4">
+                    <div className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                      <div className="mb-3 flex items-center gap-2">
+                        <CircleDollarSign
+                          size={15}
+                          className="text-slate-600"
+                        />
+
+                        <span className="text-xs font-semibold text-slate-800">
+                          Order Payment Position
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
                         <div>
-                          <span className="form-label">
+                          <span className={labelClass}>
                             Order Total
                           </span>
 
-                          <strong>
+                          <strong className="text-sm text-slate-800">
                             {formatCurrency(
                               orderBalance.total
                             )}
@@ -1570,11 +1296,11 @@ function Payments() {
                         </div>
 
                         <div>
-                          <span className="form-label">
+                          <span className={labelClass}>
                             Already Paid
                           </span>
 
-                          <strong>
+                          <strong className="text-sm text-slate-800">
                             {formatCurrency(
                               orderBalance.paid
                             )}
@@ -1582,11 +1308,11 @@ function Payments() {
                         </div>
 
                         <div>
-                          <span className="form-label">
+                          <span className={labelClass}>
                             Remaining Balance
                           </span>
 
-                          <strong>
+                          <strong className="text-sm font-semibold text-[#0f172a]">
                             {formatCurrency(
                               orderBalance.remaining
                             )}
@@ -1594,11 +1320,11 @@ function Payments() {
                         </div>
 
                         <div>
-                          <span className="form-label">
+                          <span className={labelClass}>
                             Payment Status
                           </span>
 
-                          <strong>
+                          <strong className="text-sm text-slate-800">
                             {selectedOrder.paymentStatus ||
                               "Pending"}
                           </strong>
@@ -1608,13 +1334,13 @@ function Payments() {
                   )}
 
                   {/* AMOUNT */}
-                  <div className="form-group">
-                    <label className="form-label">
+                  <div>
+                    <label className={labelClass}>
                       Amount *
                     </label>
 
                     <input
-                      className="input"
+                      className={inputClass}
                       type="number"
                       name="amount"
                       value={form.amount}
@@ -1631,23 +1357,25 @@ function Payments() {
                     {!editingPayment &&
                       selectedOrder &&
                       orderBalance.remaining > 0 && (
-                        <span className="text-xs text-muted">
+                        <span className="mt-1.5 block text-[10px] text-slate-400">
                           Maximum:{" "}
-                          {formatCurrency(
-                            orderBalance.remaining
-                          )}
+                          <strong className="font-semibold text-slate-600">
+                            {formatCurrency(
+                              orderBalance.remaining
+                            )}
+                          </strong>
                         </span>
                       )}
                   </div>
 
                   {/* DATE */}
-                  <div className="form-group">
-                    <label className="form-label">
+                  <div>
+                    <label className={labelClass}>
                       Payment Date
                     </label>
 
                     <input
-                      className="input"
+                      className={inputClass}
                       type="date"
                       name="paymentDate"
                       value={form.paymentDate}
@@ -1656,13 +1384,13 @@ function Payments() {
                   </div>
 
                   {/* PAYMENT MODE */}
-                  <div className="form-group">
-                    <label className="form-label">
+                  <div>
+                    <label className={labelClass}>
                       Payment Mode *
                     </label>
 
                     <select
-                      className="select"
+                      className={inputClass}
                       name="paymentMode"
                       value={form.paymentMode}
                       onChange={handleChange}
@@ -1680,13 +1408,13 @@ function Payments() {
                   </div>
 
                   {/* STATUS */}
-                  <div className="form-group">
-                    <label className="form-label">
+                  <div>
+                    <label className={labelClass}>
                       Status *
                     </label>
 
                     <select
-                      className="select"
+                      className={inputClass}
                       name="status"
                       value={form.status}
                       onChange={handleChange}
@@ -1712,13 +1440,13 @@ function Payments() {
                     "RTGS",
                     "Bank Transfer",
                   ].includes(form.paymentMode) && (
-                    <div className="form-group">
-                      <label className="form-label">
+                    <div>
+                      <label className={labelClass}>
                         Transaction ID *
                       </label>
 
                       <input
-                        className="input"
+                        className={inputClass}
                         name="transactionId"
                         value={form.transactionId}
                         onChange={handleChange}
@@ -1728,55 +1456,50 @@ function Payments() {
                     </div>
                   )}
 
-                  {/* CHEQUE */}
-                  {form.paymentMode ===
-                    "Cheque" && (
-                    <>
-                      <div className="form-group">
-                        <label className="form-label">
-                          Cheque Number *
-                        </label>
+                  {/* CHEQUE NUMBER */}
+                  {form.paymentMode === "Cheque" && (
+                    <div>
+                      <label className={labelClass}>
+                        Cheque Number *
+                      </label>
 
-                        <input
-                          className="input"
-                          name="chequeNumber"
-                          value={form.chequeNumber}
-                          onChange={handleChange}
-                          placeholder="Cheque number"
-                          required
-                        />
-                      </div>
+                      <input
+                        className={inputClass}
+                        name="chequeNumber"
+                        value={form.chequeNumber}
+                        onChange={handleChange}
+                        placeholder="Cheque number"
+                        required
+                      />
+                    </div>
+                  )}
 
-                      <div className="form-group">
-                        <label className="form-label">
-                          Bank Name *
-                        </label>
+                  {/* BANK NAME */}
+                  {form.paymentMode === "Cheque" && (
+                    <div>
+                      <label className={labelClass}>
+                        Bank Name *
+                      </label>
 
-                        <input
-                          className="input"
-                          name="bankName"
-                          value={form.bankName}
-                          onChange={handleChange}
-                          placeholder="Issuing bank"
-                          required
-                        />
-                      </div>
-                    </>
+                      <input
+                        className={inputClass}
+                        name="bankName"
+                        value={form.bankName}
+                        onChange={handleChange}
+                        placeholder="Issuing bank"
+                        required
+                      />
+                    </div>
                   )}
 
                   {/* NOTES */}
-                  <div
-                    className="form-group"
-                    style={{
-                      gridColumn: "1 / -1",
-                    }}
-                  >
-                    <label className="form-label">
+                  <div className="sm:col-span-2">
+                    <label className={labelClass}>
                       Notes
                     </label>
 
                     <textarea
-                      className="input"
+                      className="min-h-[90px] w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-[#0f172a] focus:ring-2 focus:ring-slate-900/10"
                       name="notes"
                       value={form.notes}
                       onChange={handleChange}
@@ -1786,18 +1509,13 @@ function Payments() {
                   </div>
 
                   {/* ATTACHMENT */}
-                  <div
-                    className="form-group"
-                    style={{
-                      gridColumn: "1 / -1",
-                    }}
-                  >
-                    <label className="form-label">
+                  <div className="sm:col-span-2">
+                    <label className={labelClass}>
                       Attachment URL
                     </label>
 
                     <input
-                      className="input"
+                      className={inputClass}
                       name="attachmentUrl"
                       value={form.attachmentUrl}
                       onChange={handleChange}
@@ -1807,10 +1525,11 @@ function Payments() {
                 </div>
               </div>
 
-              <div className="modal-footer">
+              {/* FOOTER */}
+              <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50/50 px-5 py-3">
                 <button
                   type="button"
-                  className="btn btn-secondary"
+                  className={secondaryButtonClass}
                   onClick={closeModal}
                   disabled={saving}
                 >
@@ -1819,7 +1538,7 @@ function Payments() {
 
                 <button
                   type="submit"
-                  className="btn btn-primary"
+                  className={primaryButtonClass}
                   disabled={saving}
                 >
                   {saving
@@ -1833,7 +1552,299 @@ function Payments() {
           </div>
         </div>
       )}
+
+      {viewPayment && (
+  <div
+    className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[2px]"
+    onClick={() => setViewPayment(null)}
+  >
+    <div
+      className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {/* Header */}
+      <div className="flex items-start justify-between border-b border-slate-200 px-6 py-5">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+            Active Reconciliation
+          </p>
+
+          <div className="mt-1 flex items-center gap-3">
+            <h2 className="text-lg font-semibold text-slate-900">
+              {viewPayment.paymentNumber}
+            </h2>
+
+            <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold text-emerald-700">
+              {viewPayment.status}
+            </span>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setViewPayment(null)}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+        >
+          <X size={17} />
+        </button>
+      </div>
+
+      {/* Content */}
+      <div className="overflow-y-auto px-6 py-5">
+        {/* Payment Summary */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+              Linked Order
+            </p>
+            <p className="mt-1 text-sm font-semibold text-slate-800">
+              {viewPayment.order?.orderNumber || "—"}
+            </p>
+          </div>
+
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+              Customer
+            </p>
+            <p className="mt-1 text-sm font-semibold text-slate-800">
+              {viewPayment.order?.contact?.company ||
+                viewPayment.order?.contact?.name ||
+                "—"}
+            </p>
+          </div>
+
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+              Payment Amount
+            </p>
+            <p className="mt-1 text-sm font-semibold text-slate-900">
+              ₹
+              {Number(viewPayment.amount || 0).toLocaleString("en-IN")}
+            </p>
+          </div>
+
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+              Payment Date
+            </p>
+            <p className="mt-1 text-sm font-semibold text-slate-800">
+              {viewPayment.paymentDate
+                ? new Date(viewPayment.paymentDate).toLocaleDateString(
+                    "en-IN",
+                    {
+                      day: "2-digit",
+                      month: "short",
+                      year: "numeric",
+                    }
+                  )
+                : "—"}
+            </p>
+          </div>
+
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+              Payment Mode
+            </p>
+            <p className="mt-1 text-sm font-semibold text-slate-800">
+              {viewPayment.paymentMode || "—"}
+            </p>
+          </div>
+        </div>
+
+        {/* Milestone */}
+        <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold text-slate-800">
+              Payment Milestone Status
+            </p>
+
+            <span className="text-xs font-semibold text-slate-700">
+              {viewPayment.order?.amount
+                ? (
+                    (Number(viewPayment.amount || 0) /
+                      Number(viewPayment.order.amount)) *
+                    100
+                  ).toFixed(1)
+                : "0.0"}
+              %
+            </span>
+          </div>
+
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
+            <div
+              className="h-full rounded-full bg-[#0f172a]"
+              style={{
+                width: `${
+                  viewPayment.order?.amount
+                    ? Math.min(
+                        (Number(viewPayment.amount || 0) /
+                          Number(viewPayment.order.amount)) *
+                          100,
+                        100
+                      )
+                    : 0
+                }%`,
+              }}
+            />
+          </div>
+
+          <div className="mt-2 flex justify-between text-[11px] text-slate-500">
+            <span>Realized</span>
+
+            <span>
+              Remaining:{" "}
+              <span className="font-semibold text-slate-700">
+                ₹
+                {Number(
+                  viewPayment.order?.amount -
+                    viewPayment.amount || 0
+                ).toLocaleString("en-IN")}
+              </span>
+            </span>
+          </div>
+        </div>
+
+        {/* Ledger Audit */}
+        <div className="mt-6">
+          <p className="text-xs font-semibold text-slate-900">
+            Ledger Audit Track
+          </p>
+
+          <div className="mt-3 rounded-xl border border-slate-200 p-4">
+            <div className="flex items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-bold text-slate-700">
+                {viewPayment.paymentMode?.slice(0, 3).toUpperCase() ||
+                  "PAY"}
+              </div>
+
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-slate-800">
+                  {viewPayment.paymentMode || "Payment"}
+                </p>
+
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Reference:{" "}
+                  <span className="font-medium text-slate-700">
+                    {viewPayment.transactionId ||
+                      viewPayment.referenceNumber ||
+                      "—"}
+                  </span>
+                </p>
+
+                <p className="mt-1 text-[11px] text-slate-400">
+                  Recorded{" "}
+                  {viewPayment.createdAt
+                    ? new Date(
+                        viewPayment.createdAt
+                      ).toLocaleDateString("en-IN", {
+                        day: "2-digit",
+                        month: "short",
+                        year: "numeric",
+                      })
+                    : "—"}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Payment Details */}
+        <div className="mt-6">
+          <p className="text-xs font-semibold text-slate-900">
+            Payment Details
+          </p>
+
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="rounded-xl border border-slate-200 p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+                Amount
+              </p>
+
+              <p className="mt-1 text-sm font-semibold text-slate-900">
+                ₹
+                {Number(viewPayment.amount || 0).toLocaleString(
+                  "en-IN"
+                )}
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+                Currency
+              </p>
+
+              <p className="mt-1 text-sm font-semibold text-slate-800">
+                {viewPayment.currency || "INR"}
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+                Applied to Order
+              </p>
+
+              <p className="mt-1 text-sm font-semibold text-emerald-600">
+                Yes
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-3 flex items-center justify-between rounded-xl border border-slate-200 px-4 py-3">
+            <span className="text-xs font-medium text-slate-600">
+              Reconciled
+            </span>
+
+            <span className="text-xs font-semibold text-emerald-600">
+              Yes
+            </span>
+          </div>
+        </div>
+
+        {/* Notes */}
+        {viewPayment.notes && (
+          <div className="mt-6">
+            <p className="text-xs font-semibold text-slate-900">
+              Notes
+            </p>
+
+            <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-3">
+              <p className="text-sm leading-6 text-slate-600">
+                {viewPayment.notes}
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="flex items-center justify-end gap-2 border-t border-slate-200 bg-slate-50/70 px-6 py-4">
+        <button
+          type="button"
+          onClick={handlePrint}
+          className={secondaryButtonClass}
+        >
+          <FileText size={15} />
+          Print Receipt
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setViewPayment(null);
+            openEditModal(viewPayment);
+          }}
+          className={primaryButtonClass}
+        >
+          <Pencil size={15} />
+          Edit Payment
+        </button>
+      </div>
     </div>
+  </div>
+)}
+    </div>
+
+    
   );
 }
 

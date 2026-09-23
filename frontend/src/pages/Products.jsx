@@ -10,7 +10,6 @@ import {
   XCircle,
   RefreshCw,
   Download,
-  ChevronRight,
   Tag,
   CircleDollarSign,
   Layers3,
@@ -93,6 +92,9 @@ export default function Products() {
   const [category, setCategory] = useState("All Categories");
   const [status, setStatus] = useState("All Status");
 
+  const [currentPage, setCurrentPage] = useState(1);
+  const PRODUCTS_PER_PAGE = 8;
+
   const [showModal, setShowModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -163,6 +165,34 @@ export default function Products() {
       return matchesSearch && matchesCategory && matchesStatus;
     });
   }, [products, search, category, status]);
+
+  const totalPages = Math.ceil(
+  filteredProducts.length / PRODUCTS_PER_PAGE
+);
+
+const paginatedProducts = useMemo(() => {
+  const startIndex =
+    (currentPage - 1) * PRODUCTS_PER_PAGE;
+
+  return filteredProducts.slice(
+    startIndex,
+    startIndex + PRODUCTS_PER_PAGE
+  );
+}, [filteredProducts, currentPage]);
+
+const paginationStart =
+  filteredProducts.length === 0
+    ? 0
+    : (currentPage - 1) * PRODUCTS_PER_PAGE + 1;
+
+const paginationEnd = Math.min(
+  currentPage * PRODUCTS_PER_PAGE,
+  filteredProducts.length
+);
+
+useEffect(() => {
+  setCurrentPage(1);
+}, [search, category, status]);
 
   const categories = useMemo(() => {
     const unique = [
@@ -446,126 +476,165 @@ export default function Products() {
   };
 
   return (
-    <div className="products-page">
-      {/* HEADER */}
-      <div className="products-heading">
-        <div>
-          <div className="products-eyebrow">
-            PRODUCT CATALOGUE
-          </div>
-
-          <h1>Products</h1>
-
-          <p>
-            Manage product specifications, pricing and availability.
-          </p>
+  <div className="w-full space-y-5">
+    {/* =====================================================
+        HEADER
+    ====================================================== */}
+    <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+      <div>
+        <div className="mb-1 text-[11px] font-bold uppercase tracking-[0.08em] text-[#0f172a]">
+          Product Catalogue
         </div>
 
-        <div className="products-header-actions">
-          <button
-            type="button"
-            className="products-icon-action"
-            onClick={loadProducts}
-            title="Refresh"
-            disabled={loading}
-          >
-            <RefreshCw size={17} />
-          </button>
+        <h1 className="text-[24px] font-semibold tracking-[-0.025em] text-[var(--color-text-primary)]">
+          Products
+        </h1>
 
-          <button
-            type="button"
-            className="products-secondary-btn"
-            onClick={exportCSV}
-            disabled={!filteredProducts.length}
-          >
-            <Download size={16} />
-            Export
-          </button>
+        <p className="mt-1 text-[13px] text-[var(--color-text-secondary)]">
+          Manage product specifications, pricing and availability.
+        </p>
+      </div>
 
-          <button
-            type="button"
-            className="products-primary-btn"
-            onClick={openCreateModal}
-          >
-            <Plus size={17} />
-            Add Product
-          </button>
+      <div className="flex shrink-0 items-center gap-2">
+        <button
+          type="button"
+          onClick={loadProducts}
+          title="Refresh products"
+          disabled={loading}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-white text-[var(--color-text-secondary)] shadow-sm transition-all hover:border-[var(--color-border-strong)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <RefreshCw
+            size={16}
+            className={loading ? "animate-spin" : ""}
+          />
+        </button>
+
+        <button
+          type="button"
+          onClick={exportCSV}
+          disabled={!filteredProducts.length}
+          className="inline-flex h-9 items-center gap-2 rounded-lg border border-[var(--color-border)] bg-white px-3.5 text-[12px] font-semibold text-[var(--color-text-primary)] shadow-sm transition-all hover:border-[var(--color-border-strong)] hover:bg-[var(--color-surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Download size={15} />
+          Export
+        </button>
+
+        <button
+          type="button"
+          onClick={openCreateModal}
+          className="inline-flex h-9 items-center gap-2 rounded-lg bg-[var(--color-brand-900)] px-3.5 text-[12px] font-semibold text-white shadow-sm transition-all hover:bg-[var(--color-brand-800)] hover:shadow-md"
+        >
+          <Plus size={16} />
+          Add Product
+        </button>
+      </div>
+    </div>
+
+    {/* =====================================================
+        ALERTS
+    ====================================================== */}
+    {error && (
+      <div className="flex items-center gap-3 rounded-lg border border-[var(--color-danger-100)] bg-[var(--color-danger-50)] px-3.5 py-2.5 text-[12.5px] text-[var(--color-danger-700)]">
+        <AlertCircle size={17} className="shrink-0" />
+
+        <span className="min-w-0 flex-1">{error}</span>
+
+        <button
+          type="button"
+          onClick={() => setError("")}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-white/70"
+        >
+          <X size={14} />
+        </button>
+      </div>
+    )}
+
+    {success && (
+      <div className="flex items-center gap-3 rounded-lg border border-[var(--color-success-100)] bg-[var(--color-success-50)] px-3.5 py-2.5 text-[12.5px] text-[var(--color-success-700)]">
+        <CheckCircle2 size={17} className="shrink-0" />
+
+        <span className="min-w-0 flex-1">{success}</span>
+
+        <button
+          type="button"
+          onClick={() => setSuccess("")}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-white/70"
+        >
+          <X size={14} />
+        </button>
+      </div>
+    )}
+
+    {/* =====================================================
+        KPI CARDS
+    ====================================================== */}
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      {/* Total */}
+      <div className="group flex items-center gap-3.5 rounded-xl border border-[var(--color-border)] bg-white px-4 py-3.5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-[var(--color-brand-200)] hover:shadow-md">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--color-brand-50)] text-[var(--color-brand-700)]">
+          <Package size={18} />
+        </div>
+
+        <div className="min-w-0">
+          <span className="block text-[11px] font-medium text-[var(--color-text-muted)]">
+            Total Products
+          </span>
+
+          <strong className="mt-0.5 block text-[19px] font-semibold tracking-tight text-[var(--color-text-primary)]">
+            {products.length}
+          </strong>
         </div>
       </div>
 
-      {/* ALERTS */}
-      {error && (
-        <div className="products-alert products-alert-error">
-          <AlertCircleIcon />
-          <span>{error}</span>
-
-          <button
-            type="button"
-            onClick={() => setError("")}
-          >
-            <X size={15} />
-          </button>
-        </div>
-      )}
-
-      {success && (
-        <div className="products-alert products-alert-success">
-          <CheckCircle2 size={17} />
-          <span>{success}</span>
-
-          <button
-            type="button"
-            onClick={() => setSuccess("")}
-          >
-            <X size={15} />
-          </button>
-        </div>
-      )}
-
-      {/* KPI ROW */}
-      <div className="products-kpi-grid">
-        <div className="products-kpi">
-          <div className="products-kpi-icon">
-            <Package size={18} />
-          </div>
-
-          <div>
-            <span>Total Products</span>
-            <strong>{products.length}</strong>
-          </div>
+      {/* Active */}
+      <div className="group flex items-center gap-3.5 rounded-xl border border-[var(--color-border)] bg-white px-4 py-3.5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-[var(--color-success-200)] hover:shadow-md">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--color-success-50)] text-[var(--color-success-600)]">
+          <CheckCircle2 size={18} />
         </div>
 
-        <div className="products-kpi">
-          <div className="products-kpi-icon">
-            <CheckCircle2 size={18} />
-          </div>
+        <div className="min-w-0">
+          <span className="block text-[11px] font-medium text-[var(--color-text-muted)]">
+            Active
+          </span>
 
-          <div>
-            <span>Active</span>
-            <strong>{activeProducts}</strong>
-          </div>
-        </div>
-
-        <div className="products-kpi">
-          <div className="products-kpi-icon">
-            <XCircle size={18} />
-          </div>
-
-          <div>
-            <span>Inactive</span>
-            <strong>{inactiveProducts}</strong>
-          </div>
+          <strong className="mt-0.5 block text-[19px] font-semibold tracking-tight text-[var(--color-text-primary)]">
+            {activeProducts}
+          </strong>
         </div>
       </div>
 
-      {/* MAIN WORKSPACE */}
-      <div className="products-workspace">
-        {/* LEFT */}
-        <section className="products-catalogue">
-          {/* FILTER BAR */}
-          <div className="products-toolbar">
-            <div className="products-search">
-              <Search size={17} />
+      {/* Inactive */}
+      <div className="group flex items-center gap-3.5 rounded-xl border border-[var(--color-border)] bg-white px-4 py-3.5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-[var(--color-danger-200)] hover:shadow-md">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--color-danger-50)] text-[var(--color-danger-600)]">
+          <XCircle size={18} />
+        </div>
+
+        <div className="min-w-0">
+          <span className="block text-[11px] font-medium text-[var(--color-text-muted)]">
+            Inactive
+          </span>
+
+          <strong className="mt-0.5 block text-[19px] font-semibold tracking-tight text-[var(--color-text-primary)]">
+            {inactiveProducts}
+          </strong>
+        </div>
+      </div>
+    </div>
+
+    {/* =====================================================
+        MAIN WORKSPACE
+    ====================================================== */}
+    <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+      {/* ===================================================
+          PRODUCT CATALOGUE
+      ==================================================== */}
+      <section className="min-w-0 overflow-hidden rounded-xl border border-[var(--color-border)] bg-white shadow-sm">
+        {/* FILTER TOOLBAR */}
+        <div className="border-b border-[var(--color-border)] p-3.5">
+          <div className="flex flex-col gap-2.5 lg:flex-row">
+            {/* Search */}
+            <div className="flex h-10 min-w-0 flex-1 items-center gap-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-[var(--color-text-muted)] transition-all focus-within:border-[var(--color-brand-400)] focus-within:bg-white focus-within:ring-2 focus-within:ring-[var(--color-brand-100)]">
+              <Search size={16} className="shrink-0" />
 
               <input
                 type="text"
@@ -574,23 +643,27 @@ export default function Products() {
                 onChange={(event) =>
                   setSearch(event.target.value)
                 }
+                className="min-w-0 flex-1 border-0 bg-transparent text-[12.5px] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)]"
               />
 
               {search && (
                 <button
                   type="button"
                   onClick={() => setSearch("")}
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md hover:bg-[var(--color-border)]"
                 >
-                  <X size={15} />
+                  <X size={14} />
                 </button>
               )}
             </div>
 
+            {/* Category */}
             <select
               value={category}
               onChange={(event) =>
                 setCategory(event.target.value)
               }
+              className="h-10 rounded-lg border border-[var(--color-border)] bg-white px-3 text-[12px] font-medium text-[var(--color-text-primary)] outline-none transition-all hover:border-[var(--color-border-strong)] focus:border-[var(--color-brand-400)] focus:ring-2 focus:ring-[var(--color-brand-100)]"
             >
               {categories.map((item) => (
                 <option key={item} value={item}>
@@ -599,217 +672,367 @@ export default function Products() {
               ))}
             </select>
 
+            {/* Status */}
             <select
               value={status}
               onChange={(event) =>
                 setStatus(event.target.value)
               }
+              className="h-10 rounded-lg border border-[var(--color-border)] bg-white px-3 text-[12px] font-medium text-[var(--color-text-primary)] outline-none transition-all hover:border-[var(--color-border-strong)] focus:border-[var(--color-brand-400)] focus:ring-2 focus:ring-[var(--color-brand-100)]"
             >
               <option value="All Status">All Status</option>
               <option value="Active">Active</option>
               <option value="Inactive">Inactive</option>
             </select>
           </div>
+        </div>
 
-          {/* TABLE HEADER */}
-          <div className="products-table-title">
-            <div>
-              <h2>Product Catalogue</h2>
-              <span>
-                {filteredProducts.length} result
-                {filteredProducts.length !== 1
-                  ? "s"
-                  : ""}
-              </span>
-            </div>
+        {/* TABLE TITLE */}
+        <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-3.5">
+          <div>
+            <h2 className="text-[13.5px] font-semibold text-[var(--color-brand-800)]">
+              Product Catalogue
+            </h2>
+
+            <span className="mt-0.5 block text-[11px] text-[var(--color-text-muted)]">
+              {filteredProducts.length} result
+              {filteredProducts.length !== 1 ? "s" : ""}
+            </span>
           </div>
 
-          {/* TABLE */}
-          {loading ? (
-            <div className="products-empty">
-              <RefreshCw
-                size={22}
-                className="products-spin"
-              />
-              <span>Loading products...</span>
+          {search || category !== "All Categories" || status !== "All Status" ? (
+            <button
+              type="button"
+              onClick={() => {
+                setSearch("");
+                setCategory("All Categories");
+                setStatus("All Status");
+              }}
+              className="text-[11px] font-semibold text-[var(--color-brand-700)] hover:text-[var(--color-brand-800)]"
+            >
+              Clear filters
+            </button>
+          ) : null}
+        </div>
+
+        {/* LOADING */}
+        {loading ? (
+          <div className="flex min-h-[360px] flex-col items-center justify-center gap-3 text-[var(--color-text-muted)]">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--color-brand-50)] text-[var(--color-brand-700)]">
+              <RefreshCw size={21} className="animate-spin" />
             </div>
-          ) : filteredProducts.length === 0 ? (
-            <div className="products-empty">
-              <Package size={28} />
 
-              <strong>No products found</strong>
-
-              <span>
-                {products.length === 0
-                  ? "Create your first product to get started."
-                  : "Try adjusting your search or filters."}
-              </span>
-
-              {products.length === 0 && (
-                <button
-                  type="button"
-                  className="products-primary-btn"
-                  onClick={openCreateModal}
-                >
-                  <Plus size={16} />
-                  Add Product
-                </button>
-              )}
+            <span className="text-[12px]">
+              Loading products...
+            </span>
+          </div>
+        ) : filteredProducts.length === 0 ? (
+          /* EMPTY */
+          <div className="flex min-h-[360px] flex-col items-center justify-center px-6 text-center">
+            <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--color-brand-50)] text-[var(--color-brand-600)]">
+              <Package size={23} />
             </div>
-          ) : (
-            <div className="products-table-wrap">
-              <table className="products-table">
-                <thead>
-                  <tr>
-                    <th>Product</th>
-                    <th>Code</th>
-                    <th>Category</th>
-                    <th>Unit</th>
-                    <th>Price</th>
-                    <th>Status</th>
-                    <th></th>
-                  </tr>
-                </thead>
 
-                <tbody>
-                  {filteredProducts.map((product) => {
-                    const selected =
-                      getId(selectedProduct) ===
-                      getId(product);
+            <strong className="text-[13px] font-semibold text-[var(--color-text-primary)]">
+              No products found
+            </strong>
 
-                    return (
-                      <tr
-                        key={getId(product)}
-                        className={
-                          selected
-                            ? "product-row-selected"
-                            : ""
-                        }
-                        onClick={() =>
-                          setSelectedProduct(product)
-                        }
-                      >
-                        <td>
-                          <div className="product-name-cell">
-                            <div className="product-mini-icon">
-                              <Package size={16} />
-                            </div>
+            <span className="mt-1 max-w-sm text-[12px] leading-relaxed text-[var(--color-text-muted)]">
+              {products.length === 0
+                ? "Create your first product to get started."
+                : "Try adjusting your search or filters."}
+            </span>
 
-                            <div>
-                              <strong>
-                                {product.name}
-                              </strong>
+            {products.length === 0 && (
+              <button
+                type="button"
+                onClick={openCreateModal}
+                className="mt-4 inline-flex h-9 items-center gap-2 rounded-lg bg-[var(--color-brand-900)] px-3.5 text-[12px] font-semibold text-white shadow-sm hover:bg-[var(--color-brand-800)]"
+              >
+                <Plus size={15} />
+                Add Product
+              </button>
+            )}
+          </div>
+        ) : (
+          <>
+          {/* /* TABLE */ }
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] border-collapse">
+              <thead>
+                <tr className="border-b border-[var(--color-border)] bg-[var(--color-surface)]">
+                  <th className="px-4 py-3 text-left text-[10.5px] font-bold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
+                    Product
+                  </th>
 
-                              <span>
-                                {product.material ||
-                                  "Steel"}
-                              </span>
-                            </div>
-                          </div>
-                        </td>
+                  <th className="px-3 py-3 text-left text-[10.5px] font-bold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
+                    Code
+                  </th>
 
-                        <td>
-                          <span className="product-code">
-                            {product.productCode}
-                          </span>
-                        </td>
+                  <th className="px-3 py-3 text-left text-[10.5px] font-bold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
+                    Category
+                  </th>
 
-                        <td>
-                          {product.category || "—"}
-                        </td>
+                  <th className="px-3 py-3 text-left text-[10.5px] font-bold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
+                    Unit
+                  </th>
 
-                        <td>
-                          {product.unit || "—"}
-                        </td>
+                  <th className="px-3 py-3 text-right text-[10.5px] font-bold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
+                    Price
+                  </th>
 
-                        <td>
-                          <strong className="product-price">
-                            {formatCurrency(
-                              product.price,
-                              product.currency
-                            )}
-                          </strong>
-                        </td>
+                  <th className="px-3 py-3 text-left text-[10.5px] font-bold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
+                    Status
+                  </th>
 
-                        <td>
-                          <span
-                            className={`product-status ${
-                              product.status === "Active"
-                                ? "active"
-                                : "inactive"
+                  <th className="w-[78px] px-3 py-3" />
+                </tr>
+              </thead>
+
+              <tbody>
+                {paginatedProducts.map((product) => {
+                  const selected =
+                    getId(selectedProduct) === getId(product);
+
+                  return (
+                    <tr
+                      key={getId(product)}
+                      onClick={() =>
+                        setSelectedProduct(product)
+                      }
+                      className={`group cursor-pointer border-b border-[var(--color-border)] transition-colors last:border-b-0 ${
+                        selected
+                          ? "bg-[var(--color-brand-50)]/70"
+                          : "hover:bg-[var(--color-surface-hover)]"
+                      }`}
+                    >
+                      {/* Product */}
+                      <td className="px-4 py-3.5">
+                        <div className="flex items-center gap-3">
+                          <div
+                            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
+                              selected
+                                ? "bg-[var(--color-brand-100)] text-[var(--color-brand-700)]"
+                                : "bg-[var(--color-surface)] text-[var(--color-text-secondary)]"
                             }`}
                           >
-                            <span />
-                            {product.status}
-                          </span>
-                        </td>
-
-                        <td>
-                          <div
-                            className="product-row-actions"
-                            onClick={(event) =>
-                              event.stopPropagation()
-                            }
-                          >
-                            <button
-                              type="button"
-                              title="Edit"
-                              onClick={() =>
-                                openEditModal(product)
-                              }
-                            >
-                              <Pencil size={15} />
-                            </button>
-
-                            <button
-                              type="button"
-                              className="delete"
-                              title="Delete"
-                              disabled={deleting}
-                              onClick={() =>
-                                handleDelete(product)
-                              }
-                            >
-                              <Trash2 size={15} />
-                            </button>
-
-                            <ChevronRight
-                              size={16}
-                              className="row-arrow"
-                            />
+                            <Package size={16} />
                           </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+
+                          <div className="min-w-0">
+                            <strong className="block truncate text-[12.5px] font-semibold text-[var(--color-text-primary)]">
+                              {product.name}
+                            </strong>
+
+                            <span className="mt-0.5 block text-[11px] text-[var(--color-text-muted)]">
+                              {product.material || "Steel"}
+                            </span>
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* Code */}
+                      <td className="px-3 py-3.5">
+                        <span className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 font-mono text-[10.5px] font-medium text-[var(--color-text-secondary)]">
+                          {product.productCode}
+                        </span>
+                      </td>
+
+                      {/* Category */}
+                      <td className="px-3 py-3.5 text-[12px] text-[var(--color-text-secondary)]">
+                        {product.category || "—"}
+                      </td>
+
+                      {/* Unit */}
+                      <td className="px-3 py-3.5">
+                        <span className="text-[12px] font-medium text-[var(--color-text-secondary)]">
+                          {product.unit || "—"}
+                        </span>
+                      </td>
+
+                      {/* Price */}
+                      <td className="px-3 py-3.5 text-right">
+                        <strong className="font-mono text-[12px] font-semibold text-[var(--color-text-primary)]">
+                          {formatCurrency(
+                            product.price,
+                            product.currency
+                          )}
+                        </strong>
+                      </td>
+
+                      {/* Status */}
+                      <td className="px-3 py-3.5">
+                        <span
+                          className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-semibold ${
+                            product.status === "Active"
+                              ? "bg-[var(--color-success-50)] text-[var(--color-success-700)]"
+                              : "bg-[var(--color-danger-50)] text-[var(--color-danger-700)]"
+                          }`}
+                        >
+                          <span
+                            className={`h-1.5 w-1.5 rounded-full ${
+                              product.status === "Active"
+                                ? "bg-[var(--color-success-600)]"
+                                : "bg-[var(--color-danger-600)]"
+                            }`}
+                          />
+
+                          {product.status}
+                        </span>
+                      </td>
+
+                      {/* Actions */}
+                      <td className="px-3 py-3.5">
+                        <div
+                          className="flex items-center justify-end gap-1"
+                          onClick={(event) =>
+                            event.stopPropagation()
+                          }
+                        >
+                          <button
+                            type="button"
+                            title="Edit"
+                            onClick={() =>
+                              openEditModal(product)
+                            }
+                            className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] opacity-0 transition-all hover:bg-[var(--color-brand-50)] hover:text-[var(--color-brand-700)] group-hover:opacity-100"
+                          >
+                            <Pencil size={14} />
+                          </button>
+
+                          <button
+                            type="button"
+                            title="Delete"
+                            disabled={deleting}
+                            onClick={() =>
+                              handleDelete(product)
+                            }
+                            className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] opacity-0 transition-all hover:bg-[var(--color-danger-50)] hover:text-[var(--color-danger-600)] group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+                           </tbody>
+            </table>
+          </div>
+
+          {/* PAGINATION */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between border-t border-[var(--color-border)] px-4 py-3">
+              {/* Results count */}
+              <p className="text-[11px] text-[var(--color-text-secondary)]">
+                Showing{" "}
+                <span className="font-semibold text-[var(--color-text-primary)]">
+                  {paginationStart}
+                </span>{" "}
+                to{" "}
+                <span className="font-semibold text-[var(--color-text-primary)]">
+                  {paginationEnd}
+                </span>{" "}
+                of{" "}
+                <span className="font-semibold text-[var(--color-text-primary)]">
+                  {filteredProducts.length}
+                </span>{" "}
+                products
+              </p>
+
+              {/* Page controls */}
+              <div className="flex items-center gap-1">
+                {/* Previous */}
+                <button
+                  type="button"
+                  disabled={currentPage === 1}
+                  onClick={() =>
+                    setCurrentPage((page) =>
+                      Math.max(page - 1, 1)
+                    )
+                  }
+                  className="h-8 rounded-md border border-[var(--color-border)] bg-white px-3 text-[11px] font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Previous
+                </button>
+
+                {/* Page numbers */}
+                {Array.from(
+                  { length: totalPages },
+                  (_, index) => index + 1
+                ).map((page) => (
+                  <button
+                    key={page}
+                    type="button"
+                    onClick={() => setCurrentPage(page)}
+                    className={`flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-[11px] font-semibold transition-colors ${
+                      currentPage === page
+                        ? "bg-[var(--color-brand-700)] text-white"
+                        : "text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+                    }`}
+                  >
+                    {page}
+                  </button>
+                ))}
+
+                {/* Next */}
+                <button
+                  type="button"
+                  disabled={currentPage === totalPages}
+                  onClick={() =>
+                    setCurrentPage((page) =>
+                      Math.min(page + 1, totalPages)
+                    )
+                  }
+                  className="h-8 rounded-md border border-[var(--color-border)] bg-white px-3 text-[11px] font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Next
+                </button>
+              </div>
             </div>
           )}
-        </section>
+          </>
+        )}
+      </section>
 
-        {/* RIGHT DETAIL PANEL */}
-        <aside className="products-detail">
-          {!selectedProduct ? (
-            <div className="products-detail-empty">
-              <Package size={30} />
-              <strong>Select a product</strong>
-              <span>
-                Choose a product from the catalogue to
-                view its details.
-              </span>
+      {/* ===================================================
+          DETAIL PANEL
+      ==================================================== */}
+      <aside className="min-w-0 overflow-hidden rounded-xl border border-[var(--color-border)] bg-white shadow-sm xl:sticky xl:top-4 xl:self-start">
+        {!selectedProduct ? (
+          <div className="flex min-h-[500px] flex-col items-center justify-center px-8 text-center">
+            <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--color-brand-50)] text-[var(--color-brand-600)]">
+              <Package size={24} />
             </div>
-          ) : (
-            <>
-              <div className="products-detail-top">
-                <div className="products-detail-icon">
-                  <Package size={22} />
+
+            <strong className="text-[13px] font-semibold text-[var(--color-text-primary)]">
+              Select a product
+            </strong>
+
+            <span className="mt-1 max-w-[240px] text-[12px] leading-relaxed text-[var(--color-text-muted)]">
+              Choose a product from the catalogue to view
+              its details.
+            </span>
+          </div>
+        ) : (
+          <>
+            {/* DETAIL HEADER */}
+            <div className="border-b border-[var(--color-border)] p-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[var(--color-brand-50)] text-[var(--color-brand-700)]">
+                  <Package size={21} />
                 </div>
 
-                <div className="products-detail-heading">
-                  <span>PRODUCT</span>
-                  <h2>{selectedProduct.name}</h2>
-                  <p>
+                <div className="min-w-0 flex-1">
+                  <span className="text-[9.5px] font-bold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+                    Product
+                  </span>
+
+                  <h2 className="mt-0.5 truncate text-[15px] font-semibold text-[var(--color-text-primary)]">
+                    {selectedProduct.name}
+                  </h2>
+
+                  <p className="mt-0.5 font-mono text-[10.5px] text-[var(--color-text-muted)]">
                     {selectedProduct.productCode}
                   </p>
                 </div>
@@ -820,36 +1043,46 @@ export default function Products() {
                     openEditModal(selectedProduct)
                   }
                   title="Edit product"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--color-border)] text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-brand-200)] hover:bg-[var(--color-brand-50)] hover:text-[var(--color-brand-700)]"
                 >
-                  <Pencil size={16} />
+                  <Pencil size={14} />
                 </button>
               </div>
 
-              <div className="products-detail-status">
+              <div className="mt-3 flex items-center justify-between gap-3">
                 <span
-                  className={
+                  className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-semibold ${
                     selectedProduct.status === "Active"
-                      ? "active"
-                      : "inactive"
-                  }
+                      ? "bg-[var(--color-success-50)] text-[var(--color-success-700)]"
+                      : "bg-[var(--color-danger-50)] text-[var(--color-danger-700)]"
+                  }`}
                 >
-                  <span />
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      selectedProduct.status === "Active"
+                        ? "bg-[var(--color-success-600)]"
+                        : "bg-[var(--color-danger-600)]"
+                    }`}
+                  />
+
                   {selectedProduct.status}
                 </span>
 
-                <small>
-                  Updated{" "}
-                  {formatDate(
-                    selectedProduct.updatedAt
-                  )}
+                <small className="text-[10px] text-[var(--color-text-muted)]">
+                  Updated {formatDate(selectedProduct.updatedAt)}
                 </small>
               </div>
+            </div>
 
-              {/* PRICE */}
-              <div className="products-price-card">
-                <div>
-                  <span>Unit Price</span>
-                  <strong>
+            {/* PRICE CARD */}
+            <div className="p-4">
+              <div className="relative overflow-hidden rounded-xl border border-[var(--color-brand-100)] bg-[var(--color-brand-50)] px-4 py-3.5">
+                <div className="relative z-10">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-[var(--color-brand-700)]">
+                    Unit Price
+                  </span>
+
+                  <strong className="mt-1 block font-mono text-[20px] font-semibold tracking-tight text-[var(--color-brand-900)]">
                     {formatCurrency(
                       selectedProduct.price,
                       selectedProduct.currency
@@ -857,329 +1090,417 @@ export default function Products() {
                   </strong>
                 </div>
 
-                <CircleDollarSign size={22} />
+                <div className="absolute right-4 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-lg bg-white/70 text-[var(--color-brand-700)]">
+                  <CircleDollarSign size={20} />
+                </div>
               </div>
 
               {/* SPECIFICATIONS */}
-              <div className="products-detail-section">
-                <div className="products-section-heading">
-                  <Layers3 size={16} />
-                  <span>Specifications</span>
+              <div className="mt-5">
+                <div className="mb-3 flex items-center gap-2">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-md bg-[var(--color-surface)] text-[var(--color-text-secondary)]">
+                    <Layers3 size={14} />
+                  </div>
+
+                  <span className="text-[12px] font-semibold text-[var(--color-text-primary)]">
+                    Specifications
+                  </span>
                 </div>
 
-                <div className="products-specs">
-                  <div>
-                    <span>Category</span>
-                    <strong>
-                      {selectedProduct.category ||
-                        "—"}
+                <div className="divide-y divide-[var(--color-border)] rounded-lg border border-[var(--color-border)]">
+                  <div className="grid grid-cols-2 gap-4 px-3 py-2.5">
+                    <span className="text-[10.5px] text-[var(--color-text-muted)]">
+                      Category
+                    </span>
+
+                    <strong className="text-right text-[11px] font-medium text-[var(--color-text-primary)]">
+                      {selectedProduct.category || "—"}
                     </strong>
                   </div>
 
-                  <div>
-                    <span>Material</span>
-                    <strong>
-                      {selectedProduct.material ||
-                        "—"}
+                  <div className="grid grid-cols-2 gap-4 px-3 py-2.5">
+                    <span className="text-[10.5px] text-[var(--color-text-muted)]">
+                      Material
+                    </span>
+
+                    <strong className="text-right text-[11px] font-medium text-[var(--color-text-primary)]">
+                      {selectedProduct.material || "—"}
                     </strong>
                   </div>
 
-                  <div>
-                    <span>Unit</span>
-                    <strong>
+                  <div className="grid grid-cols-2 gap-4 px-3 py-2.5">
+                    <span className="text-[10.5px] text-[var(--color-text-muted)]">
+                      Unit
+                    </span>
+
+                    <strong className="text-right text-[11px] font-medium text-[var(--color-text-primary)]">
                       {selectedProduct.unit || "—"}
                     </strong>
                   </div>
 
-                  <div>
-                    <span>Diameter</span>
-                    <strong>
-                      {selectedProduct.diameter !==
-                        null &&
-                      selectedProduct.diameter !==
-                        undefined
+                  <div className="grid grid-cols-2 gap-4 px-3 py-2.5">
+                    <span className="text-[10.5px] text-[var(--color-text-muted)]">
+                      Diameter
+                    </span>
+
+                    <strong className="text-right text-[11px] font-medium text-[var(--color-text-primary)]">
+                      {selectedProduct.diameter !== null &&
+                      selectedProduct.diameter !== undefined
                         ? `${selectedProduct.diameter} ${
-                            selectedProduct.diameterUnit ||
-                            "mm"
+                            selectedProduct.diameterUnit || "mm"
                           }`
                         : "Not specified"}
                     </strong>
                   </div>
 
-                  <div>
-                    <span>Currency</span>
-                    <strong>
-                      {selectedProduct.currency ||
-                        "INR"}
+                  <div className="grid grid-cols-2 gap-4 px-3 py-2.5">
+                    <span className="text-[10.5px] text-[var(--color-text-muted)]">
+                      Currency
+                    </span>
+
+                    <strong className="text-right font-mono text-[11px] font-medium text-[var(--color-text-primary)]">
+                      {selectedProduct.currency || "INR"}
                     </strong>
                   </div>
 
-                  <div>
-                    <span>Added</span>
-                    <strong>
-                      {formatDate(
-                        selectedProduct.createdAt
-                      )}
+                  <div className="grid grid-cols-2 gap-4 px-3 py-2.5">
+                    <span className="text-[10.5px] text-[var(--color-text-muted)]">
+                      Added
+                    </span>
+
+                    <strong className="text-right text-[11px] font-medium text-[var(--color-text-primary)]">
+                      {formatDate(selectedProduct.createdAt)}
                     </strong>
                   </div>
                 </div>
               </div>
 
               {/* DESCRIPTION */}
-              <div className="products-detail-section">
-                <div className="products-section-heading">
-                  <Tag size={16} />
-                  <span>Description</span>
+              <div className="mt-5">
+                <div className="mb-3 flex items-center gap-2">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-md bg-[var(--color-surface)] text-[var(--color-text-secondary)]">
+                    <Tag size={14} />
+                  </div>
+
+                  <span className="text-[12px] font-semibold text-[var(--color-text-primary)]">
+                    Description
+                  </span>
                 </div>
 
-                <p className="products-description">
-                  {selectedProduct.description ||
-                    "No description has been added for this product."}
-                </p>
+                <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3">
+                  <p className="text-[11.5px] leading-relaxed text-[var(--color-text-secondary)]">
+                    {selectedProduct.description ||
+                      "No description has been added for this product."}
+                  </p>
+                </div>
               </div>
+            </div>
 
-              {/* PRODUCT ID */}
-              <div className="products-detail-footer">
-                <span>Product ID</span>
-                <strong>
+            {/* PRODUCT ID */}
+            <div className="border-t border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--color-text-muted)]">
+                  Product ID
+                </span>
+
+                <strong className="max-w-[190px] truncate font-mono text-[10px] text-[var(--color-text-secondary)]">
                   {getId(selectedProduct)}
                 </strong>
               </div>
-            </>
-          )}
-        </aside>
-      </div>
+            </div>
+          </>
+        )}
+      </aside>
+    </div>
 
-      {/* MODAL */}
-      {showModal && (
+    {/* =====================================================
+        PRODUCT MODAL
+    ====================================================== */}
+    {showModal && (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[2px]"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) {
+            closeModal();
+          }
+        }}
+      >
         <div
-          className="contact-modal-overlay"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              closeModal();
-            }
-          }}
+          className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-white shadow-2xl"
+          onMouseDown={(event) =>
+            event.stopPropagation()
+          }
         >
-          <div
-            className="contact-modal"
-            onMouseDown={(event) =>
-              event.stopPropagation()
-            }
-          >
-            <div className="contact-modal-header">
-              <div>
-                <h2>
-                  {editingProduct
-                    ? "Edit Product"
-                    : "Add Product"}
-                </h2>
+          {/* MODAL HEADER */}
+          <div className="flex items-start justify-between gap-4 border-b border-[var(--color-border)] px-5 py-4">
+            <div>
+              <div className="mb-1 flex items-center gap-2">
+                <div className="flex h-7 w-7 items-center justify-center rounded-md bg-[var(--color-brand-50)] text-[var(--color-brand-700)]">
+                  <Package size={14} />
+                </div>
 
-                <p>
-                  {editingProduct
-                    ? "Update the product information."
-                    : "Add a new product to the catalogue."}
-                </p>
+                <span className="text-[10px] font-bold uppercase tracking-[0.07em] text-[var(--color-brand-700)]">
+                  Product Catalogue
+                </span>
               </div>
 
-              <button
-                type="button"
-                className="contact-modal-close"
-                onClick={closeModal}
-                disabled={saving}
-              >
-                <X size={17} />
-              </button>
+              <h2 className="text-[17px] font-semibold text-[var(--color-text-primary)]">
+                {editingProduct
+                  ? "Edit Product"
+                  : "Add Product"}
+              </h2>
+
+              <p className="mt-0.5 text-[11.5px] text-[var(--color-text-muted)]">
+                {editingProduct
+                  ? "Update the product information."
+                  : "Add a new product to the catalogue."}
+              </p>
             </div>
 
-            <form onSubmit={handleSubmit}>
-              <div className="contact-form-grid">
-                <div className="contact-form-group">
-                  <label>
-                    Product Name <span>*</span>
-                  </label>
-
-                  <input
-                    type="text"
-                    name="name"
-                    value={form.name}
-                    onChange={handleChange}
-                    placeholder="e.g. GI Wire"
-                    required
-                  />
-                </div>
-
-                <div className="contact-form-group">
-                  <label>
-                    Product Code <span>*</span>
-                  </label>
-
-                  <input
-                    type="text"
-                    name="productCode"
-                    value={form.productCode}
-                    onChange={handleChange}
-                    placeholder="e.g. GI-001"
-                    required
-                  />
-                </div>
-
-                <div className="contact-form-group">
-                  <label>
-                    Category <span>*</span>
-                  </label>
-
-                  <input
-                    type="text"
-                    name="category"
-                    value={form.category}
-                    onChange={handleChange}
-                    placeholder="e.g. GI Wire"
-                    required
-                  />
-                </div>
-
-                <div className="contact-form-group">
-                  <label>Material</label>
-
-                  <input
-                    type="text"
-                    name="material"
-                    value={form.material}
-                    onChange={handleChange}
-                    placeholder="Steel"
-                  />
-                </div>
-
-                <div className="contact-form-group">
-                  <label>Diameter</label>
-
-                  <input
-                    type="number"
-                    name="diameter"
-                    value={form.diameter}
-                    onChange={handleChange}
-                    placeholder="e.g. 2.5"
-                    min="0"
-                    step="any"
-                  />
-                </div>
-
-                <div className="contact-form-group">
-                  <label>Diameter Unit</label>
-
-                  <select
-                    name="diameterUnit"
-                    value={form.diameterUnit}
-                    onChange={handleChange}
-                  >
-                    <option value="mm">mm</option>
-                    <option value="inch">inch</option>
-                  </select>
-                </div>
-
-                <div className="contact-form-group">
-                  <label>Unit</label>
-
-                  <select
-                    name="unit"
-                    value={form.unit}
-                    onChange={handleChange}
-                  >
-                    <option value="Kg">Kg</option>
-                    <option value="Ton">Ton</option>
-                    <option value="Meter">Meter</option>
-                    <option value="Piece">Piece</option>
-                    <option value="Coil">Coil</option>
-                  </select>
-                </div>
-
-                <div className="contact-form-group">
-                  <label>
-                    Price <span>*</span>
-                  </label>
-
-                  <input
-                    type="number"
-                    name="price"
-                    value={form.price}
-                    onChange={handleChange}
-                    placeholder="e.g. 85"
-                    min="0"
-                    step="0.01"
-                    required
-                  />
-                </div>
-
-                <div className="contact-form-group">
-                  <label>Currency</label>
-
-                  <input
-                    type="text"
-                    name="currency"
-                    value={form.currency}
-                    onChange={handleChange}
-                    placeholder="INR"
-                    maxLength="3"
-                  />
-                </div>
-
-                <div className="contact-form-group">
-                  <label>Status</label>
-
-                  <select
-                    name="status"
-                    value={form.status}
-                    onChange={handleChange}
-                  >
-                    <option value="Active">
-                      Active
-                    </option>
-                    <option value="Inactive">
-                      Inactive
-                    </option>
-                  </select>
-                </div>
-
-                <div className="contact-form-group full-width">
-                  <label>Description</label>
-
-                  <textarea
-                    name="description"
-                    value={form.description}
-                    onChange={handleChange}
-                    placeholder="Add a short description of the product..."
-                  />
-                </div>
-              </div>
-
-              <div className="contact-modal-footer">
-                <button
-                  type="button"
-                  className="contact-cancel-btn"
-                  onClick={closeModal}
-                  disabled={saving}
-                >
-                  Cancel
-                </button>
-
-                <button
-                  type="submit"
-                  className="contact-save-btn"
-                  disabled={saving}
-                >
-                  {saving
-                    ? "Saving..."
-                    : editingProduct
-                    ? "Update Product"
-                    : "Create Product"}
-                </button>
-              </div>
-            </form>
+            <button
+              type="button"
+              onClick={closeModal}
+              disabled={saving}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+            >
+              <X size={17} />
+            </button>
           </div>
+
+          {/* FORM */}
+          <form
+            onSubmit={handleSubmit}
+            className="min-h-0 overflow-y-auto"
+          >
+            <div className="grid grid-cols-1 gap-x-4 gap-y-4 p-5 sm:grid-cols-2">
+              {/* Product Name */}
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold text-[var(--color-text-primary)]">
+                  Product Name <span className="text-[var(--color-danger-600)]">*</span>
+                </label>
+
+                <input
+                  type="text"
+                  name="name"
+                  value={form.name}
+                  onChange={handleChange}
+                  placeholder="e.g. GI Wire"
+                  required
+                  className="h-10 w-full rounded-lg border border-[var(--color-border)] bg-white px-3 text-[12px] text-[var(--color-text-primary)] outline-none transition-all placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-brand-400)] focus:ring-2 focus:ring-[var(--color-brand-100)]"
+                />
+              </div>
+
+              {/* Product Code */}
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold text-[var(--color-text-primary)]">
+                  Product Code <span className="text-[var(--color-danger-600)]">*</span>
+                </label>
+
+                <input
+                  type="text"
+                  name="productCode"
+                  value={form.productCode}
+                  onChange={handleChange}
+                  placeholder="e.g. GI-001"
+                  required
+                  className="h-10 w-full rounded-lg border border-[var(--color-border)] bg-white px-3 font-mono text-[12px] uppercase text-[var(--color-text-primary)] outline-none transition-all placeholder:font-sans placeholder:normal-case placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-brand-400)] focus:ring-2 focus:ring-[var(--color-brand-100)]"
+                />
+              </div>
+
+              {/* Category */}
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold text-[var(--color-text-primary)]">
+                  Category <span className="text-[var(--color-danger-600)]">*</span>
+                </label>
+
+                <input
+                  type="text"
+                  name="category"
+                  value={form.category}
+                  onChange={handleChange}
+                  placeholder="e.g. GI Wire"
+                  required
+                  className="h-10 w-full rounded-lg border border-[var(--color-border)] bg-white px-3 text-[12px] text-[var(--color-text-primary)] outline-none transition-all placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-brand-400)] focus:ring-2 focus:ring-[var(--color-brand-100)]"
+                />
+              </div>
+
+              {/* Material */}
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold text-[var(--color-text-primary)]">
+                  Material
+                </label>
+
+                <input
+                  type="text"
+                  name="material"
+                  value={form.material}
+                  onChange={handleChange}
+                  placeholder="Steel"
+                  className="h-10 w-full rounded-lg border border-[var(--color-border)] bg-white px-3 text-[12px] text-[var(--color-text-primary)] outline-none transition-all placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-brand-400)] focus:ring-2 focus:ring-[var(--color-brand-100)]"
+                />
+              </div>
+
+              {/* Diameter */}
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold text-[var(--color-text-primary)]">
+                  Diameter
+                </label>
+
+                <input
+                  type="number"
+                  name="diameter"
+                  value={form.diameter}
+                  onChange={handleChange}
+                  placeholder="e.g. 2.5"
+                  min="0"
+                  step="any"
+                  className="h-10 w-full rounded-lg border border-[var(--color-border)] bg-white px-3 font-mono text-[12px] text-[var(--color-text-primary)] outline-none transition-all placeholder:font-sans placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-brand-400)] focus:ring-2 focus:ring-[var(--color-brand-100)]"
+                />
+              </div>
+
+              {/* Diameter Unit */}
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold text-[var(--color-text-primary)]">
+                  Diameter Unit
+                </label>
+
+                <select
+                  name="diameterUnit"
+                  value={form.diameterUnit}
+                  onChange={handleChange}
+                  className="h-10 w-full rounded-lg border border-[var(--color-border)] bg-white px-3 text-[12px] text-[var(--color-text-primary)] outline-none transition-all focus:border-[var(--color-brand-400)] focus:ring-2 focus:ring-[var(--color-brand-100)]"
+                >
+                  <option value="mm">mm</option>
+                  <option value="inch">inch</option>
+                </select>
+              </div>
+
+              {/* Unit */}
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold text-[var(--color-text-primary)]">
+                  Unit
+                </label>
+
+                <select
+                  name="unit"
+                  value={form.unit}
+                  onChange={handleChange}
+                  className="h-10 w-full rounded-lg border border-[var(--color-border)] bg-white px-3 text-[12px] text-[var(--color-text-primary)] outline-none transition-all focus:border-[var(--color-brand-400)] focus:ring-2 focus:ring-[var(--color-brand-100)]"
+                >
+                  <option value="Kg">Kg</option>
+                  <option value="Ton">Ton</option>
+                  <option value="Meter">Meter</option>
+                  <option value="Piece">Piece</option>
+                  <option value="Coil">Coil</option>
+                </select>
+              </div>
+
+              {/* Price */}
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold text-[var(--color-text-primary)]">
+                  Price <span className="text-[var(--color-danger-600)]">*</span>
+                </label>
+
+                <input
+                  type="number"
+                  name="price"
+                  value={form.price}
+                  onChange={handleChange}
+                  placeholder="e.g. 85"
+                  min="0"
+                  step="0.01"
+                  required
+                  className="h-10 w-full rounded-lg border border-[var(--color-border)] bg-white px-3 font-mono text-[12px] text-[var(--color-text-primary)] outline-none transition-all placeholder:font-sans placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-brand-400)] focus:ring-2 focus:ring-[var(--color-brand-100)]"
+                />
+              </div>
+
+              {/* Currency */}
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold text-[var(--color-text-primary)]">
+                  Currency
+                </label>
+
+                <input
+                  type="text"
+                  name="currency"
+                  value={form.currency}
+                  onChange={handleChange}
+                  placeholder="INR"
+                  maxLength="3"
+                  className="h-10 w-full rounded-lg border border-[var(--color-border)] bg-white px-3 font-mono text-[12px] uppercase text-[var(--color-text-primary)] outline-none transition-all placeholder:font-sans placeholder:normal-case placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-brand-400)] focus:ring-2 focus:ring-[var(--color-brand-100)]"
+                />
+              </div>
+
+              {/* Status */}
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold text-[var(--color-text-primary)]">
+                  Status
+                </label>
+
+                <select
+                  name="status"
+                  value={form.status}
+                  onChange={handleChange}
+                  className="h-10 w-full rounded-lg border border-[var(--color-border)] bg-white px-3 text-[12px] text-[var(--color-text-primary)] outline-none transition-all focus:border-[var(--color-brand-400)] focus:ring-2 focus:ring-[var(--color-brand-100)]"
+                >
+                  <option value="Active">Active</option>
+                  <option value="Inactive">Inactive</option>
+                </select>
+              </div>
+
+              {/* Description */}
+              <div className="sm:col-span-2">
+                <label className="mb-1.5 block text-[11px] font-semibold text-[var(--color-text-primary)]">
+                  Description
+                </label>
+
+                <textarea
+                  name="description"
+                  value={form.description}
+                  onChange={handleChange}
+                  placeholder="Add a short description of the product..."
+                  rows={4}
+                  className="w-full resize-none rounded-lg border border-[var(--color-border)] bg-white px-3 py-2.5 text-[12px] leading-relaxed text-[var(--color-text-primary)] outline-none transition-all placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-brand-400)] focus:ring-2 focus:ring-[var(--color-brand-100)]"
+                />
+              </div>
+            </div>
+
+            {/* MODAL FOOTER */}
+            <div className="flex items-center justify-end gap-2 border-t border-[var(--color-border)] bg-[var(--color-surface)] px-5 py-3.5">
+              <button
+                type="button"
+                onClick={closeModal}
+                disabled={saving}
+                className="h-9 rounded-lg border border-[var(--color-border)] bg-white px-4 text-[12px] font-semibold text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="submit"
+                disabled={saving}
+                className="inline-flex h-9 items-center gap-2 rounded-lg bg-[var(--color-brand-700)] px-4 text-[12px] font-semibold text-white shadow-sm transition-all hover:bg-[var(--color-brand-800)] hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {saving && (
+                  <RefreshCw
+                    size={14}
+                    className="animate-spin"
+                  />
+                )}
+
+                {saving
+                  ? "Saving..."
+                  : editingProduct
+                  ? "Update Product"
+                  : "Create Product"}
+              </button>
+            </div>
+          </form>
         </div>
-      )}
-    </div>
-  );
+      </div>
+    )}
+  </div>
+);
 }
 
 function AlertCircleIcon() {

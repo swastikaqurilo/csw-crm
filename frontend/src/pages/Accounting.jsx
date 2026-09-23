@@ -15,7 +15,6 @@ import {
   Download,
   Plus,
   ChevronDown,
-  Activity,
 } from "lucide-react";
 
 import {
@@ -29,10 +28,6 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
-/* =========================================================
-   TABS
-   ========================================================= */
-
 const accountingTabs = [
   { id: "overview", label: "Overview", icon: Wallet },
   { id: "payables", label: "Payables", icon: ArrowUpFromLine },
@@ -43,11 +38,7 @@ const accountingTabs = [
 ];
 
 const DEFAULT_AS_OF_DATE = "2026-09-16";
-const FISCAL_YEAR_START_MONTH = 3; // April, zero-based
-
-/* =========================================================
-   MOCK PAYABLES
-   ========================================================= */
+const FISCAL_YEAR_START_MONTH = 3;
 
 const payables = [
   {
@@ -79,10 +70,6 @@ const payables = [
     amount: 310000,
   },
 ];
-
-/* =========================================================
-   MOCK CHART OF ACCOUNTS
-   ========================================================= */
 
 const accountGroups = [
   {
@@ -213,7 +200,7 @@ const accountGroups = [
 ];
 
 /* =========================================================
-   MOCK BALANCE SHEET ACCOUNTS
+   BALANCE SHEET
    ========================================================= */
 
 const mockBalanceSheetAccounts = {
@@ -302,10 +289,6 @@ const mockBalanceSheetAccounts = {
     },
   ],
 };
-
-/* =========================================================
-   MOCK PROFIT & LOSS DATA
-   ========================================================= */
 
 const profitLossEntries = [
   {
@@ -494,10 +477,6 @@ const profitLossEntries = [
   },
 ];
 
-/* =========================================================
-   MOCK CASH FLOW DATA
-   ========================================================= */
-
 const cashFlowData = [
   {
     category: "Operating Activities",
@@ -550,10 +529,6 @@ const cashFlowData = [
     ],
   },
 ];
-
-/* =========================================================
-   HELPERS
-   ========================================================= */
 
 function parseDate(value) {
   return new Date(`${value}T00:00:00`);
@@ -651,19 +626,12 @@ function isInReportPeriod(date, asOfDate) {
   );
 }
 
-/* =========================================================
-   LEDGER / CHART OF ACCOUNTS HELPERS
-   ========================================================= */
-
 function getAccountBalance(account, asOfDate) {
   return isOnOrBefore(DEFAULT_AS_OF_DATE, asOfDate)
     ? account.balance
     : account.openingBalance;
 }
 
-/*
-  Used by Overview and Chart of Accounts.
-*/
 function getLedgerAccountsSnapshot(asOfDate) {
   return accountGroups.map((group) => ({
     ...group,
@@ -684,9 +652,6 @@ function getGroupTotal(snapshot, groupName) {
   );
 }
 
-/*
-  Used specifically by Balance Sheet.
-*/
 function getBalanceSheetSnapshot(asOfDate) {
   return {
     asOfDate,
@@ -695,10 +660,6 @@ function getBalanceSheetSnapshot(asOfDate) {
     equity: mockBalanceSheetAccounts.equity,
   };
 }
-
-/* =========================================================
-   PAYABLE HELPERS
-   ========================================================= */
 
 function getPayables(asOfDate) {
   return payables
@@ -726,10 +687,6 @@ function getPayables(asOfDate) {
       };
     });
 }
-
-/* =========================================================
-   PROFIT & LOSS
-   ========================================================= */
 
 function getProfitLoss(asOfDate) {
   const entries = profitLossEntries.filter((entry) =>
@@ -773,9 +730,6 @@ function getProfitLoss(asOfDate) {
   const totalExpenses =
     operatingExpenses + transportation + utilities;
 
-  /*
-    Build monthly graph data.
-  */
   const months = {};
 
   entries.forEach((entry) => {
@@ -805,23 +759,9 @@ function getProfitLoss(asOfDate) {
     }
   });
 
-  const monthlyData = Object.values(months)
-    .sort((a, b) => {
-      const aIndex = Object.keys(months).indexOf(
-        Object.keys(months).find(
-          (key) => months[key] === a
-        )
-      );
-
-      const bIndex = Object.keys(months).indexOf(
-        Object.keys(months).find(
-          (key) => months[key] === b
-        )
-      );
-
-      return aIndex - bIndex;
-    })
-    .map((month) => ({
+  const monthlyData = Object.entries(months)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([, month]) => ({
       ...month,
       netProfit: month.revenue - month.expenses,
     }));
@@ -839,10 +779,6 @@ function getProfitLoss(asOfDate) {
   };
 }
 
-/* =========================================================
-   CASH FLOW
-   ========================================================= */
-
 function getCashFlow(asOfDate) {
   return cashFlowData.map((section) => {
     const items = section.items.filter((item) =>
@@ -857,9 +793,26 @@ function getCashFlow(asOfDate) {
   });
 }
 
-/* =========================================================
-   SHARED COMPONENTS
-   ========================================================= */
+const CARD =
+  "rounded-[10px] border border-[var(--color-border)] bg-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md";
+const CARD_BODY = "p-[18px]";
+
+const BTN =
+  "inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-white px-3.5 text-[13px] font-semibold text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-border-strong)] hover:bg-[var(--color-surface-alt)] active:translate-y-px";
+
+const BTN_PRIMARY =
+  "inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-[var(--color-brand-800)] bg-[var(--color-brand-800)] px-3.5 text-[13px] font-semibold text-white transition-colors hover:border-[var(--color-brand-900)] hover:bg-[var(--color-brand-900)] active:translate-y-px";
+
+const PAGE_SECTION = "flex flex-col gap-5";
+
+const PAGE_HEADING =
+  "flex items-end justify-between gap-4 max-[800px]:flex-col max-[800px]:items-start";
+
+const BREADCRUMB =
+  "mb-[7px] flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-muted)]";
+
+const STATS_GRID =
+  "grid grid-cols-4 gap-3.5 max-[1100px]:grid-cols-2 max-[560px]:grid-cols-1";
 
 function AccountingStat({
   icon: Icon,
@@ -869,21 +822,27 @@ function AccountingStat({
   negative = false,
 }) {
   return (
-    <div className="stat-card">
-      <div className="stat-top">
-        <span className="stat-title">{title}</span>
+    <div className="relative rounded-[10px] border border-[var(--color-border)] bg-white p-4 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
+      <div className="flex items-center justify-between gap-2.5">
+        <span className="text-[11.5px] font-semibold text-[var(--color-text-secondary)]">
+          {title}
+        </span>
 
-        <span className="stat-icon">
+        <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-lg bg-[var(--color-brand-800)] text-white">
           <Icon size={17} />
         </span>
       </div>
 
-      <strong className="stat-value">{value}</strong>
+      <strong className="mt-3 block font-mono text-[21px] font-semibold tracking-[-0.02em] tabular-nums text-[var(--color-text-primary)]">
+        {value}
+      </strong>
 
       {change && (
         <div
-          className={`stat-change ${
-            negative ? "negative" : ""
+          className={`mt-[7px] flex items-center gap-1.5 text-[11.5px] font-semibold ${
+            negative
+              ? "text-[var(--color-danger-600)]"
+              : "text-[var(--color-success-700)]"
           }`}
         >
           {negative ? (
@@ -900,20 +859,23 @@ function AccountingStat({
 }
 
 function StatusBadge({ status }) {
-  const statusMap = {
-    Due: "badge-warning",
-    Pending: "badge-neutral",
-    Overdue: "badge-danger",
-    Upcoming: "badge-info",
+  const statusStyles = {
+    Due: "border-[var(--color-warning-100)] bg-[var(--color-warning-50)] text-[var(--color-warning-600)]",
+    Pending:
+      "border-[var(--color-border)] bg-[var(--color-surface-sunken)] text-[var(--color-text-secondary)]",
+    Overdue:
+      "border-[var(--color-danger-100)] bg-[var(--color-danger-50)] text-[var(--color-danger-600)]",
+    Upcoming:
+      "border-[var(--color-info-100)] bg-[var(--color-info-50)] text-[var(--color-info-600)]",
   };
 
   return (
     <span
-      className={`badge ${
-        statusMap[status] || "badge-neutral"
+      className={`inline-flex min-h-[23px] items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-[11px] font-semibold ${
+        statusStyles[status] || statusStyles.Pending
       }`}
     >
-      <span className="badge-dot" />
+      <span className="h-1.5 w-1.5 rounded-full bg-current" />
       {status}
     </span>
   );
@@ -921,11 +883,17 @@ function StatusBadge({ status }) {
 
 function CardHeader({ title, subtitle, action }) {
   return (
-    <div className="card-header">
+    <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-[18px] py-4">
       <div>
-        <h3>{title}</h3>
+        <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">
+          {title}
+        </h3>
 
-        {subtitle && <p>{subtitle}</p>}
+        {subtitle && (
+          <p className="mt-[3px] text-xs text-[var(--color-text-secondary)]">
+            {subtitle}
+          </p>
+        )}
       </div>
 
       {action}
@@ -935,7 +903,7 @@ function CardHeader({ title, subtitle, action }) {
 
 function ReportPeriodLabel({ asOfDate }) {
   return (
-    <span className="badge badge-info">
+    <span className="inline-flex min-h-[23px] items-center gap-1.5 whitespace-nowrap rounded-full border border-[var(--color-info-100)] bg-[var(--color-info-50)] px-2.5 text-[11px] font-semibold text-[var(--color-info-600)]">
       FY from {formatDisplayDate(getFiscalYearStart(asOfDate))}{" "}
       to {formatDisplayDate(asOfDate)}
     </span>
@@ -972,10 +940,6 @@ function Overview({ asOfDate }) {
       ["Cash", "Bank Account"].includes(account.name)
     ) || [];
 
-  const cashBalance = sum(
-    cashAccounts.map((account) => account.balance)
-  );
-
   const totalPayables = sum(
     getPayables(asOfDate).map((item) => item.amount)
   );
@@ -1002,8 +966,8 @@ function Overview({ asOfDate }) {
     Math.abs(balanceDifference) < 0.01;
 
   return (
-    <div className="page-section">
-      <div className="stats-grid">
+    <div className={PAGE_SECTION}>
+      <div className={STATS_GRID}>
         <AccountingStat
           icon={CircleDollarSign}
           title="Total Assets"
@@ -1014,9 +978,7 @@ function Overview({ asOfDate }) {
         <AccountingStat
           icon={ArrowUpFromLine}
           title="Total Liabilities"
-          value={formatCompactCurrency(
-            totalLiabilities
-          )}
+          value={formatCompactCurrency(totalLiabilities)}
           change={`${formatCompactCurrency(
             totalPayables
           )} supplier payables`}
@@ -1040,8 +1002,8 @@ function Overview({ asOfDate }) {
         />
       </div>
 
-      <div className="dashboard-grid">
-        <div className="card">
+      <div className="grid grid-cols-2 gap-4 max-[800px]:grid-cols-1">
+        <div className={CARD}>
           <CardHeader
             title="Financial Position"
             subtitle={`Balances through ${formatDisplayDate(
@@ -1049,143 +1011,66 @@ function Overview({ asOfDate }) {
             )}`}
           />
 
-          <div className="card-body">
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 0,
-                borderTop: "1px solid #e5e7eb",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "14px 4px",
-                  borderBottom:
-                    "1px solid #e5e7eb",
-                }}
-              >
+          <div className={CARD_BODY}>
+            <div className="flex flex-col gap-0 border-t border-[var(--color-border)]">
+              <div className="flex items-center justify-between border-b border-[var(--color-border)] px-1 py-3.5">
                 <div>
-                  <strong style={{ fontSize: 14 }}>
+                  <strong className="text-sm">
                     Assets
                   </strong>
 
-                  <span
-                    style={{
-                      display: "block",
-                      fontSize: 12,
-                      color: "#94a3b8",
-                      marginTop: 3,
-                    }}
-                  >
+                  <span className="mt-0.5 block text-xs text-[var(--color-text-muted)]">
                     What the business owns
                   </span>
                 </div>
 
-                <strong
-                  style={{
-                    fontSize: 15,
-                    fontWeight: 600,
-                  }}
-                >
+                <strong className="font-mono text-[15px] font-semibold tabular-nums">
                   {formatCompactCurrency(totalAssets)}
                 </strong>
               </div>
 
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "14px 4px",
-                  borderBottom:
-                    "1px solid #e5e7eb",
-                }}
-              >
+              <div className="flex items-center justify-between border-b border-[var(--color-border)] px-1 py-3.5">
                 <div>
-                  <strong style={{ fontSize: 14 }}>
+                  <strong className="text-sm">
                     Liabilities
                   </strong>
 
-                  <span
-                    style={{
-                      display: "block",
-                      fontSize: 12,
-                      color: "#94a3b8",
-                      marginTop: 3,
-                    }}
-                  >
+                  <span className="mt-0.5 block text-xs text-[var(--color-text-muted)]">
                     Outstanding obligations
                   </span>
                 </div>
 
-                <strong
-                  style={{
-                    fontSize: 15,
-                    fontWeight: 600,
-                  }}
-                >
+                <strong className="font-mono text-[15px] font-semibold tabular-nums">
                   {formatCompactCurrency(
                     totalLiabilities
                   )}
                 </strong>
               </div>
 
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "14px 4px",
-                }}
-              >
+              <div className="flex items-center justify-between px-1 py-3.5">
                 <div>
-                  <strong style={{ fontSize: 14 }}>
+                  <strong className="text-sm">
                     Equity
                   </strong>
 
-                  <span
-                    style={{
-                      display: "block",
-                      fontSize: 12,
-                      color: "#94a3b8",
-                      marginTop: 3,
-                    }}
-                  >
+                  <span className="mt-0.5 block text-xs text-[var(--color-text-muted)]">
                     Owner investment and retained
                     earnings
                   </span>
                 </div>
 
-                <strong
-                  style={{
-                    fontSize: 15,
-                    fontWeight: 600,
-                  }}
-                >
+                <strong className="font-mono text-[15px] font-semibold tabular-nums">
                   {formatCompactCurrency(totalEquity)}
                 </strong>
               </div>
             </div>
 
             <div
-              className={
+              className={`mt-3.5 flex items-center gap-2 rounded-lg border px-3 py-2.5 text-xs font-semibold ${
                 isBalanced
-                  ? "alert alert-success"
-                  : "alert alert-danger"
-              }
-              style={{
-                marginTop: 14,
-                padding: "10px 12px",
-                borderRadius: 8,
-                fontSize: 12,
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-              }}
+                  ? "border-[var(--color-success-100)] bg-[var(--color-success-50)] text-[var(--color-success-700)]"
+                  : "border-[var(--color-danger-100)] bg-[var(--color-danger-50)] text-[var(--color-danger-600)]"
+              }`}
             >
               <Scale size={15} />
 
@@ -1194,7 +1079,7 @@ function Overview({ asOfDate }) {
                   ? "Balance check passed"
                   : "Balance mismatch"}
 
-                <strong style={{ marginLeft: 6 }}>
+                <strong className="ml-1.5">
                   {isBalanced
                     ? `${formatCompactCurrency(
                         totalAssets
@@ -1211,7 +1096,7 @@ function Overview({ asOfDate }) {
           </div>
         </div>
 
-        <div className="card">
+        <div className={CARD}>
           <CardHeader
             title="Cash Position"
             subtitle={`Cash and bank balances as of ${formatDisplayDate(
@@ -1219,50 +1104,46 @@ function Overview({ asOfDate }) {
             )}`}
           />
 
-          <div className="card-body">
-            <div className="stat-top">
-              <span className="stat-title">
-                Cash & Bank
-              </span>
+          <div className="flex flex-col px-[18px] pb-[18px] pt-1.5">
+            {cashAccounts.map((account) => {
+              const isBank =
+                account.name === "Bank Account";
 
-              <span className="stat-icon">
-                <Banknote size={17} />
-              </span>
-            </div>
-
-            <strong className="stat-value">
-              {formatCompactCurrency(cashBalance)}
-            </strong>
-
-            <div
-              className="list"
-              style={{ marginTop: 16 }}
-            >
-              {cashAccounts.map((account) => (
+              return (
                 <div
-                  className="list-item"
+                  className="flex items-center justify-between gap-3 border-b border-[var(--color-border-light)] py-[13px] last:border-b-0"
                   key={account.code}
                 >
-                  <span>
-                    {account.name === "Bank Account"
-                      ? "Bank"
-                      : account.name}
-                  </span>
+                  <div className="flex min-w-0 items-center gap-[11px]">
+                    <span className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-lg bg-[var(--color-success-50)] text-[var(--color-success-700)]">
+                      <Banknote size={15} />
+                    </span>
 
-                  <strong>
+                    <div>
+                      <strong className="block text-[13px]">
+                        {isBank ? "Bank" : "Cash"}
+                      </strong>
+
+                      <span className="mt-px block text-xs text-[var(--color-text-muted)]">
+                        {account.name}
+                      </span>
+                    </div>
+                  </div>
+
+                  <strong className="shrink-0 font-mono text-sm tabular-nums text-[var(--color-text-primary)]">
                     {formatCompactCurrency(
                       account.balance
                     )}
                   </strong>
                 </div>
-              ))}
-            </div>
+              );
+            })}
           </div>
         </div>
       </div>
 
-      <div className="grid grid-2">
-        <div className="card">
+      <div className="grid grid-cols-2 gap-4 max-[800px]:grid-cols-1">
+        <div className={CARD}>
           <CardHeader
             title="Accounts Receivable"
             subtitle={`Customer balances through ${formatDisplayDate(
@@ -1270,19 +1151,19 @@ function Overview({ asOfDate }) {
             )}`}
           />
 
-          <div className="card-body">
-            <strong className="stat-value">
+          <div className={CARD_BODY}>
+            <strong className="block font-mono text-xl font-semibold tabular-nums text-[var(--color-text-primary)]">
               {formatCompactCurrency(receivables)}
             </strong>
 
-            <p className="text-sm text-muted">
+            <p className="mt-2 text-sm text-[var(--color-text-muted)]">
               Detailed aging requires invoice and
               settlement records.
             </p>
           </div>
         </div>
 
-        <div className="card">
+        <div className={CARD}>
           <CardHeader
             title="Accounts Payable"
             subtitle={`Supplier balances through ${formatDisplayDate(
@@ -1290,12 +1171,12 @@ function Overview({ asOfDate }) {
             )}`}
           />
 
-          <div className="card-body">
-            <strong className="stat-value">
+          <div className={CARD_BODY}>
+            <strong className="block font-mono text-xl font-semibold tabular-nums text-[var(--color-text-primary)]">
               {formatCompactCurrency(totalPayables)}
             </strong>
 
-            <p className="text-sm text-muted">
+            <p className="mt-2 text-sm text-[var(--color-text-muted)]">
               {getPayables(asOfDate).length} payable
               records included.
             </p>
@@ -1305,10 +1186,6 @@ function Overview({ asOfDate }) {
     </div>
   );
 }
-
-/* =========================================================
-   PAYABLES
-   ========================================================= */
 
 function Payables({ asOfDate }) {
   const [search, setSearch] = useState("");
@@ -1343,20 +1220,22 @@ function Payables({ asOfDate }) {
   );
 
   return (
-    <div className="page-section">
-      <div className="page-heading">
+    <div className={PAGE_SECTION}>
+      <div className={PAGE_HEADING}>
         <div>
-          <h2>Accounts Payable</h2>
+          <h2 className="text-[19px] font-semibold text-[var(--color-text-primary)]">
+            Accounts Payable
+          </h2>
 
-          <p>
+          <p className="mt-1 text-[13px] text-[var(--color-text-secondary)]">
             Supplier obligations recorded through{" "}
             {formatDisplayDate(asOfDate)}.
           </p>
         </div>
 
-        <div className="actions">
+        <div className="flex shrink-0 items-center gap-2">
           <button
-            className="btn primary-button"
+            className={BTN_PRIMARY}
             type="button"
           >
             <Plus size={15} />
@@ -1365,13 +1244,11 @@ function Payables({ asOfDate }) {
         </div>
       </div>
 
-      <div className="stats-grid">
+      <div className={STATS_GRID}>
         <AccountingStat
           icon={ArrowUpFromLine}
           title="Total Payables"
-          value={formatCompactCurrency(
-            totalPayables
-          )}
+          value={formatCompactCurrency(totalPayables)}
           change={`${filteredPayables.length} supplier records`}
         />
 
@@ -1398,7 +1275,7 @@ function Payables({ asOfDate }) {
         />
       </div>
 
-      <div className="card">
+      <div className={CARD}>
         <CardHeader
           title="Supplier Payables"
           subtitle={`${filteredPayables.length} payable records as of ${formatDisplayDate(
@@ -1406,9 +1283,12 @@ function Payables({ asOfDate }) {
           )}`}
         />
 
-        <div className="enquiries-toolbar">
-          <div className="page-search">
-            <Search size={15} />
+        <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-[18px] py-3">
+          <div className="relative w-[260px] max-[800px]:w-full">
+            <Search
+              size={15}
+              className="pointer-events-none absolute left-[11px] top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]"
+            />
 
             <input
               type="text"
@@ -1417,57 +1297,73 @@ function Payables({ asOfDate }) {
               onChange={(event) =>
                 setSearch(event.target.value)
               }
+              className="h-9 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-alt)] pl-[34px] pr-3 text-[13px] text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-brand-500)] focus:bg-white"
             />
           </div>
         </div>
 
-        <div className="table-wrap">
-          <table className="table">
+        <div className="w-full overflow-x-auto">
+          <table className="w-full border-collapse text-left">
             <thead>
               <tr>
-                <th>Supplier</th>
-                <th>Invoice</th>
-                <th>Due Date</th>
-                <th>Amount</th>
-                <th>Status</th>
-                <th />
+                <th className="h-10 whitespace-nowrap border-b border-[var(--color-border)] bg-[var(--color-surface-alt)] px-[18px] text-[10.5px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+                  Supplier
+                </th>
+                <th className="h-10 whitespace-nowrap border-b border-[var(--color-border)] bg-[var(--color-surface-alt)] px-[18px] text-[10.5px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+                  Invoice
+                </th>
+                <th className="h-10 whitespace-nowrap border-b border-[var(--color-border)] bg-[var(--color-surface-alt)] px-[18px] text-[10.5px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+                  Due Date
+                </th>
+                <th className="h-10 whitespace-nowrap border-b border-[var(--color-border)] bg-[var(--color-surface-alt)] px-[18px] text-[10.5px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+                  Amount
+                </th>
+                <th className="h-10 whitespace-nowrap border-b border-[var(--color-border)] bg-[var(--color-surface-alt)] px-[18px] text-[10.5px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+                  Status
+                </th>
+                <th className="h-10 whitespace-nowrap border-b border-[var(--color-border)] bg-[var(--color-surface-alt)] px-[18px]" />
               </tr>
             </thead>
 
-            <tbody>
+            <tbody className="[&>tr:last-child>td]:border-b-0">
               {filteredPayables.map((item) => (
-                <tr key={item.invoice}>
-                  <td>
-                    <div className="table-person">
-                      <span className="avatar avatar-sm">
+                <tr
+                  key={item.invoice}
+                  className="transition-colors hover:bg-[var(--color-surface-alt)]"
+                >
+                  <td className="h-[54px] border-b border-[var(--color-border-light)] px-[18px] align-middle text-[13px] text-[var(--color-text-primary)]">
+                    <div className="flex items-center gap-2.5">
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--color-brand-800)] text-[11.5px] font-bold text-white">
                         {item.supplier.charAt(0)}
                       </span>
 
-                      <strong>{item.supplier}</strong>
+                      <strong className="font-semibold">
+                        {item.supplier}
+                      </strong>
                     </div>
                   </td>
 
-                  <td>{item.invoice}</td>
+                  <td className="h-[54px] border-b border-[var(--color-border-light)] px-[18px] align-middle text-[13px] text-[var(--color-text-primary)]">
+                    {item.invoice}
+                  </td>
 
-                  <td>
+                  <td className="h-[54px] border-b border-[var(--color-border-light)] px-[18px] align-middle text-[13px] text-[var(--color-text-primary)]">
                     {formatDisplayDate(item.dueDate)}
                   </td>
 
-                  <td>
-                    <strong>
+                  <td className="h-[54px] border-b border-[var(--color-border-light)] px-[18px] align-middle text-[13px] text-[var(--color-text-primary)]">
+                    <strong className="font-mono tabular-nums">
                       {formatCurrency(item.amount)}
                     </strong>
                   </td>
 
-                  <td>
-                    <StatusBadge
-                      status={item.status}
-                    />
+                  <td className="h-[54px] border-b border-[var(--color-border-light)] px-[18px] align-middle text-[13px]">
+                    <StatusBadge status={item.status} />
                   </td>
 
-                  <td>
+                  <td className="h-[54px] border-b border-[var(--color-border-light)] px-[18px] align-middle text-[13px]">
                     <button
-                      className="table-action"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-sunken)] hover:text-[var(--color-brand-700)]"
                       type="button"
                     >
                       <ChevronRight size={16} />
@@ -1479,7 +1375,7 @@ function Payables({ asOfDate }) {
               {filteredPayables.length === 0 && (
                 <tr>
                   <td colSpan="6">
-                    <div className="empty-state">
+                    <div className="px-5 py-11 text-center text-[13px] text-[var(--color-text-muted)]">
                       No payable records found for
                       this date.
                     </div>
@@ -1493,10 +1389,6 @@ function Payables({ asOfDate }) {
     </div>
   );
 }
-
-/* =========================================================
-   CHART OF ACCOUNTS
-   ========================================================= */
 
 function ChartOfAccounts({ asOfDate }) {
   const [openGroups, setOpenGroups] = useState({});
@@ -1520,24 +1412,30 @@ function ChartOfAccounts({ asOfDate }) {
   }
 
   return (
-    <div className="page-section chart-accounts-page">
-      <div className="page-heading coa-page-heading">
+    <div className={PAGE_SECTION}>
+      <div className={PAGE_HEADING}>
         <div>
-          <div className="page-breadcrumb">
-            Accounting <span>/</span> Chart of Accounts
+          <div className={BREADCRUMB}>
+            Accounting{" "}
+            <span className="text-[var(--color-border-strong)]">
+              /
+            </span>{" "}
+            Chart of Accounts
           </div>
 
-          <h2>Chart of Accounts</h2>
+          <h2 className="text-[19px] font-semibold text-[var(--color-text-primary)]">
+            Chart of Accounts
+          </h2>
 
-          <p>
+          <p className="mt-1 text-[13px] text-[var(--color-text-secondary)]">
             Account balances through{" "}
             {formatDisplayDate(asOfDate)}.
           </p>
         </div>
 
-        <div className="actions">
+        <div className="flex shrink-0 items-center gap-2">
           <button
-            className="btn primary-button"
+            className={BTN_PRIMARY}
             type="button"
           >
             <Plus size={15} />
@@ -1546,46 +1444,57 @@ function ChartOfAccounts({ asOfDate }) {
         </div>
       </div>
 
-      <div className="coa-summary">
-        <div className="coa-summary-item">
-          <span className="coa-summary-number">
+      <div className="flex flex-wrap items-center gap-3.5 rounded-[10px] border border-[var(--color-border)] bg-white px-5 py-4 shadow-sm">
+        <div className="flex min-w-[140px] flex-1 items-center gap-[11px]">
+          <span className="font-mono text-[21px] font-bold text-[var(--color-brand-800)]">
             {snapshot.length}
           </span>
 
           <div>
-            <strong>Account Groups</strong>
-            <span>Organized categories</span>
+            <strong className="block text-[12.5px] font-semibold text-[var(--color-text-primary)]">
+              Account Groups
+            </strong>
+            <span className="mt-px block text-[11.5px] text-[var(--color-text-muted)]">
+              Organized categories
+            </span>
           </div>
         </div>
 
-        <div className="coa-summary-divider" />
+        <div className="h-8 w-px bg-[var(--color-border)]" />
 
-        <div className="coa-summary-item">
-          <span className="coa-summary-number">
+        <div className="flex min-w-[140px] flex-1 items-center gap-[11px]">
+          <span className="font-mono text-[21px] font-bold text-[var(--color-brand-800)]">
             {totalAccounts}
           </span>
 
           <div>
-            <strong>Total Accounts</strong>
-            <span>Ledger accounts</span>
+            <strong className="block text-[12.5px] font-semibold text-[var(--color-text-primary)]">
+              Total Accounts
+            </strong>
+            <span className="mt-px block text-[11.5px] text-[var(--color-text-muted)]">
+              Ledger accounts
+            </span>
           </div>
         </div>
 
-        <div className="coa-summary-divider" />
+        <div className="h-8 w-px bg-[var(--color-border)]" />
 
-        <div className="coa-summary-item">
-          <span className="coa-summary-status-dot" />
+        <div className="flex min-w-[140px] flex-1 items-center gap-[11px]">
+          <span className="h-[9px] w-[9px] shrink-0 rounded-full bg-[var(--color-success-500)] shadow-[0_0_0_3px_var(--color-success-50)]" />
 
           <div>
-            <strong>Ledger Active</strong>
-            <span>
+            <strong className="block text-[12.5px] font-semibold text-[var(--color-text-primary)]">
+              Ledger Active
+            </strong>
+
+            <span className="mt-px block text-[11.5px] text-[var(--color-text-muted)]">
               As of {formatDisplayDate(asOfDate)}
             </span>
           </div>
         </div>
       </div>
 
-      <div className="coa-sections">
+      <div className="flex flex-col gap-2.5">
         {snapshot.map((group) => {
           const Icon = group.icon;
           const isOpen = openGroups[group.code];
@@ -1598,20 +1507,23 @@ function ChartOfAccounts({ asOfDate }) {
 
           return (
             <div
-              className={`coa-section ${
-                isOpen ? "coa-section-open" : ""
+              className={`overflow-hidden rounded-[10px] border bg-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md ${
+                isOpen
+                  ? "border-[var(--color-border-strong)]"
+                  : "border-[var(--color-border)]"
               }`}
+      
               key={group.code}
             >
               <button
                 type="button"
-                className="coa-section-header"
+                className="flex w-full items-center justify-between gap-3.5 px-[18px] py-[15px] text-left transition-colors hover:bg-[var(--color-surface-alt)]"
                 onClick={() =>
                   toggleGroup(group.code)
                 }
               >
-                <div className="coa-section-left">
-                  <div className="coa-expand">
+                <div className="flex min-w-0 items-center gap-[13px]">
+                  <div className="flex w-5 shrink-0 items-center justify-center text-[var(--color-text-muted)]">
                     {isOpen ? (
                       <ChevronDown size={16} />
                     ) : (
@@ -1619,20 +1531,22 @@ function ChartOfAccounts({ asOfDate }) {
                     )}
                   </div>
 
-                  <div className="coa-section-icon">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--color-brand-50)] text-[var(--color-brand-700)]">
                     <Icon size={17} />
                   </div>
 
                   <div>
-                    <div className="coa-section-name">
-                      <h3>{group.name}</h3>
+                    <div className="flex items-baseline gap-2">
+                      <h3 className="text-[14.5px] font-semibold">
+                        {group.name}
+                      </h3>
 
-                      <span className="coa-section-code">
+                      <span className="font-mono text-[11.5px] text-[var(--color-text-muted)]">
                         {group.code}
                       </span>
                     </div>
 
-                    <p>
+                    <p className="mt-0.5 text-xs text-[var(--color-text-secondary)]">
                       {group.accounts.length}{" "}
                       {group.accounts.length === 1
                         ? "account"
@@ -1641,59 +1555,58 @@ function ChartOfAccounts({ asOfDate }) {
                   </div>
                 </div>
 
-                <div className="coa-section-total">
-                  <span>Balance as of date</span>
+                <div className="flex shrink-0 flex-col items-end gap-[3px]">
+                  <span className="text-[11px] text-[var(--color-text-muted)]">
+                    Balance as of date
+                  </span>
 
-                  <strong>
-                    {formatCompactCurrency(
-                      groupTotal
-                    )}
+                  <strong className="font-mono text-[14.5px] tabular-nums">
+                    {formatCompactCurrency(groupTotal)}
                   </strong>
                 </div>
               </button>
 
               {isOpen && (
-                <div className="coa-accounts">
-                  <div className="coa-table-head">
+                <div className="border-t border-[var(--color-border)] bg-[var(--color-surface-alt)]">
+                  <div className="flex items-center justify-between px-[18px] py-[9px] text-[10.5px] font-bold tracking-wider text-[var(--color-text-muted)]">
                     <span>ACCOUNT</span>
                     <span>BALANCE</span>
                   </div>
 
-                  <div className="coa-account-list">
-                    {group.accounts.map(
-                      (account) => (
-                        <div
-                          className="coa-account-row"
-                          key={account.code}
-                        >
-                          <div className="coa-account-main">
-                            <span className="coa-account-code">
-                              {account.code}
+                  <div className="flex flex-col px-[18px] pb-2">
+                    {group.accounts.map((account) => (
+                      <div
+                        className="flex items-center justify-between gap-3.5 border-b border-[var(--color-border-light)] py-[11px] last:border-b-0"
+                        key={account.code}
+                      >
+                        <div className="flex min-w-0 items-center gap-3">
+                          <span className="shrink-0 rounded-md border border-[var(--color-border)] bg-white px-[7px] py-[3px] font-mono text-[11px] text-[var(--color-text-muted)]">
+                            {account.code}
+                          </span>
+
+                          <div>
+                            <strong className="block text-[13px]">
+                              {account.name}
+                            </strong>
+
+                            <span className="mt-px block text-[11.5px] text-[var(--color-text-muted)]">
+                              Ledger account
                             </span>
-
-                            <div className="coa-account-name">
-                              <strong>
-                                {account.name}
-                              </strong>
-
-                              <span>
-                                Ledger account
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="coa-account-value">
-                            {formatCompactCurrency(
-                              account.balance
-                            )}
-
-                            <ChevronRight
-                              size={15}
-                            />
                           </div>
                         </div>
-                      )
-                    )}
+
+                        <div className="flex shrink-0 items-center gap-2 font-mono text-[13.5px] tabular-nums text-[var(--color-text-primary)]">
+                          {formatCompactCurrency(
+                            account.balance
+                          )}
+
+                          <ChevronRight
+                            size={15}
+                            className="text-[var(--color-text-muted)]"
+                          />
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -1705,10 +1618,6 @@ function ChartOfAccounts({ asOfDate }) {
   );
 }
 
-/* =========================================================
-   PROFIT & LOSS
-   ========================================================= */
-
 function ProfitLoss({ asOfDate }) {
   const report = useMemo(
     () => getProfitLoss(asOfDate),
@@ -1716,12 +1625,14 @@ function ProfitLoss({ asOfDate }) {
   );
 
   return (
-    <div className="page-section">
-      <div className="page-heading">
+    <div className={PAGE_SECTION}>
+      <div className={PAGE_HEADING}>
         <div>
-          <h2>Profit & Loss</h2>
+          <h2 className="text-[19px] font-semibold text-[var(--color-text-primary)]">
+            Profit & Loss
+          </h2>
 
-          <p>
+          <p className="mt-1 text-[13px] text-[var(--color-text-secondary)]">
             Income and expenses from{" "}
             {formatDisplayDate(
               getFiscalYearStart(asOfDate)
@@ -1731,15 +1642,15 @@ function ProfitLoss({ asOfDate }) {
           </p>
         </div>
 
-        <div className="actions">
-          <button className="btn" type="button">
+        <div className="flex shrink-0 items-center gap-2">
+          <button className={BTN} type="button">
             <Download size={15} />
             Export
           </button>
         </div>
       </div>
 
-      <div className="card">
+      <div className={CARD}>
         <CardHeader
           title="Reporting Period"
           subtitle={`${formatDisplayDate(
@@ -1753,46 +1664,44 @@ function ProfitLoss({ asOfDate }) {
         />
       </div>
 
-      <div
-        className="grid grid-2"
-        style={{ marginTop: 20 }}
-      >
-        <div className="card">
+      <div className="grid grid-cols-2 gap-4 max-[800px]:grid-cols-1">
+        <div className={CARD}>
           <CardHeader
             title="Revenue"
             subtitle="Income recorded in the selected period"
             action={
-              <span className="stat-icon">
+              <span className="flex h-[30px] w-[30px] items-center justify-center rounded-lg bg-[var(--color-success-50)] text-[var(--color-success-700)]">
                 <TrendingUp size={17} />
               </span>
             }
           />
 
-          <div className="card-body">
-            <strong className="stat-value">
+          <div className={CARD_BODY}>
+            <strong className="block font-mono text-xl font-semibold tabular-nums text-[var(--color-text-primary)]">
               {formatCompactCurrency(
                 report.totalRevenue
               )}
             </strong>
 
-            <div
-              className="list"
-              style={{ marginTop: 16 }}
-            >
-              <div className="list-item">
-                <span>Sales Revenue</span>
+            <div className="mt-4 flex flex-col">
+              <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border-light)] py-2.5 text-[13px] last:border-b-0">
+                <span className="text-[var(--color-text-secondary)]">
+                  Sales Revenue
+                </span>
 
-                <strong>
+                <strong className="font-mono tabular-nums">
                   {formatCurrency(
                     report.salesRevenue
                   )}
                 </strong>
               </div>
 
-              <div className="list-item">
-                <span>Other Revenue</span>
+              <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border-light)] py-2.5 text-[13px] last:border-b-0">
+                <span className="text-[var(--color-text-secondary)]">
+                  Other Revenue
+                </span>
 
-                <strong>
+                <strong className="font-mono tabular-nums">
                   {formatCurrency(
                     report.otherRevenue
                   )}
@@ -1802,52 +1711,55 @@ function ProfitLoss({ asOfDate }) {
           </div>
         </div>
 
-        <div className="card">
+        <div className={CARD}>
           <CardHeader
             title="Expenses"
             subtitle="Expenses recorded in the selected period"
             action={
-              <span className="stat-icon">
+              <span className="flex h-[30px] w-[30px] items-center justify-center rounded-lg bg-[var(--color-danger-50)] text-[var(--color-danger-600)]">
                 <TrendingDown size={17} />
               </span>
             }
           />
 
-          <div className="card-body">
-            <strong className="stat-value">
+          <div className={CARD_BODY}>
+            <strong className="block font-mono text-xl font-semibold tabular-nums text-[var(--color-text-primary)]">
               {formatCompactCurrency(
                 report.totalExpenses
               )}
             </strong>
 
-            <div
-              className="list"
-              style={{ marginTop: 16 }}
-            >
-              <div className="list-item">
-                <span>Operating Expenses</span>
+            <div className="mt-4 flex flex-col">
+              <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border-light)] py-2.5 text-[13px] last:border-b-0">
+                <span className="text-[var(--color-text-secondary)]">
+                  Operating Expenses
+                </span>
 
-                <strong>
+                <strong className="font-mono tabular-nums">
                   {formatCurrency(
                     report.operatingExpenses
                   )}
                 </strong>
               </div>
 
-              <div className="list-item">
-                <span>Transportation</span>
+              <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border-light)] py-2.5 text-[13px] last:border-b-0">
+                <span className="text-[var(--color-text-secondary)]">
+                  Transportation
+                </span>
 
-                <strong>
+                <strong className="font-mono tabular-nums">
                   {formatCurrency(
                     report.transportation
                   )}
                 </strong>
               </div>
 
-              <div className="list-item">
-                <span>Utilities</span>
+              <div className="flex items-center justify-between gap-3 py-2.5 text-[13px]">
+                <span className="text-[var(--color-text-secondary)]">
+                  Utilities
+                </span>
 
-                <strong>
+                <strong className="font-mono tabular-nums">
                   {formatCurrency(
                     report.utilities
                   )}
@@ -1858,23 +1770,14 @@ function ProfitLoss({ asOfDate }) {
         </div>
       </div>
 
-      {/* P&L TREND */}
-      <div
-        className="card"
-        style={{ marginTop: 20 }}
-      >
+      <div className={CARD}>
         <CardHeader
           title="Profit & Loss Trend"
           subtitle="Revenue, expenses and net profit over the reporting period"
         />
 
-        <div className="card-body">
-          <div
-            style={{
-              width: "100%",
-              height: 320,
-            }}
-          >
+        <div className={CARD_BODY}>
+          <div className="h-[320px] w-full">
             <ResponsiveContainer
               width="100%"
               height="100%"
@@ -1888,9 +1791,7 @@ function ProfitLoss({ asOfDate }) {
                   bottom: 10,
                 }}
               >
-                <CartesianGrid
-                  strokeDasharray="3 3"
-                />
+                <CartesianGrid strokeDasharray="3 3" />
 
                 <XAxis dataKey="month" />
 
@@ -1912,7 +1813,7 @@ function ProfitLoss({ asOfDate }) {
                   type="monotone"
                   dataKey="revenue"
                   name="Revenue"
-                  stroke="#16a34a"
+                  stroke="#0f7b4f"
                   strokeWidth={2}
                   dot={{ r: 3 }}
                 />
@@ -1921,7 +1822,7 @@ function ProfitLoss({ asOfDate }) {
                   type="monotone"
                   dataKey="expenses"
                   name="Expenses"
-                  stroke="#dc2626"
+                  stroke="#b3261e"
                   strokeWidth={2}
                   dot={{ r: 3 }}
                 />
@@ -1930,7 +1831,7 @@ function ProfitLoss({ asOfDate }) {
                   type="monotone"
                   dataKey="netProfit"
                   name="Net Profit"
-                  stroke="#2563eb"
+                  stroke="#234c8c"
                   strokeWidth={2}
                   dot={{ r: 3 }}
                 />
@@ -1940,24 +1841,20 @@ function ProfitLoss({ asOfDate }) {
         </div>
       </div>
 
-      {/* PROFIT SUMMARY */}
-      <div
-        className="card"
-        style={{ marginTop: 20 }}
-      >
+      <div className={CARD}>
         <CardHeader
           title="Profit Summary"
           subtitle="Summary of the selected reporting period"
         />
 
-        <div className="card-body">
-          <div className="grid grid-3">
+        <div className={CARD_BODY}>
+          <div className="grid grid-cols-3 gap-4 max-[1100px]:grid-cols-1">
             <div>
-              <span className="stat-title">
+              <span className="text-[11.5px] font-semibold text-[var(--color-text-secondary)]">
                 Gross Profit
               </span>
 
-              <strong className="stat-value">
+              <strong className="mt-2 block font-mono text-xl font-semibold tabular-nums text-[var(--color-text-primary)]">
                 {formatCompactCurrency(
                   report.totalRevenue
                 )}
@@ -1965,11 +1862,11 @@ function ProfitLoss({ asOfDate }) {
             </div>
 
             <div>
-              <span className="stat-title">
+              <span className="text-[11.5px] font-semibold text-[var(--color-text-secondary)]">
                 Total Expenses
               </span>
 
-              <strong className="stat-value">
+              <strong className="mt-2 block font-mono text-xl font-semibold tabular-nums text-[var(--color-text-primary)]">
                 {formatCompactCurrency(
                   report.totalExpenses
                 )}
@@ -1977,15 +1874,15 @@ function ProfitLoss({ asOfDate }) {
             </div>
 
             <div>
-              <span className="stat-title">
+              <span className="text-[11.5px] font-semibold text-[var(--color-text-secondary)]">
                 Net Profit
               </span>
 
               <strong
-                className={`stat-value ${
+                className={`mt-2 block font-mono text-xl font-semibold tabular-nums ${
                   report.netProfit >= 0
-                    ? "text-success"
-                    : "text-danger"
+                    ? "text-[var(--color-success-700)]"
+                    : "text-[var(--color-danger-600)]"
                 }`}
               >
                 {formatCompactCurrency(
@@ -2000,10 +1897,6 @@ function ProfitLoss({ asOfDate }) {
   );
 }
 
-/* =========================================================
-   BALANCE SHEET
-   ========================================================= */
-
 function BalanceSheet({ asOfDate }) {
   const snapshot = useMemo(
     () => getBalanceSheetSnapshot(asOfDate),
@@ -2015,7 +1908,7 @@ function BalanceSheet({ asOfDate }) {
     const liabilities = snapshot?.liabilities || [];
     const equity = snapshot?.equity || [];
 
-    const sum = (items) =>
+    const sumAccounts = (items) =>
       items.reduce(
         (total, account) =>
           total + Number(account.balance || 0),
@@ -2038,24 +1931,27 @@ function BalanceSheet({ asOfDate }) {
       (account) => !account.isCurrent
     );
 
-    const totalCurrentAssets = sum(currentAssets);
-    const totalNonCurrentAssets = sum(nonCurrentAssets);
+    const totalCurrentAssets =
+      sumAccounts(currentAssets);
+
+    const totalNonCurrentAssets =
+      sumAccounts(nonCurrentAssets);
+
     const totalAssets =
-      totalCurrentAssets + totalNonCurrentAssets;
+      totalCurrentAssets +
+      totalNonCurrentAssets;
 
-    const totalCurrentLiabilities = sum(
-      currentLiabilities
-    );
+    const totalCurrentLiabilities =
+      sumAccounts(currentLiabilities);
 
-    const totalNonCurrentLiabilities = sum(
-      nonCurrentLiabilities
-    );
+    const totalNonCurrentLiabilities =
+      sumAccounts(nonCurrentLiabilities);
 
     const totalLiabilities =
       totalCurrentLiabilities +
       totalNonCurrentLiabilities;
 
-    const totalEquity = sum(equity);
+    const totalEquity = sumAccounts(equity);
 
     const totalLiabilitiesAndEquity =
       totalLiabilities + totalEquity;
@@ -2103,43 +1999,19 @@ function BalanceSheet({ asOfDate }) {
   const renderAccount = (account) => (
     <div
       key={`${account.code}-${account.name}`}
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        padding: "13px 0",
-        borderBottom:
-          "1px solid var(--border-color, #e5e7eb)",
-      }}
+      className="flex items-center justify-between border-b border-[var(--color-border)] py-[13px]"
     >
       <div>
-        <div
-          style={{
-            fontSize: 14,
-            fontWeight: 500,
-          }}
-        >
+        <div className="text-sm font-medium">
           {account.name}
         </div>
 
-        <div
-          style={{
-            fontSize: 12,
-            color: "var(--text-muted, #6b7280)",
-            marginTop: 3,
-          }}
-        >
+        <div className="mt-0.5 text-xs text-[var(--color-text-muted)]">
           {account.code}
         </div>
       </div>
 
-      <span
-        style={{
-          fontSize: 14,
-          fontWeight: 600,
-          whiteSpace: "nowrap",
-        }}
-      >
+      <span className="whitespace-nowrap font-mono text-sm font-semibold tabular-nums">
         {formatExactCurrency(account.balance)}
       </span>
     </div>
@@ -2150,32 +2022,13 @@ function BalanceSheet({ asOfDate }) {
     accounts,
     total
   ) => (
-    <div style={{ marginBottom: 28 }}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          paddingBottom: 9,
-          borderBottom:
-            "1px solid var(--border-color, #e5e7eb)",
-        }}
-      >
-        <span
-          style={{
-            fontSize: 13,
-            fontWeight: 700,
-          }}
-        >
+    <div className="mb-7">
+      <div className="flex items-center justify-between border-b border-[var(--color-border)] pb-[9px]">
+        <span className="text-[13px] font-bold">
           {title}
         </span>
 
-        <span
-          style={{
-            fontSize: 13,
-            fontWeight: 600,
-          }}
-        >
+        <span className="font-mono text-[13px] font-semibold tabular-nums">
           {formatExactCurrency(total)}
         </span>
       </div>
@@ -2183,13 +2036,7 @@ function BalanceSheet({ asOfDate }) {
       {accounts.length > 0 ? (
         accounts.map(renderAccount)
       ) : (
-        <div
-          style={{
-            padding: "14px 0",
-            fontSize: 13,
-            color: "var(--text-muted, #6b7280)",
-          }}
-        >
+        <div className="py-3.5 text-[13px] text-[var(--color-text-muted)]">
           No accounts
         </div>
       )}
@@ -2197,25 +2044,30 @@ function BalanceSheet({ asOfDate }) {
   );
 
   return (
-    <div className="page-section">
-      {/* HEADER */}
-      <div className="page-heading">
+    <div className={PAGE_SECTION}>
+      <div className={PAGE_HEADING}>
         <div>
-          <div className="page-breadcrumb">
-            Accounting <span>/</span> Financial Position
+          <div className={BREADCRUMB}>
+            Accounting{" "}
+            <span className="text-[var(--color-border-strong)]">
+              /
+            </span>{" "}
+            Financial Position
           </div>
 
-          <h2>Financial Position</h2>
+          <h2 className="text-[19px] font-semibold text-[var(--color-text-primary)]">
+            Financial Position
+          </h2>
 
-          <p>
+          <p className="mt-1 text-[13px] text-[var(--color-text-secondary)]">
             A simple summary of the company's financial
             position.
           </p>
         </div>
 
-        <div className="actions">
+        <div className="flex shrink-0 items-center gap-2">
           <button
-            className="btn btn-secondary"
+            className={BTN}
             type="button"
           >
             <Download size={15} />
@@ -2224,124 +2076,68 @@ function BalanceSheet({ asOfDate }) {
         </div>
       </div>
 
-      {/* DATE */}
-      <div
-        style={{
-          marginBottom: 20,
-          fontSize: 13,
-          color: "var(--text-muted, #6b7280)",
-        }}
-      >
+      <div className="text-[13px] text-[var(--color-text-muted)]">
         As of{" "}
-        <strong
-          style={{
-            color: "var(--text-primary, #111827)",
-          }}
-        >
+        <strong className="text-[var(--color-text-primary)]">
           {formatDisplayDate(asOfDate)}
         </strong>
       </div>
 
-      {/* SIMPLE SUMMARY */}
-      <div
-        className="grid grid-2"
-        style={{ marginBottom: 20 }}
-      >
-        <div className="card">
-          <div className="card-body">
-            <span
-              style={{
-                display: "block",
-                fontSize: 13,
-                color: "var(--text-muted, #6b7280)",
-                marginBottom: 8,
-              }}
-            >
+      <div className="grid grid-cols-2 gap-4 max-[800px]:grid-cols-1">
+        <div className={CARD}>
+          <div className={CARD_BODY}>
+            <span className="mb-2 block text-[13px] text-[var(--color-text-muted)]">
               Total Assets
             </span>
 
-            <strong
-              style={{
-                fontSize: 26,
-                fontWeight: 700,
-              }}
-            >
+            <strong className="font-mono text-[26px] font-bold tabular-nums">
               {formatExactCurrency(totalAssets)}
             </strong>
 
-            <div
-              style={{
-                marginTop: 5,
-                fontSize: 12,
-                color: "var(--text-muted, #6b7280)",
-              }}
-            >
+            <div className="mt-1 text-xs text-[var(--color-text-muted)]">
               Everything the company owns
             </div>
           </div>
         </div>
 
-        <div className="card">
-          <div className="card-body">
-            <span
-              style={{
-                display: "block",
-                fontSize: 13,
-                color: "var(--text-muted, #6b7280)",
-                marginBottom: 8,
-              }}
-            >
+        <div className={CARD}>
+          <div className={CARD_BODY}>
+            <span className="mb-2 block text-[13px] text-[var(--color-text-muted)]">
               Total Liabilities
             </span>
 
-            <strong
-              style={{
-                fontSize: 26,
-                fontWeight: 700,
-              }}
-            >
-              {formatExactCurrency(totalLiabilities)}
+            <strong className="font-mono text-[26px] font-bold tabular-nums">
+              {formatExactCurrency(
+                totalLiabilities
+              )}
             </strong>
 
-            <div
-              style={{
-                marginTop: 5,
-                fontSize: 12,
-                color: "var(--text-muted, #6b7280)",
-              }}
-            >
+            <div className="mt-1 text-xs text-[var(--color-text-muted)]">
               Everything the company owes
             </div>
           </div>
         </div>
       </div>
 
-      {/* BALANCE SHEET */}
-      <div className="grid grid-2">
-        {/* LEFT */}
-        <div className="card">
-          <div
-            className="card-header"
-            style={{
-              paddingBottom: 16,
-            }}
-          >
+      <div className="grid grid-cols-2 gap-4 max-[800px]:grid-cols-1">
+        <div className={CARD}>
+          <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-[18px] py-4">
             <div>
-              <h3 style={{ margin: 0 }}>
+              <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">
                 What the Company Owns
               </h3>
 
-              <p className="text-muted">
+              <p className="mt-[3px] text-xs text-[var(--color-text-secondary)]">
                 Assets
               </p>
             </div>
 
-            <strong>
+            <strong className="font-mono text-[15px] font-semibold tabular-nums">
               {formatExactCurrency(totalAssets)}
             </strong>
           </div>
 
-          <div className="card-body">
+          <div className={CARD_BODY}>
             {renderSection(
               "Current Assets",
               currentAssets,
@@ -2354,51 +2150,36 @@ function BalanceSheet({ asOfDate }) {
               totalNonCurrentAssets
             )}
 
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                paddingTop: 15,
-                borderTop:
-                  "2px solid var(--border-color, #d1d5db)",
-                fontSize: 15,
-              }}
-            >
+            <div className="flex justify-between border-t-2 border-[var(--color-border)] pt-[15px] text-[15px]">
               <strong>Total Assets</strong>
 
-              <strong>
+              <strong className="font-mono tabular-nums">
                 {formatExactCurrency(totalAssets)}
               </strong>
             </div>
           </div>
         </div>
 
-        {/* RIGHT */}
-        <div className="card">
-          <div
-            className="card-header"
-            style={{
-              paddingBottom: 16,
-            }}
-          >
+        <div className={CARD}>
+          <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-[18px] py-4">
             <div>
-              <h3 style={{ margin: 0 }}>
+              <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">
                 What the Company Owes
               </h3>
 
-              <p className="text-muted">
+              <p className="mt-[3px] text-xs text-[var(--color-text-secondary)]">
                 Liabilities and owner's equity
               </p>
             </div>
 
-            <strong>
+            <strong className="font-mono text-[15px] font-semibold tabular-nums">
               {formatExactCurrency(
                 totalLiabilitiesAndEquity
               )}
             </strong>
           </div>
 
-          <div className="card-body">
+          <div className={CARD_BODY}>
             {renderSection(
               "Current Liabilities",
               currentLiabilities,
@@ -2417,21 +2198,12 @@ function BalanceSheet({ asOfDate }) {
               totalEquity
             )}
 
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                paddingTop: 15,
-                borderTop:
-                  "2px solid var(--border-color, #d1d5db)",
-                fontSize: 15,
-              }}
-            >
+            <div className="flex justify-between border-t-2 border-[var(--color-border)] pt-[15px] text-[15px]">
               <strong>
                 Liabilities + Equity
               </strong>
 
-              <strong>
+              <strong className="font-mono tabular-nums">
                 {formatExactCurrency(
                   totalLiabilitiesAndEquity
                 )}
@@ -2441,48 +2213,25 @@ function BalanceSheet({ asOfDate }) {
         </div>
       </div>
 
-      {/* BALANCE CHECK */}
-      <div
-        className="card"
-        style={{ marginTop: 20 }}
-      >
-        <div
-          className="card-body"
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: 20,
-            flexWrap: "wrap",
-          }}
-        >
+      <div className={CARD}>
+        <div className="flex flex-wrap items-center justify-between gap-5 p-[18px]">
           <div>
-            <strong
-              style={{
-                display: "block",
-                fontSize: 15,
-                marginBottom: 4,
-              }}
-            >
+            <strong className="mb-1 block text-[15px]">
               Balance Check
             </strong>
 
-            <span
-              style={{
-                fontSize: 13,
-                color: "var(--text-muted, #6b7280)",
-              }}
-            >
+            <span className="text-[13px] text-[var(--color-text-muted)]">
               Assets should equal liabilities plus
               owner's equity.
             </span>
           </div>
 
           <div
-            style={{
-              fontSize: 15,
-              fontWeight: 600,
-            }}
+            className={`text-[15px] font-semibold ${
+              isBalanced
+                ? "text-[var(--color-success-700)]"
+                : "text-[var(--color-danger-600)]"
+            }`}
           >
             {isBalanced
               ? "Balanced"
@@ -2495,10 +2244,6 @@ function BalanceSheet({ asOfDate }) {
     </div>
   );
 }
-
-/* =========================================================
-   CASH FLOW
-   ========================================================= */
 
 function CashFlow({ asOfDate }) {
   const openingCash = 1800000;
@@ -2536,16 +2281,22 @@ function CashFlow({ asOfDate }) {
     openingCash + netMovement;
 
   return (
-    <div className="page-section cash-flow-page">
-      <div className="page-heading cash-flow-heading">
+    <div className={PAGE_SECTION}>
+      <div className={PAGE_HEADING}>
         <div>
-          <div className="page-breadcrumb">
-            Accounting <span>/</span> Cash Flow
+          <div className={BREADCRUMB}>
+            Accounting{" "}
+            <span className="text-[var(--color-border-strong)]">
+              /
+            </span>{" "}
+            Cash Flow
           </div>
 
-          <h2>Cash Flow</h2>
+          <h2 className="text-[19px] font-semibold text-[var(--color-text-primary)]">
+            Cash Flow
+          </h2>
 
-          <p>
+          <p className="mt-1 text-[13px] text-[var(--color-text-secondary)]">
             Cash movement from{" "}
             {formatDisplayDate(
               getFiscalYearStart(asOfDate)
@@ -2555,39 +2306,33 @@ function CashFlow({ asOfDate }) {
           </p>
         </div>
 
-        <div className="actions">
-          <button className="btn" type="button">
+        <div className="flex shrink-0 items-center gap-2">
+          <button className={BTN} type="button">
             <Download size={15} />
             Export
           </button>
         </div>
       </div>
 
-      <div className="stats-grid cash-flow-stats">
+      <div className={STATS_GRID}>
         <AccountingStat
           icon={Wallet}
           title="Opening Cash"
-          value={formatCompactCurrency(
-            openingCash
-          )}
+          value={formatCompactCurrency(openingCash)}
           change="Start of fiscal period"
         />
 
         <AccountingStat
           icon={ArrowDownToLine}
           title="Cash Inflow"
-          value={formatCompactCurrency(
-            totalInflow
-          )}
+          value={formatCompactCurrency(totalInflow)}
           change="Money received"
         />
 
         <AccountingStat
           icon={ArrowUpFromLine}
           title="Cash Outflow"
-          value={formatCompactCurrency(
-            totalOutflow
-          )}
+          value={formatCompactCurrency(totalOutflow)}
           change="Money paid"
           negative
         />
@@ -2595,32 +2340,30 @@ function CashFlow({ asOfDate }) {
         <AccountingStat
           icon={Banknote}
           title="Closing Cash"
-          value={formatCompactCurrency(
-            closingCash
-          )}
+          value={formatCompactCurrency(closingCash)}
           change={`Through ${formatDisplayDate(
             asOfDate
           )}`}
         />
       </div>
 
-      <div className="cash-flow-sections grid grid-3">
+      <div className="grid grid-cols-3 items-start gap-4 max-[1100px]:grid-cols-1">
         {sectionTotals.map((section) => {
           const isPositive =
             section.total >= 0;
 
           return (
             <div
-              className="cash-flow-section"
+              className="flex flex-col overflow-hidden rounded-[10px] border border-[var(--color-border)] bg-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md"
               key={section.category}
             >
-              <div className="cash-flow-section-header">
-                <div className="cash-flow-section-title">
+              <div className="flex flex-col gap-3.5 border-b border-[var(--color-border)] px-[18px] py-4">
+                <div className="flex items-center gap-[11px]">
                   <div
-                    className={`cash-flow-section-icon ${
+                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
                       isPositive
-                        ? "cash-flow-positive"
-                        : "cash-flow-negative"
+                        ? "bg-[var(--color-success-50)] text-[var(--color-success-700)]"
+                        : "bg-[var(--color-danger-50)] text-[var(--color-danger-600)]"
                     }`}
                   >
                     {isPositive ? (
@@ -2631,9 +2374,11 @@ function CashFlow({ asOfDate }) {
                   </div>
 
                   <div>
-                    <h3>{section.category}</h3>
+                    <h3 className="text-[13.5px] font-semibold">
+                      {section.category}
+                    </h3>
 
-                    <span>
+                    <span className="mt-px block text-[11.5px] text-[var(--color-text-muted)]">
                       {section.items.length}{" "}
                       {section.items.length === 1
                         ? "transaction"
@@ -2642,70 +2387,70 @@ function CashFlow({ asOfDate }) {
                   </div>
                 </div>
 
-                <div
-                  className={`cash-flow-section-total ${
-                    isPositive
-                      ? "text-success"
-                      : "text-danger"
-                  }`}
-                >
-                  <span>
+                <div className="flex items-center justify-between gap-2.5 rounded-lg bg-[var(--color-surface-alt)] px-3 py-[9px] text-xs font-semibold">
+                  <span
+                    className={
+                      isPositive
+                        ? "text-[var(--color-success-700)]"
+                        : "text-[var(--color-danger-600)]"
+                    }
+                  >
                     {isPositive
                       ? "Net cash inflow"
                       : "Net cash outflow"}
                   </span>
 
-                  <strong>
+                  <strong
+                    className={`font-mono text-[13.5px] tabular-nums ${
+                      isPositive
+                        ? "text-[var(--color-success-700)]"
+                        : "text-[var(--color-danger-600)]"
+                    }`}
+                  >
                     {isPositive ? "+" : "-"}
                     {formatCurrency(
-                      Math.abs(
-                        section.total
-                      )
+                      Math.abs(section.total)
                     )}
                   </strong>
                 </div>
               </div>
 
-              <div className="cash-flow-table-head">
+              <div className="flex items-center justify-between bg-[var(--color-surface-alt)] px-[18px] py-[9px] text-[10.5px] font-bold tracking-wider text-[var(--color-text-muted)]">
                 <span>ACTIVITY</span>
                 <span>AMOUNT</span>
               </div>
 
-              <div className="cash-flow-list">
+              <div className="flex flex-1 flex-col px-[18px] pb-2.5 pt-0.5">
                 {section.items.map((item) => {
                   const positive =
                     item.amount >= 0;
 
                   return (
                     <div
-                      className="cash-flow-row"
+                      className="flex items-center justify-between gap-3 border-b border-[var(--color-border-light)] py-[11px] last:border-b-0"
                       key={`${item.date}-${item.label}`}
                     >
-                      <div className="cash-flow-item">
+                      <div className="flex min-w-0 items-center gap-[11px]">
                         <div
-                          className={`cash-flow-item-icon ${
+                          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${
                             positive
-                              ? "cash-flow-positive"
-                              : "cash-flow-negative"
+                              ? "bg-[var(--color-success-50)] text-[var(--color-success-700)]"
+                              : "bg-[var(--color-danger-50)] text-[var(--color-danger-600)]"
                           }`}
                         >
                           {positive ? (
-                            <ArrowDownToLine
-                              size={14}
-                            />
+                            <ArrowDownToLine size={14} />
                           ) : (
-                            <ArrowUpFromLine
-                              size={14}
-                            />
+                            <ArrowUpFromLine size={14} />
                           )}
                         </div>
 
                         <div>
-                          <strong>
+                          <strong className="block text-[12.5px]">
                             {item.label}
                           </strong>
 
-                          <span>
+                          <span className="mt-px block text-[11.5px] text-[var(--color-text-muted)]">
                             {formatDisplayDate(
                               item.date
                             )}
@@ -2714,17 +2459,15 @@ function CashFlow({ asOfDate }) {
                       </div>
 
                       <strong
-                        className={
+                        className={`shrink-0 font-mono text-[13px] tabular-nums ${
                           positive
-                            ? "text-success"
-                            : "text-danger"
-                        }
+                            ? "text-[var(--color-success-700)]"
+                            : "text-[var(--color-danger-600)]"
+                        }`}
                       >
                         {positive ? "+" : "-"}
                         {formatCurrency(
-                          Math.abs(
-                            item.amount
-                          )
+                          Math.abs(item.amount)
                         )}
                       </strong>
                     </div>
@@ -2736,64 +2479,54 @@ function CashFlow({ asOfDate }) {
         })}
       </div>
 
-      <div className="cash-flow-summary">
-        <div className="cash-flow-summary-header">
-          <div>
-            <h3>Cash Movement Summary</h3>
+        <div className="rounded-xl border border-[var(--color-border)] bg-white p-4 shadow-sm">
+  <div className="mb-4">
+    <h3 className="text-[14px] font-semibold text-[var(--color-text-primary)]">
+      Cash Movement Summary
+    </h3>
 
-            <p>
-              Opening balance plus net cash movement
-              through the selected date.
-            </p>
-          </div>
-        </div>
+    <p className="mt-1 text-[12px] text-[var(--color-text-secondary)]">
+      Opening balance plus net cash movement through the selected date.
+    </p>
+  </div>
 
-        <div className="cash-flow-summary-grid">
-          <div className="cash-flow-summary-item">
-            <span>Opening Cash</span>
-
-            <strong>
-              {formatCompactCurrency(
-                openingCash
-              )}
-            </strong>
-          </div>
-
-          <div className="cash-flow-summary-item">
-            <span>Net Movement</span>
-
-            <strong
-              className={
-                netMovement >= 0
-                  ? "text-success"
-                  : "text-danger"
-              }
-            >
-              {netMovement >= 0 ? "+" : "-"}
-              {formatCompactCurrency(
-                Math.abs(netMovement)
-              )}
-            </strong>
-          </div>
-
-          <div className="cash-flow-summary-item highlight">
-            <span>Closing Cash</span>
-
-            <strong>
-              {formatCompactCurrency(
-                closingCash
-              )}
-            </strong>
-          </div>
-        </div>
+  <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+    
+    <div className="rounded-xl border border-[var(--color-brand-200)] bg-[var(--color-brand-50)] px-5 py-4 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
+      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-brand-700)]">
+        Opening Cash
       </div>
+
+      <div className="font-mono text-[20px] font-semibold tracking-tight text-[var(--color-brand-800)]">
+        ₹18.00 L
+      </div>
+    </div>
+
+    <div className="rounded-xl border border-[var(--color-brand-200)] bg-[var(--color-brand-50)] px-5 py-4 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
+      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-brand-700)]">
+        Net Movement
+      </div>
+
+      <div className="font-mono text-[20px] font-semibold tracking-tight text-[var(--color-brand-800)]">
+        +₹22.60 L
+      </div>
+    </div>
+
+    <div className="rounded-xl border border-[var(--color-brand-300)] bg-[var(--color-brand-100)] px-5 py-4 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
+      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-brand-800)]">
+        Closing Cash
+      </div>
+
+      <div className="font-mono text-[20px] font-semibold tracking-tight text-[var(--color-brand-900)]">
+        ₹40.60 L
+      </div>
+    </div>
+
+  </div>
+</div>
     </div>
   );
 }
-
-/* =========================================================
-   MAIN ACCOUNTING PAGE
-   ========================================================= */
 
 export default function Accounting() {
   const [activeTab, setActiveTab] =
@@ -2864,39 +2597,46 @@ export default function Accounting() {
   }
 
   return (
-    <div className="page accounting-page">
-      <div className="page-heading">
+    <div className="w-full">
+      <div className={PAGE_HEADING}>
         <div>
-          <div className="page-breadcrumb">
-            Finance <span>/</span> Accounting
+          <div className={BREADCRUMB}>
+            Finance{" "}
+            <span className="text-[var(--color-border-strong)]">
+              /
+            </span>{" "}
+            Accounting
           </div>
 
-          <h1>Accounting</h1>
+          <h1 className="text-[23px] font-semibold tracking-[-0.02em] text-[var(--color-text-primary)]">
+            Accounting
+          </h1>
 
-          <p>
+          <p className="mt-1 text-[13px] text-[var(--color-text-secondary)]">
             Manage financial accounts, statements and
             business cash flow.
           </p>
         </div>
 
-        <div className="actions">
-          <label className="date-filter">
-            <span>Date</span>
+        <div className="flex shrink-0 items-center gap-2">
+          <label className="flex h-9 items-center gap-2.5 rounded-lg border border-[var(--color-border)] bg-white px-3">
+            <span className="text-[11px] font-bold uppercase tracking-wide text-[var(--color-text-muted)]">
+              Date
+            </span>
 
             <input
               type="date"
               value={asOfDate}
               max={getTodayInputValue()}
               onChange={(event) =>
-                setAsOfDate(
-                  event.target.value
-                )
+                setAsOfDate(event.target.value)
               }
+              className="border-0 bg-transparent font-mono text-[12.5px] text-[var(--color-text-primary)] outline-none"
             />
           </label>
 
           <button
-            className="btn"
+            className={BTN}
             type="button"
           >
             <Download size={15} />
@@ -2905,14 +2645,11 @@ export default function Accounting() {
         </div>
       </div>
 
-      <div
-        className="accounting-date-summary"
-        style={{ marginBottom: "20px" }}
-      >
+      <div className="mb-5 rounded-lg border border-[var(--color-info-100)] bg-[var(--color-info-50)] px-3.5 py-[11px] text-[12.5px] leading-relaxed text-[var(--color-brand-800)]">
         All accounting tabs are filtered through{" "}
-        <strong>{report.label}</strong>. Profit & Loss
+        <strong className="font-semibold">{report.label}</strong>. Profit & Loss
         and Cash Flow use the fiscal period from{" "}
-        <strong>
+        <strong className="font-semibold">
           {formatDisplayDate(
             getFiscalYearStart(asOfDate)
           )}
@@ -2921,18 +2658,19 @@ export default function Accounting() {
         point-in-time reports.
       </div>
 
-      <div className="tabs">
+      <div className="mb-5 flex items-center gap-1 overflow-x-auto border-b border-[var(--color-border)]">
         {accountingTabs.map((tab) => {
           const Icon = tab.icon;
+          const isActive = activeTab === tab.id;
 
           return (
             <button
               key={tab.id}
               type="button"
-              className={`tab ${
-                activeTab === tab.id
-                  ? "active"
-                  : ""
+              className={`relative inline-flex min-h-[42px] items-center gap-1.5 whitespace-nowrap px-3 text-[12.5px] font-semibold transition-colors ${
+                isActive
+                  ? "text-[var(--color-brand-800)] after:absolute after:-bottom-px after:left-2 after:right-2 after:h-0.5 after:rounded-t after:bg-[var(--color-brand-800)] after:content-['']"
+                  : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
               }`}
               onClick={() =>
                 setActiveTab(tab.id)

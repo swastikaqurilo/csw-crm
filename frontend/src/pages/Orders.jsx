@@ -7,6 +7,19 @@ import {
   MapPin,
   FileText,
   RefreshCw,
+  Package,
+  UserRound,
+  CalendarDays,
+  CreditCard,
+  IndianRupee,
+  Pencil,
+  Trash2,
+  ChevronLeft,
+  ChevronRight,
+  CheckCircle2,
+  Clock3,
+  Factory,
+  AlertCircle,
 } from "lucide-react";
 
 import {
@@ -30,7 +43,14 @@ const ORDER_STATUSES = [
   "Cancelled",
 ];
 
-const PAYMENT_STATUSES = ["Pending", "Partial", "Paid", "Overdue"];
+const PAYMENT_STATUSES = [
+  "Pending",
+  "Partial",
+  "Paid",
+  "Overdue",
+];
+
+const ORDERS_PER_PAGE = 8;
 
 const emptyForm = {
   contact: "",
@@ -47,33 +67,6 @@ const emptyForm = {
   billingAddress: "",
   notes: "",
 };
-
-function getStatusClass(status) {
-  if (status === "Delivered" || status === "Dispatched") {
-    return "status-resolved";
-  }
-
-  if (status === "Confirmed" || status === "In Production") {
-    return "status-in-progress";
-  }
-
-  if (status === "Ready for Dispatch") {
-    return "status-contacted";
-  }
-
-  if (status === "Cancelled") {
-    return "status-new";
-  }
-
-  return "status-new";
-}
-
-function getPaymentClass(payment) {
-  if (payment === "Paid") return "status-resolved";
-  if (payment === "Partial") return "status-in-progress";
-  if (payment === "Pending") return "status-new";
-  return "status-contacted";
-}
 
 function formatCurrency(value) {
   return `₹${Number(value || 0).toLocaleString("en-IN", {
@@ -125,7 +118,7 @@ function getContactPerson(contact) {
 function getProductName(product) {
   if (!product) return "Unknown Product";
 
-  return product.name || product.code || "Unknown Product";
+  return product.name || product.code || product.productCode || "Unknown Product";
 }
 
 function getItemsLabel(order) {
@@ -153,9 +146,96 @@ function getItemsQuantity(order) {
     .join(", ");
 }
 
+function getStatusStyles(status) {
+  switch (status) {
+    case "Delivered":
+      return {
+        badge: "border-emerald-200 bg-emerald-50 text-emerald-700",
+        icon: CheckCircle2,
+      };
+
+    case "Dispatched":
+      return {
+        badge: "border-sky-200 bg-sky-50 text-sky-700",
+        icon: Truck,
+      };
+
+    case "Ready for Dispatch":
+      return {
+        badge: "border-violet-200 bg-violet-50 text-violet-700",
+        icon: Package,
+      };
+
+    case "In Production":
+      return {
+        badge: "border-amber-200 bg-amber-50 text-amber-700",
+        icon: Factory,
+      };
+
+    case "Confirmed":
+      return {
+        badge: "border-blue-200 bg-blue-50 text-blue-700",
+        icon: CheckCircle2,
+      };
+
+    case "Cancelled":
+      return {
+        badge: "border-rose-200 bg-rose-50 text-rose-700",
+        icon: AlertCircle,
+      };
+
+    default:
+      return {
+        badge: "border-slate-200 bg-slate-50 text-slate-600",
+        icon: FileText,
+      };
+  }
+}
+
+function getPaymentStyles(payment) {
+  switch (payment) {
+    case "Paid":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+
+    case "Partial":
+      return "border-amber-200 bg-amber-50 text-amber-700";
+
+    case "Overdue":
+      return "border-rose-200 bg-rose-50 text-rose-700";
+
+    default:
+      return "border-slate-200 bg-slate-50 text-slate-600";
+  }
+}
+
+function StatusBadge({ status }) {
+  const styles = getStatusStyles(status);
+  const Icon = styles.icon;
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${styles.badge}`}
+    >
+      <Icon size={12} />
+      {status || "Draft"}
+    </span>
+  );
+}
+
+function PaymentBadge({ status }) {
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold ${getPaymentStyles(
+        status
+      )}`}
+    >
+      {status || "Pending"}
+    </span>
+  );
+}
+
 function Orders() {
   const [orders, setOrders] = useState([]);
-
   const [contacts, setContacts] = useState([]);
   const [products, setProducts] = useState([]);
 
@@ -163,8 +243,8 @@ function Orders() {
   const [statusFilter, setStatusFilter] = useState("All");
   const [paymentFilter, setPaymentFilter] = useState("All");
 
-  const [selectedId, setSelectedId] = useState(null);
-  const [selectedOrder, setSelectedOrder] = useState(null);
+  const [viewOrder, setViewOrder] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState(null);
@@ -172,7 +252,6 @@ function Orders() {
   const [form, setForm] = useState(emptyForm);
 
   const [loading, setLoading] = useState(true);
-  const [detailLoading, setDetailLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -182,14 +261,6 @@ function Orders() {
   const [pages, setPages] = useState(1);
   const [totalOrders, setTotalOrders] = useState(0);
 
-  const limit = 20;
-
-  /*
-   * ---------------------------------------------------------
-   * FETCH ORDERS
-   * ---------------------------------------------------------
-   */
-
   const fetchOrders = async () => {
     try {
       setLoading(true);
@@ -197,7 +268,7 @@ function Orders() {
 
       const params = {
         page,
-        limit,
+        limit: ORDERS_PER_PAGE,
       };
 
       if (search.trim()) {
@@ -213,31 +284,15 @@ function Orders() {
       }
 
       const response = await getOrders(params);
-
       const result = response?.data;
 
       if (!result?.success) {
         throw new Error(result?.message || "Failed to fetch orders");
       }
 
-      const fetchedOrders = result.data || [];
-
-      setOrders(fetchedOrders);
-      setPages(result.pages || 1);
+      setOrders(result.data || []);
+      setPages(Math.max(1, result.pages || 1));
       setTotalOrders(result.total || 0);
-
-      if (fetchedOrders.length > 0) {
-        const currentStillExists = fetchedOrders.some(
-          (order) => order._id === selectedId
-        );
-
-        if (!currentStillExists) {
-          setSelectedId(fetchedOrders[0]._id);
-        }
-      } else {
-        setSelectedId(null);
-        setSelectedOrder(null);
-      }
     } catch (err) {
       console.error("Fetch orders error:", err);
 
@@ -250,12 +305,6 @@ function Orders() {
       setLoading(false);
     }
   };
-
-  /*
-   * ---------------------------------------------------------
-   * FETCH CONTACTS + PRODUCTS
-   * ---------------------------------------------------------
-   */
 
   const fetchFormData = async () => {
     try {
@@ -283,12 +332,6 @@ function Orders() {
     fetchFormData();
   }, []);
 
-  /*
-   * ---------------------------------------------------------
-   * FETCH ORDERS WHEN FILTERS CHANGE
-   * ---------------------------------------------------------
-   */
-
   useEffect(() => {
     const timer = setTimeout(() => {
       fetchOrders();
@@ -297,50 +340,30 @@ function Orders() {
     return () => clearTimeout(timer);
   }, [page, search, statusFilter, paymentFilter]);
 
-  /*
-   * ---------------------------------------------------------
-   * FETCH SELECTED ORDER DETAILS
-   * ---------------------------------------------------------
-   */
 
-  useEffect(() => {
-    if (!selectedId) {
-      setSelectedOrder(null);
-      return;
-    }
+  const openViewOrder = async (order) => {
+    if (!order?._id) return;
 
-    const fetchSelectedOrder = async () => {
-      try {
-        setDetailLoading(true);
+    setViewOrder(order);
+    setDetailLoading(true);
 
-        const response = await getOrderById(selectedId);
+    try {
+      const response = await getOrderById(order._id);
 
-        if (response?.data?.success) {
-          setSelectedOrder(response.data.data);
-        }
-      } catch (err) {
-        console.error("Fetch order details error:", err);
-
-        const fromList = orders.find(
-          (order) => order._id === selectedId
-        );
-
-        if (fromList) {
-          setSelectedOrder(fromList);
-        }
-      } finally {
-        setDetailLoading(false);
+      if (response?.data?.success) {
+        setViewOrder(response.data.data);
       }
-    };
+    } catch (err) {
+      console.error("Fetch order details error:", err);
+    } finally {
+      setDetailLoading(false);
+    }
+  };
 
-    fetchSelectedOrder();
-  }, [selectedId]);
-
-  /*
-   * ---------------------------------------------------------
-   * STATS
-   * ---------------------------------------------------------
-   */
+  const closeViewOrder = () => {
+    if (saving) return;
+    setViewOrder(null);
+  };
 
   const stats = useMemo(() => {
     const inProcessStatuses = [
@@ -372,27 +395,15 @@ function Orders() {
     };
   }, [orders, totalOrders]);
 
-  /*
-   * ---------------------------------------------------------
-   * CREATE MODAL
-   * ---------------------------------------------------------
-   */
-
   const openAddModal = () => {
     setEditingOrder(null);
-    setForm({
-      ...emptyForm,
-    });
+    setForm({ ...emptyForm });
     setModalOpen(true);
   };
 
-  /*
-   * ---------------------------------------------------------
-   * EDIT MODAL
-   * ---------------------------------------------------------
-   */
-
   const openEditModal = (order) => {
+    if (!order) return;
+
     setEditingOrder(order);
 
     setForm({
@@ -421,14 +432,8 @@ function Orders() {
 
     setModalOpen(false);
     setEditingOrder(null);
-    setForm(emptyForm);
+    setForm({ ...emptyForm });
   };
-
-  /*
-   * ---------------------------------------------------------
-   * FORM HANDLING
-   * ---------------------------------------------------------
-   */
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -443,15 +448,21 @@ function Orders() {
     (product) => product._id === form.product
   );
 
-  const calculatedItemAmount =
+  const calculatedItemAmount = Math.max(
+    0,
     Number(form.quantity || 0) * Number(form.rate || 0) -
-    Number(form.itemDiscount || 0);
+      Number(form.itemDiscount || 0)
+  );
 
-  /*
-   * ---------------------------------------------------------
-   * CREATE ORDER
-   * ---------------------------------------------------------
-   */
+  const estimatedTax =
+    calculatedItemAmount * (Number(form.taxPercent || 0) / 100);
+
+  const estimatedGrandTotal = Math.max(
+    0,
+    calculatedItemAmount -
+      Number(form.discount || 0) +
+      estimatedTax
+  );
 
   const handleCreate = async () => {
     if (!form.contact) {
@@ -483,10 +494,7 @@ function Orders() {
           {
             product: form.product,
             quantity: Number(form.quantity),
-            unit:
-              form.unit ||
-              selectedProduct?.unit ||
-              "kg",
+            unit: form.unit || selectedProduct?.unit || "kg",
             rate: Number(form.rate || 0),
             discount: Number(form.itemDiscount || 0),
           },
@@ -519,7 +527,7 @@ function Orders() {
       await fetchOrders();
 
       if (createdOrder?._id) {
-        setSelectedId(createdOrder._id);
+        await openViewOrder(createdOrder);
       }
     } catch (err) {
       console.error("Create order error:", err);
@@ -533,24 +541,6 @@ function Orders() {
       setSaving(false);
     }
   };
-
-  /*
-   * ---------------------------------------------------------
-   * UPDATE ORDER
-   * ---------------------------------------------------------
-   *
-   * IMPORTANT:
-   * Your backend controller only allows:
-   *
-   * expectedDeliveryDate
-   * shippingAddress
-   * billingAddress
-   * notes
-   * discount
-   * taxPercent
-   *
-   * So we only send those fields here.
-   */
 
   const handleUpdate = async () => {
     if (!editingOrder?._id) return;
@@ -586,7 +576,7 @@ function Orders() {
       await fetchOrders();
 
       if (updatedOrder?._id) {
-        setSelectedId(updatedOrder._id);
+        await openViewOrder(updatedOrder);
       }
     } catch (err) {
       console.error("Update order error:", err);
@@ -601,14 +591,12 @@ function Orders() {
     }
   };
 
-  /*
-   * ---------------------------------------------------------
-   * STATUS UPDATE
-   * ---------------------------------------------------------
-   */
-
   const handleStatusChange = async (order, newStatus) => {
-    if (!order?._id || !newStatus || newStatus === order.status) {
+    if (
+      !order?._id ||
+      !newStatus ||
+      newStatus === order.status
+    ) {
       return;
     }
 
@@ -648,8 +636,8 @@ function Orders() {
         )
       );
 
-      setSelectedOrder((current) =>
-        current
+      setViewOrder((current) =>
+        current?._id === order._id
           ? {
               ...current,
               ...updatedOrder,
@@ -667,12 +655,6 @@ function Orders() {
       );
     }
   };
-
-  /*
-   * ---------------------------------------------------------
-   * DELETE ORDER
-   * ---------------------------------------------------------
-   */
 
   const handleDelete = async (order) => {
     if (!order?._id) return;
@@ -697,13 +679,11 @@ function Orders() {
 
       if (!response?.data?.success) {
         throw new Error(
-          response?.data?.message ||
-            "Failed to delete order"
+          response?.data?.message || "Failed to delete order"
         );
       }
 
-      setSelectedId(null);
-      setSelectedOrder(null);
+      setViewOrder(null);
 
       await fetchOrders();
     } catch (err) {
@@ -719,887 +699,893 @@ function Orders() {
     }
   };
 
-  /*
-   * ---------------------------------------------------------
-   * REFRESH
-   * ---------------------------------------------------------
-   */
-
   const handleRefresh = () => {
     fetchOrders();
   };
 
-  const canEdit = selectedOrder?.isActive !== false;
-
-  /*
-   * ---------------------------------------------------------
-   * RENDER
-   * ---------------------------------------------------------
-   */
+  const canEdit = viewOrder?.isActive !== false;
 
   return (
-    <div className="orders-page">
-      {/* HEADER */}
-      <div className="page-heading">
+    <div className="min-h-full space-y-5 pb-6">
+      {/* PAGE HEADER */}
+
+      <section className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <div className="ord-breadcrumb">
-            COMMERCIAL OPS · FULFILMENT · DISPATCH LOG
+          <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+            <span>Commercial Operations</span>
+            <span className="text-slate-300">/</span>
+            <span>Fulfilment</span>
+            <span className="text-slate-300">/</span>
+            <span>Orders</span>
           </div>
 
-          <h1>Orders</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">
+            Orders
+          </h1>
 
-          <p>
-            Manage customer purchase orders, production and
-            logistics.
+          <p className="mt-1 text-sm text-slate-500">
+            Manage customer purchase orders, production and fulfilment.
           </p>
         </div>
 
-        <div className="flex gap-3">
+        <div className="flex items-center gap-2">
           <button
-            className="btn btn-secondary"
-            onClick={handleRefresh}
             type="button"
+            onClick={handleRefresh}
+            disabled={loading}
+            className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 text-sm font-medium text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <RefreshCw size={15} />
+            <RefreshCw
+              size={15}
+              className={loading ? "animate-spin" : ""}
+            />
             Refresh
           </button>
 
           <button
-            className="btn btn-primary"
-            onClick={openAddModal}
             type="button"
+            onClick={openAddModal}
+            className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#002244] px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-[#00335f] hover:shadow-md"
           >
             <Plus size={16} />
             New Order
           </button>
         </div>
-      </div>
+      </section>
 
       {/* ERROR */}
+
       {error && (
-        <div className="alert alert-error mb-4">
-          {error}
+        <div className="flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <AlertCircle size={17} className="mt-0.5 shrink-0" />
+
+          <div>
+            <p className="font-semibold">
+              Unable to load orders
+            </p>
+
+            <p className="mt-0.5 text-rose-600">
+              {error}
+            </p>
+          </div>
         </div>
       )}
 
-      {/* STATS */}
-      <div className="stats-grid">
-        <div className="stat-card">
-          <div className="stat-top">
-            <span className="ord-kpi-label">
-              TOTAL ORDERS
-            </span>
+      {/* KPI CARDS */}
+
+      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <KpiCard
+          label="Total Orders"
+          value={stats.total}
+          description="Active purchase orders"
+          icon={FileText}
+        />  
+
+        <KpiCard
+          label="In Process"
+          value={stats.inProcess}
+          description="Active production"
+          icon={Factory}
+        />
+
+        <KpiCard
+          label="Dispatched"
+          value={stats.dispatched}
+          description="Current page"
+          icon={Truck}
+        />
+
+        <KpiCard
+          label="Order Value"
+          value={formatCurrency(stats.value)}
+          description="Loaded orders"
+          icon={IndianRupee}
+        />
+      </section>
+      {/* FILTER TOOLBAR */}
+
+      <section className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+          <div className="relative min-w-0 flex-1">
+            <Search
+              size={17}
+              className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"
+            />
+
+            <input
+              value={search}
+              onChange={(e) => {
+                setPage(1);
+                setSearch(e.target.value);
+              }}
+              placeholder="Search by order number or notes..."
+              className="h-10 w-full rounded-lg border border-slate-200 bg-slate-50 pl-10 pr-4 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-slate-300 focus:bg-white focus:ring-2 focus:ring-slate-100"
+            />
           </div>
 
-          <div className="stat-value">
-            {stats.total}
-          </div>
+          <div className="grid grid-cols-2 gap-2 sm:flex">
+            <select
+              value={statusFilter}
+              onChange={(e) => {
+                setPage(1);
+                setStatusFilter(e.target.value);
+              }}
+              className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-600 outline-none transition hover:border-slate-300 focus:border-slate-400 focus:ring-2 focus:ring-slate-100"
+            >
+              <option value="All">All Status</option>
 
-          <div className="stat-change">
-            Active purchase orders
+              {ORDER_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={paymentFilter}
+              onChange={(e) => {
+                setPage(1);
+                setPaymentFilter(e.target.value);
+              }}
+              className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-600 outline-none transition hover:border-slate-300 focus:border-slate-400 focus:ring-2 focus:ring-slate-100"
+            >
+              <option value="All">All Payments</option>
+
+              {PAYMENT_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
+      </section>
 
-        <div className="stat-card">
-          <div className="stat-top">
-            <span className="ord-kpi-label">
-              IN PROCESS
-            </span>
-          </div>
+      <section className="w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        {/* LIST HEADER */}
 
-          <div className="stat-value">
-            {stats.inProcess}
-          </div>
+        <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-bold text-slate-900">
+                Manufacturing & Dispatch Log
+              </h2>
 
-          <div className="stat-change">
-            Active production
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-top">
-            <span className="ord-kpi-label">
-              DISPATCHED
-            </span>
-          </div>
-
-          <div className="stat-value">
-            {stats.dispatched}
-          </div>
-
-          <div className="stat-change">
-            Current page
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-top">
-            <span className="ord-kpi-label">
-              ORDER VALUE
-            </span>
-          </div>
-
-          <div className="stat-value">
-            {formatCurrency(stats.value)}
-          </div>
-
-          <div className="stat-change">
-            Loaded orders
-          </div>
-        </div>
-      </div>
-
-      {/* FILTER */}
-      <div className="ord-filter-bar">
-        <div className="ord-search">
-          <Search size={15} />
-
-          <input
-            value={search}
-            onChange={(e) => {
-              setPage(1);
-              setSearch(e.target.value);
-            }}
-            placeholder="Search by Order ID or notes..."
-          />
-        </div>
-
-        <select
-          className="filter-select"
-          value={statusFilter}
-          onChange={(e) => {
-            setPage(1);
-            setStatusFilter(e.target.value);
-          }}
-        >
-          <option value="All">
-            All Statuses
-          </option>
-
-          {ORDER_STATUSES.map((status) => (
-            <option key={status} value={status}>
-              {status}
-            </option>
-          ))}
-        </select>
-
-        <select
-          className="filter-select"
-          value={paymentFilter}
-          onChange={(e) => {
-            setPage(1);
-            setPaymentFilter(e.target.value);
-          }}
-        >
-          <option value="All">
-            All Payments
-          </option>
-
-          {PAYMENT_STATUSES.map((status) => (
-            <option key={status} value={status}>
-              {status}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* WORKSPACE */}
-      <div className="ord-workspace">
-        {/* LEFT: ORDER LIST */}
-        <section className="card ord-queue">
-          <div className="ord-queue-header">
-            <div>
-              <h2>Manufacturing & Dispatch Log</h2>
-
-              <span className="text-muted text-sm">
-                {loading
-                  ? "Loading..."
-                  : `${orders.length} shown`}
-              </span>
+              {/* <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">
+                {totalOrders}
+              </span> */}
             </div>
+
+            <p className="mt-1 text-xs text-slate-500">
+              Purchase orders and current fulfilment status.
+            </p>
           </div>
 
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>ORDER #</th>
-                  <th>CUSTOMER</th>
-                  <th>PRODUCT / QTY</th>
-                  <th>STATUS</th>
-                </tr>
-              </thead>
+          <div className="text-xs font-medium text-slate-400">
+            {loading ? "Updating..." : `${orders.length} shown`}
+          </div>
+        </div>
 
-              <tbody>
-                {loading ? (
-                  <tr>
-                    <td colSpan="4">
-                      <div className="text-muted">
-                        Loading orders...
-                      </div>
-                    </td>
-                  </tr>
-                ) : orders.length === 0 ? (
-                  <tr>
-                    <td colSpan="4">
-                      <div className="text-muted">
-                        No orders found.
-                      </div>
-                    </td>
-                  </tr>
-                ) : (
-                  orders.map((order) => (
+        {/* TABLE */}
+
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[820px] border-collapse">
+            <thead>
+              <tr className="border-b border-slate-100 bg-slate-50/70">
+                <th className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  Order
+                </th>
+
+                <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  Customer
+                </th>
+
+                <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  Product / Qty
+                </th>
+
+                <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  Value
+                </th>
+
+                <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  Payment
+                </th>
+
+                <th className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  Status
+                </th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {loading ? (
+                Array.from({ length: ORDERS_PER_PAGE }).map(
+                  (_, index) => (
                     <tr
-                      key={order._id}
-                      className={
-                        selectedId === order._id
-                          ? "selected"
-                          : ""
-                      }
-                      onClick={() =>
-                        setSelectedId(order._id)
-                      }
+                      key={index}
+                      className="border-b border-slate-100"
                     >
-                      <td>
-                        <span className="font-mono font-semibold text-sm text-brand">
-                          {order.orderNumber}
-                        </span>
-
-                        <div className="text-xs text-muted">
-                          {formatDate(order.orderDate)}
-                        </div>
+                      <td className="px-5 py-4">
+                        <Skeleton width="w-24" />
+                        <Skeleton width="w-16" />
                       </td>
 
-                      <td>
-                        <strong className="text-sm">
-                          {getContactName(order.contact)}
-                        </strong>
-
-                        <div className="text-xs text-muted">
-                          {getContactPerson(order.contact)}
-                        </div>
+                      <td className="px-4 py-4">
+                        <Skeleton width="w-28" />
+                        <Skeleton width="w-20" />
                       </td>
 
-                      <td>
-                        <div className="text-sm">
-                          {getItemsLabel(order)}
-                        </div>
-
-                        <div className="text-xs text-muted">
-                          {getItemsQuantity(order)}
-                        </div>
+                      <td className="px-4 py-4">
+                        <Skeleton width="w-32" />
+                        <Skeleton width="w-20" />
                       </td>
 
-                      <td>
-                        <span
-                          className={`status ${getStatusClass(
-                            order.status
-                          )}`}
-                        >
-                          {order.status}
-                        </span>
+                      <td className="px-4 py-4">
+                        <Skeleton width="w-20" />
+                      </td>
+
+                      <td className="px-4 py-4">
+                        <Skeleton width="w-16" rounded />
+                      </td>
+
+                      <td className="px-5 py-4">
+                        <Skeleton width="w-24" rounded />
                       </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+                  )
+                )
+              ) : orders.length === 0 ? (
+                <tr>
+                  <td colSpan="6" className="px-5 py-16">
+                    <div className="flex flex-col items-center justify-center text-center">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 text-slate-400">
+                        <Package size={21} />
+                      </div>
 
-          {/* PAGINATION */}
-          <div className="pagination">
-            <span>
-              Showing {orders.length} of {totalOrders} Purchase
-              Orders
-            </span>
+                      <h3 className="mt-4 text-sm font-semibold text-slate-800">
+                        No orders found
+                      </h3>
 
-            <div className="pagination-buttons">
-              <button
-                type="button"
-                disabled={page <= 1 || loading}
-                onClick={() =>
-                  setPage((current) => current - 1)
-                }
-              >
-                Previous
-              </button>
+                      <p className="mt-1 max-w-xs text-xs leading-5 text-slate-500">
+                        Try adjusting your search or filters, or create a
+                        new purchase order.
+                      </p>
 
-              <button
-                type="button"
-                disabled
-              >
-                {page}
-              </button>
-
-              <button
-                type="button"
-                disabled={
-                  page >= pages || loading
-                }
-                onClick={() =>
-                  setPage((current) => current + 1)
-                }
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        </section>
-
-        {/* RIGHT: DETAIL PANEL */}
-        <aside className="card ord-detail">
-          {!selectedOrder ? (
-            <div className="ord-detail-body">
-              <div className="text-muted">
-                Select an order to view its details.
-              </div>
-            </div>
-          ) : detailLoading ? (
-            <div className="ord-detail-body">
-              <div className="text-muted">
-                Loading order details...
-              </div>
-            </div>
-          ) : (
-            <>
-              <div className="ord-detail-header">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="font-mono font-semibold text-brand">
-                      {selectedOrder.orderNumber}
-                    </span>
-
-                    <span
-                      className={`status ${getStatusClass(
-                        selectedOrder.status
-                      )}`}
-                    >
-                      {selectedOrder.status}
-                    </span>
-                  </div>
-
-                  <h2>
-                    {selectedOrder.status}
-                  </h2>
-
-                  <p className="text-muted text-sm">
-                    Created{" "}
-                    {formatDate(
-                      selectedOrder.orderDate
-                    )}{" "}
-                    · Expected{" "}
-                    {formatDate(
-                      selectedOrder.expectedDeliveryDate
-                    )}
-                  </p>
-                </div>
-              </div>
-
-              <div className="ord-detail-body">
-                {/* PURCHASER */}
-                <div className="ord-section">
-                  <div className="ord-section-title">
-                    PURCHASER INFORMATION
-                  </div>
-
-                  <strong className="text-base">
-                    {getContactName(
-                      selectedOrder.contact
-                    )}
-                  </strong>
-
-                  <p className="text-sm text-muted mt-1">
-                    {getContactPerson(
-                      selectedOrder.contact
-                    )}
-                  </p>
-
-                  <div className="ord-meta-row">
-                    <span>Phone</span>
-                    <strong>
-                      {selectedOrder.contact?.phone ||
-                        "—"}
-                    </strong>
-                  </div>
-
-                  <div className="ord-meta-row">
-                    <span>Email</span>
-                    <strong>
-                      {selectedOrder.contact?.email ||
-                        "—"}
-                    </strong>
-                  </div>
-
-                  {selectedOrder.enquiry && (
-                    <div className="ord-meta-row">
-                      <span>Enquiry</span>
-                      <strong>
-                        {selectedOrder.enquiry
-                          ?.enquiryNumber ||
-                          "—"}
-                      </strong>
-                    </div>
-                  )}
-                </div>
-
-                {/* CONSIGNMENT */}
-                <div className="ord-section">
-                  <div className="ord-section-title">
-                    CONSIGNMENT SPECIFICATION
-                  </div>
-
-                  {selectedOrder.items?.map(
-                    (item, index) => (
-                      <div
-                        className="ord-spec-grid"
-                        key={
-                          item._id || index
-                        }
+                      <button
+                        type="button"
+                        onClick={openAddModal}
+                        className="mt-4 inline-flex items-center gap-2 rounded-lg bg-[#002244] px-3.5 py-2 text-xs font-semibold text-white transition hover:bg-[#00335f]"
                       >
-                        <div>
-                          <span>
-                            Description & Grade
-                          </span>
+                        <Plus size={14} />
+                        New Order
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                orders.map((order) => (
+                  <tr
+                    key={order._id}
+                    onClick={() => openViewOrder(order)}
+                    className="group cursor-pointer border-b border-slate-100 transition hover:bg-slate-50/70"
+                  >
+                    <td className="px-5 py-4">
+                      <span className="font-mono text-xs font-bold text-[#002244]">
+                        {order.orderNumber}
+                      </span>
 
-                          <strong>
-                            {getProductName(
-                              item.product
-                            )}
-                          </strong>
+                      <div className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-400">
+                        <CalendarDays size={11} />
+                        {formatDate(order.orderDate)}
+                      </div>
+                    </td>
+
+                    <td className="px-4 py-4">
+                      <div className="flex items-center gap-2.5">
+                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+                          <UserRound size={14} />
                         </div>
 
-                        <div>
-                          <span>Quantity</span>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-slate-800">
+                            {getContactName(order.contact)}
+                          </p>
 
-                          <strong>
-                            {Number(
-                              item.quantity || 0
-                            ).toLocaleString(
+                          <p className="mt-0.5 truncate text-xs text-slate-400">
+                            {getContactPerson(order.contact)}
+                          </p>
+                        </div>
+                      </div>
+                    </td>
+
+                    <td className="px-4 py-4">
+                      <p className="max-w-[240px] truncate text-sm font-medium text-slate-700">
+                        {getItemsLabel(order)}
+                      </p>
+
+                      <p className="mt-1 max-w-[240px] truncate text-xs text-slate-400">
+                        {getItemsQuantity(order)}
+                      </p>
+                    </td>
+
+                    <td className="px-4 py-4">
+                      <p className="text-sm font-semibold text-slate-800">
+                        {formatCurrency(order.grandTotal)}
+                      </p>
+
+                      <p className="mt-1 text-[11px] text-slate-400">
+                        {order.amountPaid
+                          ? `${formatCurrency(order.amountPaid)} paid`
+                          : "No payment"}
+                      </p>
+                    </td>
+
+                    <td className="px-4 py-4">
+                      <PaymentBadge status={order.paymentStatus} />
+                    </td>
+
+                    <td className="px-5 py-4">
+                      <StatusBadge status={order.status} />
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* PAGINATION */}
+
+        <div className="flex flex-col gap-3 border-t border-slate-100 px-5 py-3.5 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-slate-400">
+            Showing{" "}
+            <span className="font-semibold text-slate-600">
+              {totalOrders === 0
+                ? 0
+                : (page - 1) * ORDERS_PER_PAGE + 1}
+            </span>{" "}
+            to{" "}
+            <span className="font-semibold text-slate-600">
+              {Math.min(page * ORDERS_PER_PAGE, totalOrders)}
+            </span>{" "}
+            of{" "}
+            <span className="font-semibold text-slate-600">
+              {totalOrders}
+            </span>{" "}
+            purchase orders
+          </p>
+
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              disabled={page <= 1 || loading}
+              onClick={() => setPage((current) => current - 1)}
+              className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-500 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <ChevronLeft size={14} />
+              Previous
+            </button>
+
+            <div className="flex h-8 min-w-8 items-center justify-center rounded-lg bg-[#002244] px-2 text-xs font-semibold text-white">
+              {page}
+            </div>
+
+            <button
+              type="button"
+              disabled={page >= pages || loading}
+              onClick={() => setPage((current) => current + 1)}
+              className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-500 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Next
+              <ChevronRight size={14} />
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* =====================================================
+          ORDER DETAILS MODAL
+      ===================================================== */}
+
+      {viewOrder && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
+          onClick={closeViewOrder}
+        >
+          <div
+            className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* DETAIL HEADER */}
+
+            <div className="flex items-start justify-between gap-4 border-b border-slate-100 bg-slate-50/60 px-6 py-5">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-xs font-bold text-[#002244]">
+                    {viewOrder.orderNumber}
+                  </span>
+
+                  <StatusBadge status={viewOrder.status} />
+
+                  <PaymentBadge status={viewOrder.paymentStatus} />
+                </div>
+
+                <h2 className="mt-3 text-lg font-bold tracking-tight text-slate-900">
+                  Order Details
+                </h2>
+
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  Created {formatDate(viewOrder.orderDate)}
+                  <span className="mx-1.5 text-slate-300">•</span>
+                  Expected{" "}
+                  {formatDate(viewOrder.expectedDeliveryDate)}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeViewOrder}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+                aria-label="Close order details"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* DETAIL BODY */}
+
+            <div className="relative overflow-y-auto px-6 py-6">
+              {detailLoading && (
+                <div className="absolute right-5 top-5 z-10 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] font-medium text-slate-500 shadow-sm">
+                  <RefreshCw size={13} className="animate-spin" />
+                  Loading details...
+                </div>
+              )}
+
+              <div className="space-y-6">
+                {/* PURCHASER */}
+
+                <div>
+                  <SectionHeading
+                    icon={UserRound}
+                    title="Purchaser Information"
+                  />
+
+                  <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-4">
+                    <p className="text-sm font-bold text-slate-800">
+                      {getContactName(viewOrder.contact)}
+                    </p>
+
+                    <p className="mt-1 text-xs text-slate-500">
+                      {getContactPerson(viewOrder.contact)}
+                    </p>
+
+                    <div className="mt-3 grid grid-cols-1 gap-2.5 border-t border-slate-200/70 pt-3 sm:grid-cols-2">
+                      <DetailRow
+                        label="Phone"
+                        value={viewOrder.contact?.phone}
+                      />
+
+                      <DetailRow
+                        label="Email"
+                        value={viewOrder.contact?.email}
+                      />
+
+                      {viewOrder.enquiry && (
+                        <DetailRow
+                          label="Enquiry"
+                          value={
+                            viewOrder.enquiry?.enquiryNumber ||
+                            viewOrder.enquiry
+                          }
+                        />
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <SectionHeading
+                    icon={Package}
+                    title="Consignment Specification"
+                  />
+
+                  <div className="space-y-3">
+                    {viewOrder.items?.map((item, index) => (
+                      <div
+                        key={item._id || index}
+                        className="rounded-xl border border-slate-100 bg-white p-4 shadow-sm"
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-800">
+                              {getProductName(item.product)}
+                            </p>
+
+                            <p className="mt-1 text-xs text-slate-400">
+                              Item {index + 1}
+                            </p>
+                          </div>
+
+                          <span className="shrink-0 rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-semibold text-slate-600">
+                            {Number(item.quantity || 0).toLocaleString(
                               "en-IN"
                             )}{" "}
                             {item.unit || "kg"}
-                          </strong>
+                          </span>
                         </div>
 
-                        <div>
-                          <span>
-                            Rate / Unit
-                          </span>
+                        <div className="mt-4 grid grid-cols-2 gap-x-5 gap-y-4 border-t border-slate-100 pt-3.5 sm:grid-cols-3">
+                          <DetailMetric
+                            label="Rate / Unit"
+                            value={formatCurrency(item.rate)}
+                          />
 
-                          <strong>
-                            {formatCurrency(
-                              item.rate
-                            )}
-                          </strong>
-                        </div>
+                          <DetailMetric
+                            label="Item Discount"
+                            value={formatCurrency(item.discount)}
+                          />
 
-                        <div>
-                          <span>
-                            Item Discount
-                          </span>
-
-                          <strong>
-                            {formatCurrency(
-                              item.discount
-                            )}
-                          </strong>
-                        </div>
-
-                        <div>
-                          <span>
-                            Line Amount
-                          </span>
-
-                          <strong>
-                            {formatCurrency(
-                              item.amount
-                            )}
-                          </strong>
+                          <DetailMetric
+                            label="Line Amount"
+                            value={formatCurrency(item.amount)}
+                            strong
+                          />
                         </div>
                       </div>
-                    )
-                  )}
-
-                  <div className="ord-spec-grid mt-3">
-                    <div>
-                      <span>Subtotal</span>
-
-                      <strong>
-                        {formatCurrency(
-                          selectedOrder.subTotal
-                        )}
-                      </strong>
-                    </div>
-
-                    <div>
-                      <span>
-                        Overall Discount
-                      </span>
-
-                      <strong>
-                        {formatCurrency(
-                          selectedOrder.discount
-                        )}
-                      </strong>
-                    </div>
-
-                    <div>
-                      <span>
-                        Tax (
-                        {selectedOrder.taxPercent ||
-                          0}
-                        %)
-                      </span>
-
-                      <strong>
-                        {formatCurrency(
-                          selectedOrder.taxAmount
-                        )}
-                      </strong>
-                    </div>
-
-                    <div>
-                      <span>
-                        Grand Total
-                      </span>
-
-                      <strong className="text-base">
-                        {formatCurrency(
-                          selectedOrder.grandTotal
-                        )}
-                      </strong>
-                    </div>
-                  </div>
-                </div>
-
-                {/* FINANCIAL */}
-                <div className="ord-section">
-                  <div className="ord-section-title">
-                    FINANCIAL / LEDGER STATUS
+                    ))}
                   </div>
 
-                  <div className="ord-finance-row">
-                    <div>
-                      <span>Order Value</span>
+                  <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50/70 p-4">
+                    <div className="space-y-2.5">
+                      <DetailRow
+                        label="Subtotal"
+                        value={formatCurrency(viewOrder.subTotal)}
+                      />
 
-                      <strong>
-                        {formatCurrency(
-                          selectedOrder.grandTotal
-                        )}
-                      </strong>
-                    </div>
+                      <DetailRow
+                        label="Overall Discount"
+                        value={formatCurrency(viewOrder.discount)}
+                      />
 
-                    <div>
-                      <span>
-                        Payment Status
-                      </span>
+                      <DetailRow
+                        label={`Tax (${viewOrder.taxPercent || 0}%)`}
+                        value={formatCurrency(viewOrder.taxAmount)}
+                      />
 
-                      <span
-                        className={`status ${getPaymentClass(
-                          selectedOrder.paymentStatus
-                        )}`}
-                      >
-                        {selectedOrder.paymentStatus ||
-                          "Pending"}
-                      </span>
-                    </div>
-                  </div>
+                      <div className="flex items-center justify-between border-t border-slate-200 pt-3">
+                        <span className="text-sm font-bold text-slate-700">
+                          Grand Total
+                        </span>
 
-                  <div className="ord-meta-row">
-                    <span>Amount Paid</span>
-
-                    <strong>
-                      {formatCurrency(
-                        selectedOrder.amountPaid
-                      )}
-                    </strong>
-                  </div>
-                </div>
-
-                {/* LOGISTICS */}
-                <div className="ord-section">
-                  <div className="ord-section-title">
-                    LOGISTICS & SITE ADDRESS
-                  </div>
-
-                  <div className="ord-address">
-                    <MapPin size={14} />
-
-                    <span>
-                      {selectedOrder.shippingAddress ||
-                        "No shipping address provided."}
-                    </span>
-                  </div>
-
-                  <div className="ord-meta-row">
-                    <span>
-                      Billing Address
-                    </span>
-
-                    <strong>
-                      {selectedOrder.billingAddress ||
-                        "Same / not provided"}
-                    </strong>
-                  </div>
-
-                  <div className="ord-meta-row">
-                    <span>
-                      Expected Delivery
-                    </span>
-
-                    <strong>
-                      {formatDate(
-                        selectedOrder.expectedDeliveryDate
-                      )}
-                    </strong>
-                  </div>
-
-                  {selectedOrder.dispatchedDate && (
-                    <div className="ord-meta-row">
-                      <span>
-                        Dispatched
-                      </span>
-
-                      <strong>
-                        {formatDate(
-                          selectedOrder.dispatchedDate
-                        )}
-                      </strong>
-                    </div>
-                  )}
-
-                  {selectedOrder.deliveredDate && (
-                    <div className="ord-meta-row">
-                      <span>
-                        Delivered
-                      </span>
-
-                      <strong>
-                        {formatDate(
-                          selectedOrder.deliveredDate
-                        )}
-                      </strong>
-                    </div>
-                  )}
-                </div>
-
-                {/* NOTES */}
-                {selectedOrder.notes && (
-                  <div className="ord-section">
-                    <div className="ord-section-title">
-                      NOTES
-                    </div>
-
-                    <p className="text-sm">
-                      {selectedOrder.notes}
-                    </p>
-                  </div>
-                )}
-
-                {/* STATUS CONTROL */}
-                <div className="ord-section">
-                  <div className="ord-section-title">
-                    ORDER STATUS
-                  </div>
-
-                  <select
-                    className="select"
-                    value={
-                      selectedOrder.status || "Draft"
-                    }
-                    onChange={(e) =>
-                      handleStatusChange(
-                        selectedOrder,
-                        e.target.value
-                      )
-                    }
-                  >
-                    {ORDER_STATUSES.map(
-                      (status) => (
-                        <option
-                          key={status}
-                          value={status}
-                        >
-                          {status}
-                        </option>
-                      )
-                    )}
-                  </select>
-                </div>
-
-                {/* AUDIT */}
-                <div className="ord-section">
-                  <div className="ord-section-title">
-                    AUDIT & DISPATCH TIMELINE
-                  </div>
-
-                  <div className="ord-timeline">
-                    <div className="ord-timeline-item">
-                      <div className="ord-timeline-dot" />
-
-                      <div>
-                        <strong>
-                          Order created
-                        </strong>
-
-                        <p>
-                          Order record created in
-                          the system.
-                        </p>
-
-                        <span className="text-xs text-muted">
-                          {formatDate(
-                            selectedOrder.createdAt ||
-                              selectedOrder.orderDate
-                          )}
+                        <span className="text-base font-bold text-[#002244]">
+                          {formatCurrency(viewOrder.grandTotal)}
                         </span>
                       </div>
                     </div>
+                  </div>
+                </div>
 
-                    {selectedOrder.dispatchedDate && (
-                      <div className="ord-timeline-item">
-                        <div className="ord-timeline-dot active" />
+                <div>
+                  <SectionHeading
+                    icon={CreditCard}
+                    title="Financial / Ledger"
+                    iconWrapper="bg-emerald-50 text-emerald-600"
+                  />
 
-                        <div>
-                          <strong>
-                            Order dispatched
-                          </strong>
+                  <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-4">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                      <DetailMetric
+                        label="Order Value"
+                        value={formatCurrency(viewOrder.grandTotal)}
+                        strong
+                      />
 
-                          <p>
-                            Dispatch date recorded
-                            against this order.
-                          </p>
+                      <DetailMetric
+                        label="Amount Paid"
+                        value={formatCurrency(viewOrder.amountPaid)}
+                        strong
+                      />
 
-                          <span className="text-xs text-muted">
-                            {formatDate(
-                              selectedOrder.dispatchedDate
-                            )}
-                          </span>
-                        </div>
+                      <DetailMetric
+                        label="Balance Due"
+                        value={formatCurrency(
+                          Math.max(
+                            0,
+                            Number(viewOrder.grandTotal || 0) -
+                              Number(viewOrder.amountPaid || 0)
+                          )
+                        )}
+                        strong
+                      />
+                    </div>
+
+                    <div className="mt-4 border-t border-slate-200/70 pt-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-[11px] font-medium text-slate-400">
+                          Payment Status
+                        </span>
+
+                        <PaymentBadge
+                          status={viewOrder.paymentStatus}
+                        />
                       </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <SectionHeading
+                    icon={MapPin}
+                    title="Logistics & Site Address"
+                    iconWrapper="bg-sky-50 text-sky-600"
+                  />
+
+                  <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-4">
+                    <div className="flex items-start gap-2.5">
+                      <MapPin
+                        size={15}
+                        className="mt-0.5 shrink-0 text-slate-400"
+                      />
+
+                      <div className="min-w-0">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                          Shipping Address
+                        </p>
+
+                        <p className="mt-1 text-xs leading-5 text-slate-600">
+                          {viewOrder.shippingAddress ||
+                            "No shipping address provided."}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-1 gap-3 border-t border-slate-200/70 pt-3 sm:grid-cols-2">
+                      <DetailMetric
+                        label="Billing Address"
+                        value={
+                          viewOrder.billingAddress ||
+                          "Same / not provided"
+                        }
+                      />
+
+                      <DetailMetric
+                        label="Expected Delivery"
+                        value={formatDate(
+                          viewOrder.expectedDeliveryDate
+                        )}
+                      />
+
+                      {viewOrder.dispatchedDate && (
+                        <DetailMetric
+                          label="Dispatched"
+                          value={formatDate(
+                            viewOrder.dispatchedDate
+                          )}
+                        />
+                      )}
+
+                      {viewOrder.deliveredDate && (
+                        <DetailMetric
+                          label="Delivered"
+                          value={formatDate(
+                            viewOrder.deliveredDate
+                          )}
+                        />
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* NOTES */}
+
+                {viewOrder.notes && (
+                  <div>
+                    <SectionHeading
+                      icon={FileText}
+                      title="Notes"
+                    />
+
+                    <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-4">
+                      <p className="whitespace-pre-wrap text-xs leading-5 text-slate-600">
+                        {viewOrder.notes}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* STATUS */}
+
+                <div>
+                  <SectionHeading
+                    icon={Clock3}
+                    title="Order Status"
+                  />
+
+                  <select
+                    value={viewOrder.status || "Draft"}
+                    onChange={(e) =>
+                      handleStatusChange(
+                        viewOrder,
+                        e.target.value
+                      )
+                    }
+                    className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-100"
+                  >
+                    {ORDER_STATUSES.map((status) => (
+                      <option key={status} value={status}>
+                        {status}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* TIMELINE */}
+
+                <div>
+                  <SectionHeading
+                    icon={Clock3}
+                    title="Audit & Dispatch Timeline"
+                  />
+
+                  <div className="relative space-y-5 pl-6">
+                    <span className="absolute bottom-2 left-[7px] top-2 w-px bg-slate-200" />
+
+                    <TimelineItem
+                      title="Order created"
+                      description="Order record created in the system."
+                      date={formatDate(
+                        viewOrder.createdAt ||
+                          viewOrder.orderDate
+                      )}
+                    />
+
+                    {viewOrder.dispatchedDate && (
+                      <TimelineItem
+                        title="Order dispatched"
+                        description="Dispatch date recorded against this order."
+                        date={formatDate(
+                          viewOrder.dispatchedDate
+                        )}
+                        active
+                      />
                     )}
 
-                    {selectedOrder.deliveredDate && (
-                      <div className="ord-timeline-item">
-                        <div className="ord-timeline-dot active" />
-
-                        <div>
-                          <strong>
-                            Order delivered
-                          </strong>
-
-                          <p>
-                            Delivery date recorded
-                            against this order.
-                          </p>
-
-                          <span className="text-xs text-muted">
-                            {formatDate(
-                              selectedOrder.deliveredDate
-                            )}
-                          </span>
-                        </div>
-                      </div>
+                    {viewOrder.deliveredDate && (
+                      <TimelineItem
+                        title="Order delivered"
+                        description="Delivery date recorded against this order."
+                        date={formatDate(
+                          viewOrder.deliveredDate
+                        )}
+                        active
+                      />
                     )}
                   </div>
                 </div>
               </div>
+            </div>
 
-              {/* FOOTER */}
-              <div className="ord-detail-footer">
+            {/* DETAIL FOOTER */}
+
+            <div className="border-t border-slate-100 bg-slate-50/60 px-6 py-4">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 <button
-                  className="btn btn-secondary btn-sm"
                   type="button"
-                  onClick={() =>
-                    window.print()
-                  }
+                  onClick={() => window.print()}
+                  className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
                 >
                   <FileText size={13} />
-                  Print Packing Slip
+                  Print
                 </button>
 
                 <button
-                  className="btn btn-secondary btn-sm"
                   type="button"
-                  onClick={() =>
-                    openEditModal(
-                      selectedOrder
-                    )
-                  }
+                  onClick={() => openEditModal(viewOrder)}
                   disabled={!canEdit}
+                  className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  Edit Order
+                  <Pencil size={13} />
+                  Edit
                 </button>
 
                 <button
-                  className="btn btn-primary btn-sm"
                   type="button"
                   onClick={() =>
                     handleStatusChange(
-                      selectedOrder,
+                      viewOrder,
                       "Ready for Dispatch"
                     )
                   }
                   disabled={
-                    selectedOrder.status ===
-                      "Ready for Dispatch" ||
-                    selectedOrder.status ===
-                      "Dispatched" ||
-                    selectedOrder.status ===
-                      "Delivered" ||
-                    selectedOrder.status ===
-                      "Cancelled"
+                    viewOrder.status === "Ready for Dispatch" ||
+                    viewOrder.status === "Dispatched" ||
+                    viewOrder.status === "Delivered" ||
+                    viewOrder.status === "Cancelled"
                   }
+                  className="col-span-2 inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-[#002244] px-3 text-xs font-semibold text-white transition hover:bg-[#00335f] disabled:cursor-not-allowed disabled:bg-slate-300 sm:col-span-2"
                 >
                   <Truck size={13} />
                   Ready for Dispatch
                 </button>
 
-                {(selectedOrder.status ===
-                  "Draft" ||
-                  selectedOrder.status ===
-                    "Cancelled") && (
+                {(viewOrder.status === "Draft" ||
+                  viewOrder.status === "Cancelled") && (
                   <button
-                    className="btn btn-secondary btn-sm"
                     type="button"
-                    onClick={() =>
-                      handleDelete(
-                        selectedOrder
-                      )
-                    }
+                    onClick={() => handleDelete(viewOrder)}
                     disabled={deleting}
+                    className="col-span-2 inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 text-xs font-semibold text-rose-600 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50 sm:col-span-4"
                   >
-                    Delete
+                    <Trash2 size={13} />
+                    {deleting
+                      ? "Deleting..."
+                      : "Delete Order"}
                   </button>
                 )}
               </div>
-            </>
-          )}
-        </aside>
-      </div>
+            </div>
+          </div>
+        </div>
+      )}
 
-      {/* CREATE / EDIT MODAL */}
       {modalOpen && (
         <div
-          className="modal-overlay"
+          className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
           onClick={closeModal}
         >
           <div
-            className="modal"
-            onClick={(e) =>
-              e.stopPropagation()
-            }
-            style={{ maxWidth: 680 }}
+            className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
           >
-            <div className="modal-header">
+            {/* MODAL HEADER */}
+
+            <div className="flex items-start justify-between border-b border-slate-100 px-6 py-5">
               <div>
-                <h3>
+                <div className="mb-2 flex items-center gap-2">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+                    {editingOrder ? (
+                      <Pencil size={15} />
+                    ) : (
+                      <Plus size={16} />
+                    )}
+                  </div>
+
+                  <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                    {editingOrder
+                      ? "Order Management"
+                      : "Commercial Operations"}
+                  </span>
+                </div>
+
+                <h3 className="text-lg font-bold tracking-tight text-slate-900">
                   {editingOrder
                     ? "Edit Order"
                     : "Create New Order"}
                 </h3>
 
-                <p className="text-muted text-sm">
+                <p className="mt-1 text-xs text-slate-500">
                   {editingOrder
                     ? `Update ${editingOrder.orderNumber}`
                     : "Create a new customer purchase order."}
@@ -1607,118 +1593,119 @@ function Orders() {
               </div>
 
               <button
-                className="icon-button"
-                onClick={closeModal}
                 type="button"
+                onClick={closeModal}
                 disabled={saving}
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="Close modal"
               >
                 <X size={18} />
               </button>
             </div>
 
-            <div className="modal-body">
+            {/* MODAL BODY */}
+
+            <div className="overflow-y-auto px-6 py-6">
               {!editingOrder ? (
                 <>
-                  <div className="grid grid-2 gap-4">
-                    {/* CONTACT */}
-                    <div className="form-group">
-                      <label className="form-label">
-                        Customer / Contact *
-                      </label>
-
+                  <div className="grid grid-cols-1 gap-x-5 gap-y-5 md:grid-cols-2">
+                    <FormField label="Customer / Contact" required>
                       <select
-                        className="select"
+                        className={inputClass}
                         name="contact"
                         value={form.contact}
                         onChange={handleChange}
                       >
-                        <option value="">
-                          Select contact
-                        </option>
+                        <option value="">Select contact</option>
 
-                        {contacts.map(
-                          (contact) => (
-                            <option
-                              key={contact._id}
-                              value={contact._id}
-                            >
-                              {getContactName(
-                                contact
-                              )}
-                              {contact.name &&
-                              contact.company
-                                ? ` — ${contact.name}`
-                                : ""}
-                            </option>
-                          )
-                        )}
+                        {contacts.map((contact) => (
+                          <option
+                            key={contact._id}
+                            value={contact._id}
+                          >
+                            {getContactName(contact)}
+                            {contact.name && contact.company
+                              ? ` — ${contact.name}`
+                              : ""}
+                          </option>
+                        ))}
                       </select>
-                    </div>
+                    </FormField>
 
-                    {/* PRODUCT */}
-                    <div className="form-group">
-                      <label className="form-label">
-                        Product *
-                      </label>
-
+                    <FormField label="Enquiry">
                       <select
-                        className="select"
+                        className={inputClass}
+                        name="enquiry"
+                        value={form.enquiry}
+                        onChange={handleChange}
+                      >
+                        <option value="">Select enquiry</option>
+
+                        {contacts
+                          .filter((contact) => contact.enquiry)
+                          .map((contact) => (
+                            <option
+                              key={
+                                contact.enquiry?._id ||
+                                contact.enquiry
+                              }
+                              value={
+                                contact.enquiry?._id ||
+                                contact.enquiry
+                              }
+                            >
+                              {contact.enquiry?.enquiryNumber ||
+                                "Linked enquiry"}
+                            </option>
+                          ))}
+                      </select>
+                    </FormField>
+
+                    <FormField label="Product" required>
+                      <select
+                        className={inputClass}
                         name="product"
                         value={form.product}
                         onChange={(e) => {
-                          const productId =
-                            e.target.value;
+                          const productId = e.target.value;
 
-                          const product =
-                            products.find(
-                              (item) =>
-                                item._id ===
-                                productId
-                            );
-
-                          setForm(
-                            (current) => ({
-                              ...current,
-                              product:
-                                productId,
-                              rate:
-                                product?.sellingPrice ??
-                                "",
-                              unit:
-                                product?.unit ||
-                                "kg",
-                            })
+                          const product = products.find(
+                            (item) =>
+                              item._id === productId
                           );
+
+                          setForm((current) => ({
+                            ...current,
+                            product: productId,
+                            rate:
+                              product?.sellingPrice ??
+                              product?.price ??
+                              "",
+                            unit: product?.unit || "kg",
+                          }));
                         }}
                       >
-                        <option value="">
-                          Select product
-                        </option>
+                        <option value="">Select product</option>
 
-                        {products.map(
-                          (product) => (
-                            <option
-                              key={product._id}
-                              value={product._id}
-                            >
-                              {product.name}
-                              {product.code
-                                ? ` (${product.code})`
-                                : ""}
-                            </option>
-                          )
-                        )}
+                        {products.map((product) => (
+                          <option
+                            key={product._id}
+                            value={product._id}
+                          >
+                            {product.name}
+                            {product.code
+                              ? ` (${product.code})`
+                              : product.productCode
+                              ? ` (${product.productCode})`
+                              : ""}
+                          </option>
+                        ))}
                       </select>
-                    </div>
+                    </FormField>
 
-                    {/* QUANTITY */}
-                    <div className="form-group">
-                      <label className="form-label">
-                        Quantity *
-                      </label>
-
+                    <FormField label="Quantity" required>
                       <input
-                        className="input"
+                        className={inputClass}
                         type="number"
                         min="0.01"
                         step="0.01"
@@ -1727,69 +1714,59 @@ function Orders() {
                         onChange={handleChange}
                         placeholder="0"
                       />
-                    </div>
+                    </FormField>
 
-                    {/* UNIT */}
-                    <div className="form-group">
-                      <label className="form-label">
-                        Unit
-                      </label>
-
-                      <input
-                        className="input"
+                    <FormField label="Unit">
+                      <select
+                        className={inputClass}
                         name="unit"
                         value={form.unit}
                         onChange={handleChange}
-                        placeholder="kg"
-                      />
-                    </div>
+                      >
+                        <option value="kg">Kg</option>
+                        <option value="ton">Ton</option>
+                        <option value="meter">Meter</option>
+                        <option value="piece">Piece</option>
+                        <option value="coil">Coil</option>
+                      </select>
+                    </FormField>
 
-                    {/* RATE */}
-                    <div className="form-group">
-                      <label className="form-label">
-                        Rate / Unit *
-                      </label>
+                    <FormField label="Rate / Unit" required>
+                      <div className="relative">
+                        <IndianRupee
+                          size={14}
+                          className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                        />
 
+                        <input
+                          className={`${inputClass} pl-9`}
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          name="rate"
+                          value={form.rate}
+                          onChange={handleChange}
+                          placeholder="0.00"
+                        />
+                      </div>
+                    </FormField>
+
+                    <FormField label="Item Discount">
                       <input
-                        className="input"
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        name="rate"
-                        value={form.rate}
-                        onChange={handleChange}
-                        placeholder="0.00"
-                      />
-                    </div>
-
-                    {/* ITEM DISCOUNT */}
-                    <div className="form-group">
-                      <label className="form-label">
-                        Item Discount
-                      </label>
-
-                      <input
-                        className="input"
+                        className={inputClass}
                         type="number"
                         min="0"
                         step="0.01"
                         name="itemDiscount"
-                        value={
-                          form.itemDiscount
-                        }
+                        value={form.itemDiscount}
                         onChange={handleChange}
                         placeholder="0"
                       />
-                    </div>
+                    </FormField>
 
-                    {/* OVERALL DISCOUNT */}
-                    <div className="form-group">
-                      <label className="form-label">
-                        Order Discount
-                      </label>
-
+                    <FormField label="Order Discount">
                       <input
-                        className="input"
+                        className={inputClass}
                         type="number"
                         min="0"
                         step="0.01"
@@ -1798,146 +1775,167 @@ function Orders() {
                         onChange={handleChange}
                         placeholder="0"
                       />
-                    </div>
+                    </FormField>
 
-                    {/* TAX */}
-                    <div className="form-group">
-                      <label className="form-label">
-                        Tax %
-                      </label>
-
+                    <FormField label="Tax %">
                       <input
-                        className="input"
+                        className={inputClass}
                         type="number"
                         min="0"
                         step="0.01"
                         name="taxPercent"
-                        value={
-                          form.taxPercent
-                        }
+                        value={form.taxPercent}
                         onChange={handleChange}
                       />
-                    </div>
+                    </FormField>
 
-                    {/* DELIVERY */}
-                    <div className="form-group">
-                      <label className="form-label">
-                        Expected Delivery
-                      </label>
-
+                    <FormField label="Expected Delivery">
                       <input
-                        className="input"
+                        className={inputClass}
                         type="date"
                         name="expectedDeliveryDate"
-                        value={
-                          form.expectedDeliveryDate
-                        }
+                        value={form.expectedDeliveryDate}
                         onChange={handleChange}
                       />
-                    </div>
+                    </FormField>
+
+                    <FormField label="Shipping Address" full>
+                      <textarea
+                        className={textareaClass}
+                        name="shippingAddress"
+                        value={form.shippingAddress}
+                        onChange={handleChange}
+                        placeholder="Enter delivery / site address..."
+                        rows="3"
+                      />
+                    </FormField>
+
+                    <FormField label="Billing Address" full>
+                      <textarea
+                        className={textareaClass}
+                        name="billingAddress"
+                        value={form.billingAddress}
+                        onChange={handleChange}
+                        placeholder="Enter billing address..."
+                        rows="3"
+                      />
+                    </FormField>
+
+                    <FormField label="Notes" full>
+                      <textarea
+                        className={textareaClass}
+                        name="notes"
+                        value={form.notes}
+                        onChange={handleChange}
+                        placeholder="Additional order notes..."
+                        rows="3"
+                      />
+                    </FormField>
                   </div>
 
-                  {/* CALCULATED PREVIEW */}
-                  <div className="ord-section mt-4">
-                    <div className="ord-section-title">
-                      ORDER PREVIEW
+                  {/* ORDER PREVIEW */}
+
+                  <div className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-slate-50/70">
+                    <div className="border-b border-slate-200 px-4 py-3">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        Order Preview
+                      </p>
                     </div>
 
-                    <div className="ord-finance-row">
-                      <div>
-                        <span>
-                          Estimated Line Amount
-                        </span>
+                    <div className="grid grid-cols-2 gap-4 p-4 sm:grid-cols-4">
+                      <PreviewMetric
+                        label="Line Amount"
+                        value={formatCurrency(
+                          calculatedItemAmount
+                        )}
+                      />
 
-                        <strong>
-                          {formatCurrency(
-                            calculatedItemAmount
-                          )}
-                        </strong>
-                      </div>
+                      <PreviewMetric
+                        label="Order Discount"
+                        value={formatCurrency(form.discount)}
+                      />
 
-                      <div>
-                        <span>
-                          Tax
-                        </span>
+                      <PreviewMetric
+                        label={`Tax (${form.taxPercent || 0}%)`}
+                        value={formatCurrency(estimatedTax)}
+                      />
 
-                        <strong>
-                          {form.taxPercent || 0}%
-                        </strong>
-                      </div>
+                      <PreviewMetric
+                        label="Estimated Total"
+                        value={formatCurrency(
+                          estimatedGrandTotal
+                        )}
+                        highlight
+                      />
                     </div>
 
-                    <p className="text-xs text-muted mt-2">
-                      Final subtotal, tax amount and
-                      grand total are calculated by the
-                      backend when the order is created.
-                    </p>
+                    <div className="border-t border-slate-200 px-4 py-3">
+                      <p className="text-[11px] leading-5 text-slate-500">
+                        Final subtotal, tax amount and grand total are
+                        calculated by the backend when the order is created.
+                      </p>
+                    </div>
                   </div>
                 </>
               ) : (
                 <>
-                  <div className="ord-section">
-                    <div className="ord-section-title">
-                      ORDER INFORMATION
+                  {/* EDIT ORDER INFORMATION */}
+
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+                    <div className="mb-3 flex items-center gap-2">
+                      <FileText
+                        size={15}
+                        className="text-slate-500"
+                      />
+
+                      <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                        Order Information
+                      </h4>
                     </div>
 
-                    <div className="ord-meta-row">
-                      <span>Order Number</span>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      <DetailMetric
+                        label="Order Number"
+                        value={editingOrder.orderNumber}
+                      />
 
-                      <strong className="font-mono">
-                        {editingOrder.orderNumber}
-                      </strong>
-                    </div>
-
-                    <div className="ord-meta-row">
-                      <span>Customer</span>
-
-                      <strong>
-                        {getContactName(
+                      <DetailMetric
+                        label="Customer"
+                        value={getContactName(
                           editingOrder.contact
                         )}
-                      </strong>
-                    </div>
+                      />
 
-                    <div className="ord-meta-row">
-                      <span>Current Status</span>
+                      <div>
+                        <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                          Current Status
+                        </span>
 
-                      <span
-                        className={`status ${getStatusClass(
-                          editingOrder.status
-                        )}`}
-                      >
-                        {editingOrder.status}
-                      </span>
+                        <div className="mt-1.5">
+                          <StatusBadge
+                            status={editingOrder.status}
+                          />
+                        </div>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="grid grid-2 gap-4 mt-4">
-                    {/* DELIVERY */}
-                    <div className="form-group">
-                      <label className="form-label">
-                        Expected Delivery
-                      </label>
+                  {/* EDIT FORM */}
 
+                  <div className="mt-6 grid grid-cols-1 gap-x-5 gap-y-5 md:grid-cols-2">
+                    <FormField label="Expected Delivery">
                       <input
-                        className="input"
+                        className={inputClass}
                         type="date"
                         name="expectedDeliveryDate"
-                        value={
-                          form.expectedDeliveryDate
-                        }
+                        value={form.expectedDeliveryDate}
                         onChange={handleChange}
                       />
-                    </div>
+                    </FormField>
 
-                    {/* DISCOUNT */}
-                    <div className="form-group">
-                      <label className="form-label">
-                        Order Discount
-                      </label>
-
+                    <FormField label="Order Discount">
                       <input
-                        className="input"
+                        className={inputClass}
                         type="number"
                         min="0"
                         step="0.01"
@@ -1945,109 +1943,93 @@ function Orders() {
                         value={form.discount}
                         onChange={handleChange}
                       />
-                    </div>
+                    </FormField>
 
-                    {/* TAX */}
-                    <div className="form-group">
-                      <label className="form-label">
-                        Tax %
-                      </label>
-
+                    <FormField label="Tax %">
                       <input
-                        className="input"
+                        className={inputClass}
                         type="number"
                         min="0"
                         step="0.01"
                         name="taxPercent"
-                        value={
-                          form.taxPercent
-                        }
+                        value={form.taxPercent}
                         onChange={handleChange}
                       />
-                    </div>
+                    </FormField>
 
-                    {/* SHIPPING */}
-                    <div className="form-group">
-                      <label className="form-label">
-                        Shipping Address
-                      </label>
-
+                    <FormField label="Shipping Address">
                       <textarea
-                        className="input"
+                        className={textareaClass}
                         name="shippingAddress"
-                        value={
-                          form.shippingAddress
-                        }
+                        value={form.shippingAddress}
                         onChange={handleChange}
                         rows="3"
                       />
-                    </div>
+                    </FormField>
 
-                    {/* BILLING */}
-                    <div className="form-group">
-                      <label className="form-label">
-                        Billing Address
-                      </label>
-
+                    <FormField label="Billing Address">
                       <textarea
-                        className="input"
+                        className={textareaClass}
                         name="billingAddress"
-                        value={
-                          form.billingAddress
-                        }
+                        value={form.billingAddress}
                         onChange={handleChange}
                         rows="3"
                       />
-                    </div>
+                    </FormField>
 
-                    {/* NOTES */}
-                    <div className="form-group">
-                      <label className="form-label">
-                        Notes
-                      </label>
-
+                    <FormField label="Notes" full>
                       <textarea
-                        className="input"
+                        className={`${textareaClass} min-h-[90px]`}
                         name="notes"
                         value={form.notes}
                         onChange={handleChange}
                         rows="3"
                         placeholder="Additional order notes..."
                       />
-                    </div>
+                    </FormField>
                   </div>
 
-                  <p className="text-xs text-muted mt-3">
-                    Product, quantity, contact and other
-                    order items are not changed here because
-                    the current backend only permits editing
-                    delivery, address, notes, discount and
-                    tax after creation.
-                  </p>
+                  <div className="mt-5 rounded-lg border border-amber-100 bg-amber-50 px-3.5 py-3">
+                    <p className="text-[11px] leading-5 text-amber-700">
+                      Product, quantity, contact and other order items are
+                      not changed here because the current backend only
+                      permits editing delivery, address, notes, discount
+                      and tax after creation.
+                    </p>
+                  </div>
                 </>
               )}
             </div>
 
-            <div className="modal-footer">
+            {/* MODAL FOOTER */}
+
+            <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/60 px-6 py-4">
               <button
                 type="button"
-                className="btn btn-secondary"
                 onClick={closeModal}
                 disabled={saving}
+                className="h-10 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Cancel
               </button>
 
               <button
                 type="button"
-                className="btn btn-primary"
                 onClick={
                   editingOrder
                     ? handleUpdate
                     : handleCreate
                 }
                 disabled={saving}
+                className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#002244] px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#00335f] disabled:cursor-not-allowed disabled:opacity-60"
               >
+                {saving && (
+                  <RefreshCw
+                    size={14}
+                    className="animate-spin"
+                  />
+                )}
+
                 {saving
                   ? "Saving..."
                   : editingOrder
@@ -2058,6 +2040,196 @@ function Orders() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/*
+ * ---------------------------------------------------------
+ * REUSABLE UI
+ * ---------------------------------------------------------
+ */
+
+const inputClass =
+  "h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-slate-400 focus:ring-2 focus:ring-slate-100";
+
+const textareaClass =
+  "min-h-[84px] w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-slate-400 focus:ring-2 focus:ring-slate-100";
+
+function KpiCard({
+  label,
+  value,
+  description,
+  icon: Icon,
+}) {
+  return (
+    <div className="card">
+      <div className="card-body">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-[var(--color-text-secondary)]">
+              {label}
+            </p>
+
+            <p className="mt-2 text-2xl font-bold tracking-tight !text-black">
+              {value}
+            </p>
+
+            <p className="mt-1 text-xs text-[var(--color-text-secondary)]">
+              {description}
+            </p>
+          </div>
+
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+            <Icon size={17} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Skeleton({
+  width = "w-20",
+  rounded = false,
+}) {
+  return (
+    <div
+      className={`h-4 ${width} animate-pulse bg-slate-100 ${
+        rounded ? "rounded-full" : "rounded"
+      }`}
+    />
+  );
+}
+
+function SectionHeading({
+  icon: Icon,
+  title,
+  iconWrapper = "bg-slate-100 text-slate-500",
+}) {
+  return (
+    <div className="mb-3 flex items-center gap-2">
+      <div
+        className={`flex h-7 w-7 items-center justify-center rounded-lg ${iconWrapper}`}
+      >
+        <Icon size={14} />
+      </div>
+
+      <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+        {title}
+      </h3>
+    </div>
+  );
+}
+
+function FormField({
+  label,
+  required = false,
+  full = false,
+  children,
+}) {
+  return (
+    <div className={full ? "md:col-span-2" : ""}>
+      <label className="mb-1.5 block text-xs font-semibold text-slate-600">
+        {label}
+
+        {required && (
+          <span className="ml-1 text-rose-500">*</span>
+        )}
+      </label>
+
+      {children}
+    </div>
+  );
+}
+
+function DetailRow({ label, value }) {
+  return (
+    <div className="flex items-start justify-between gap-4">
+      <span className="shrink-0 text-[11px] font-medium text-slate-400">
+        {label}
+      </span>
+
+      <span className="max-w-[65%] text-right text-xs font-semibold leading-5 text-slate-700">
+        {value || "—"}
+      </span>
+    </div>
+  );
+}
+
+function DetailMetric({
+  label,
+  value,
+  strong = false,
+}) {
+  return (
+    <div className="min-w-0">
+      <span className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+        {label}
+      </span>
+
+      <span
+        className={`mt-1 block break-words text-xs ${
+          strong
+            ? "font-bold text-slate-800"
+            : "font-semibold text-slate-700"
+        }`}
+      >
+        {value || "—"}
+      </span>
+    </div>
+  );
+}
+
+function PreviewMetric({
+  label,
+  value,
+  highlight = false,
+}) {
+  return (
+    <div>
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+        {label}
+      </p>
+
+      <p
+        className={`mt-1 text-sm font-bold ${
+          highlight ? "text-[#002244]" : "text-slate-800"
+        }`}
+      >
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function TimelineItem({
+  title,
+  description,
+  date,
+  active = false,
+}) {
+  return (
+    <div className="relative">
+      <span
+        className={`absolute -left-6 top-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full border-2 border-white ring-1 ${
+          active
+            ? "bg-[#002244] ring-[#002244]/20"
+            : "bg-slate-300 ring-slate-200"
+        }`}
+      />
+
+      <p className="text-xs font-semibold text-slate-700">
+        {title}
+      </p>
+
+      <p className="mt-1 text-[11px] leading-5 text-slate-500">
+        {description}
+      </p>
+
+      <span className="mt-1.5 block text-[10px] font-medium text-slate-400">
+        {date}
+      </span>
     </div>
   );
 }

@@ -20,6 +20,11 @@ import {
   ClipboardList,
   MessageSquare,
   Clock3,
+  UserRound,
+  BriefcaseBusiness,
+  CircleDollarSign,
+  Trash2,
+  RefreshCw,
 } from "lucide-react";
 
 import {
@@ -58,20 +63,32 @@ const PRODUCT_OPTIONS = [
   "Welded Wire Mesh",
 ];
 
-const statusClass = {
-  New: "status-new",
-  Contacted: "status-contacted",
-  "In Progress": "status-in-progress",
-  "In Discussion": "status-in-progress",
-  Quoted: "status-quoted",
-  Converted: "status-resolved",
-  Lost: "status-lost",
+const STATUS_STYLES = {
+  New: "border-blue-200 bg-blue-50 text-blue-700",
+  Contacted: "border-cyan-200 bg-cyan-50 text-cyan-700",
+  "In Progress": "border-amber-200 bg-amber-50 text-amber-700",
+  "In Discussion": "border-orange-200 bg-orange-50 text-orange-700",
+  Quoted: "border-violet-200 bg-violet-50 text-violet-700",
+  Converted: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  Lost: "border-red-200 bg-red-50 text-red-700",
+};
+
+const PRIORITY_STYLES = {
+  Low: "bg-slate-100 text-slate-600",
+  Medium: "bg-amber-50 text-amber-700",
+  High: "bg-red-50 text-red-700",
 };
 
 function EnquiryStatus({ status }) {
   return (
-    <span className={`status ${statusClass[status] || "status-new"}`}>
-      {status}
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
+        STATUS_STYLES[status] ||
+        "border-slate-200 bg-slate-50 text-slate-600"
+      }`}
+    >
+      <span className="h-1.5 w-1.5 rounded-full bg-current" />
+      {status || "New"}
     </span>
   );
 }
@@ -118,7 +135,17 @@ function formatTimelineDate(date) {
   });
 }
 
-// Convert backend object to the shape used by the UI
+function getInitials(value) {
+  if (!value || value === "—") return "?";
+
+  return value
+    .split(" ")
+    .map((name) => name[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+}
+
 function mapEnquiry(item) {
   return {
     id: item.enquiryNumber,
@@ -158,6 +185,26 @@ function mapEnquiry(item) {
   };
 }
 
+const EMPTY_ENQUIRY = {
+  customerName: "",
+  customerRole: "",
+  company: "",
+  phone: "",
+  email: "",
+  project: "",
+  location: "",
+  projectRef: "",
+  product: "GI Wire",
+  quantity: "",
+  estimatedValue: "",
+  status: "New",
+  priority: "Medium",
+  source: "Website",
+  assignedTo: "",
+  assignedRole: "",
+  requirement: "",
+};
+
 function Enquiries() {
   const [enquiries, setEnquiries] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
@@ -165,41 +212,21 @@ function Enquiries() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All Statuses");
   const [sourceFilter, setSourceFilter] = useState("All Sources");
+  const [dateFilter, setDateFilter] = useState(false);
 
   const [page, setPage] = useState(1);
-  const [limit] = useState(20);
+  const limit = 20;
   const [total, setTotal] = useState(0);
   const [pages, setPages] = useState(1);
 
   const [loading, setLoading] = useState(true);
-  const [loadingDetails, setLoadingDetails] = useState(false);
   const [saving, setSaving] = useState(false);
-
   const [error, setError] = useState("");
 
   const [showNewModal, setShowNewModal] = useState(false);
   const [showNoteModal, setShowNoteModal] = useState(false);
 
-  const [newEnquiry, setNewEnquiry] = useState({
-    customerName: "",
-    customerRole: "",
-    company: "",
-    phone: "",
-    email: "",
-    project: "",
-    location: "",
-    projectRef: "",
-    product: "GI Wire",
-    quantity: "",
-    estimatedValue: "",
-    status: "New",
-    priority: "Medium",
-    source: "Website",
-    assignedTo: "",
-    assignedRole: "",
-    requirement: "",
-  });
-
+  const [newEnquiry, setNewEnquiry] = useState(EMPTY_ENQUIRY);
   const [noteText, setNoteText] = useState("");
 
   const loadEnquiries = async () => {
@@ -227,23 +254,18 @@ function Enquiries() {
       const response = await getEnquiries(params);
 
       const data = response?.data?.data || [];
-
       const mapped = data.map(mapEnquiry);
 
       setEnquiries(mapped);
       setTotal(response?.data?.total || 0);
       setPages(response?.data?.pages || 1);
 
-      if (mapped.length > 0) {
-        const stillExists = mapped.some(
-          (item) => item.id === selectedId
-        );
-
+      // Keep selected enquiry open if it still exists after reload
+      if (selectedId) {
+        const stillExists = mapped.some((item) => item.id === selectedId);
         if (!stillExists) {
-          setSelectedId(mapped[0].id);
+          setSelectedId(null);
         }
-      } else {
-        setSelectedId(null);
       }
     } catch (err) {
       console.error("Failed to load enquiries:", err);
@@ -261,27 +283,41 @@ function Enquiries() {
     loadEnquiries();
   }, [page, statusFilter, sourceFilter]);
 
-  // Search after a short delay
   useEffect(() => {
     const timer = setTimeout(() => {
-      setPage(1);
-      loadEnquiries();
+      if (page !== 1) {
+        setPage(1);
+      } else {
+        loadEnquiries();
+      }
     }, 400);
 
     return () => clearTimeout(timer);
   }, [search]);
 
   const selectedEnquiry = useMemo(() => {
-    return (
-      enquiries.find((item) => item.id === selectedId) ||
-      null
-    );
+    return enquiries.find((item) => item.id === selectedId) || null;
   }, [enquiries, selectedId]);
+
+  const stats = useMemo(() => {
+    return {
+      newCount: enquiries.filter((item) => item.status === "New").length,
+
+      progressCount: enquiries.filter(
+        (item) =>
+          item.status === "In Progress" || item.status === "In Discussion"
+      ).length,
+
+      convertedCount: enquiries.filter((item) => item.status === "Converted")
+        .length,
+    };
+  }, [enquiries]);
 
   const resetFilters = () => {
     setSearch("");
     setStatusFilter("All Statuses");
     setSourceFilter("All Sources");
+    setDateFilter(false);
     setPage(1);
   };
 
@@ -303,30 +339,10 @@ function Enquiries() {
       };
 
       const response = await createEnquiry(payload);
-
       const created = response?.data?.data;
 
       setShowNewModal(false);
-
-      setNewEnquiry({
-        customerName: "",
-        customerRole: "",
-        company: "",
-        phone: "",
-        email: "",
-        project: "",
-        location: "",
-        projectRef: "",
-        product: "GI Wire",
-        quantity: "",
-        estimatedValue: "",
-        status: "New",
-        priority: "Medium",
-        source: "Website",
-        assignedTo: "",
-        assignedRole: "",
-        requirement: "",
-      });
+      setNewEnquiry(EMPTY_ENQUIRY);
 
       await loadEnquiries();
 
@@ -336,10 +352,7 @@ function Enquiries() {
     } catch (err) {
       console.error("Create enquiry error:", err);
 
-      alert(
-        err?.response?.data?.message ||
-          "Failed to create enquiry."
-      );
+      alert(err?.response?.data?.message || "Failed to create enquiry.");
     } finally {
       setSaving(false);
     }
@@ -359,10 +372,7 @@ function Enquiries() {
     } catch (err) {
       console.error("Update enquiry error:", err);
 
-      alert(
-        err?.response?.data?.message ||
-          "Failed to update enquiry."
-      );
+      alert(err?.response?.data?.message || "Failed to update enquiry.");
     } finally {
       setSaving(false);
     }
@@ -383,15 +393,11 @@ function Enquiries() {
       await deleteEnquiry(selectedEnquiry.mongoId);
 
       setSelectedId(null);
-
       await loadEnquiries();
     } catch (err) {
       console.error("Delete enquiry error:", err);
 
-      alert(
-        err?.response?.data?.message ||
-          "Failed to delete enquiry."
-      );
+      alert(err?.response?.data?.message || "Failed to delete enquiry.");
     } finally {
       setSaving(false);
     }
@@ -408,7 +414,7 @@ function Enquiries() {
     try {
       setSaving(true);
 
-      await fetch(
+      const response = await fetch(
         `http://localhost:5000/api/enquiries/${selectedEnquiry.mongoId}/notes`,
         {
           method: "POST",
@@ -422,806 +428,880 @@ function Enquiries() {
         }
       );
 
+      if (!response.ok) {
+        throw new Error("Failed to add note");
+      }
+
       setNoteText("");
       setShowNoteModal(false);
 
-      const response = await getEnquiryById(
-        selectedEnquiry.mongoId
-      );
+      const enquiryResponse = await getEnquiryById(selectedEnquiry.mongoId);
 
-      const updated = mapEnquiry(response.data.data);
+      const updated = mapEnquiry(enquiryResponse.data.data);
 
       setEnquiries((current) =>
         current.map((item) =>
-          item.mongoId === updated.mongoId
-            ? updated
-            : item
+          item.mongoId === updated.mongoId ? updated : item
         )
       );
     } catch (err) {
       console.error("Add note error:", err);
-
       alert("Failed to add note.");
     } finally {
       setSaving(false);
     }
   };
 
-  const startRecord =
-    total === 0 ? 0 : (page - 1) * limit + 1;
+  const exportEnquiries = () => {
+    if (!enquiries.length) {
+      alert("There are no enquiries to export.");
+      return;
+    }
+
+    const headers = [
+      "Enquiry ID",
+      "Customer",
+      "Company",
+      "Project",
+      "Location",
+      "Product",
+      "Quantity",
+      "Estimated Value",
+      "Status",
+      "Priority",
+      "Source",
+      "Assigned To",
+      "Created",
+    ];
+
+    const rows = enquiries.map((item) => [
+      item.id,
+      item.customer,
+      item.company,
+      item.project,
+      item.location,
+      item.product,
+      item.quantity,
+      item.estimatedValue,
+      item.status,
+      item.priority,
+      item.source,
+      item.assigned,
+      item.created,
+    ]);
+
+    const csv = [headers, ...rows]
+      .map((row) =>
+        row
+          .map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`)
+          .join(",")
+      )
+      .join("\n");
+
+    const blob = new Blob([csv], {
+      type: "text/csv;charset=utf-8;",
+    });
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = "csw-enquiries.csv";
+    link.click();
+
+    URL.revokeObjectURL(url);
+  };
+
+  const startRecord = total === 0 ? 0 : (page - 1) * limit + 1;
 
   const endRecord = Math.min(page * limit, total);
 
   const goToPage = (newPage) => {
     if (newPage < 1 || newPage > pages) return;
-
     setPage(newPage);
   };
 
-  const stats = useMemo(() => {
-    const newCount = enquiries.filter(
-      (item) => item.status === "New"
-    ).length;
-
-    const progressCount = enquiries.filter(
-      (item) =>
-        item.status === "In Progress" ||
-        item.status === "In Discussion"
-    ).length;
-
-    const convertedCount = enquiries.filter(
-      (item) => item.status === "Converted"
-    ).length;
-
-    return {
-      newCount,
-      progressCount,
-      convertedCount,
-    };
-  }, [enquiries]);
+  const closeDetailModal = () => {
+    setSelectedId(null);
+  };
 
   return (
-    <div className="enquiries-page">
-      <div className="page-heading">
+    <div className="w-full space-y-5">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div>
-          <div className="enq-breadcrumb">
-            COMMERCIAL PIPELINE <span>•</span> FY 2026-27
+          <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+            <span>Commercial Pipeline</span>
+            <span>•</span>
+            <span>FY 2026–27</span>
           </div>
 
-          <h1>Enquiries</h1>
+          <h1 className="text-[22px] font-bold tracking-[-0.02em] text-slate-900">
+            Enquiries
+          </h1>
 
-          <p>
+          <p className="mt-1 text-sm text-slate-500">
             Manage incoming customer and project enquiries.
           </p>
         </div>
 
-        <div className="flex gap-3">
-          <button className="btn btn-secondary">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={exportEnquiries}
+            className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 text-sm font-medium text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
+          >
             <Download size={15} />
-            Export Ledger
+            Export
           </button>
 
           <button
-            className="btn btn-primary"
+            type="button"
             onClick={() => setShowNewModal(true)}
+            className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#002244] px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-[#00345f]"
           >
             <Plus size={16} />
             New enquiry
           </button>
         </div>
       </div>
+
       {error && (
-        <div className="alert alert-error">
-          {error}
+        <div className="flex items-center justify-between rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <span>{error}</span>
+
+          <button
+            type="button"
+            onClick={loadEnquiries}
+            className="inline-flex items-center gap-1.5 font-semibold hover:underline"
+          >
+            <RefreshCw size={14} />
+            Retry
+          </button>
         </div>
       )}
-      <div className="enq-stats-grid">
-        <div className="enq-stat-card">
-          <div className="enq-stat-top">
-            <span className="enq-stat-label">
-              TOTAL ENQUIRIES
-            </span>
 
-            <div className="enq-stat-icon">
-              <ClipboardList size={15} />
-            </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          label="Total enquiries"
+          value={total}
+          meta="Active records"
+          icon={ClipboardList}
+          iconClass="bg-slate-100 text-slate-600"
+        />
+
+        <StatCard
+          label="New"
+          value={stats.newCount}
+          meta="Current page"
+          icon={MessageSquare}
+          iconClass="bg-blue-50 text-blue-600"
+        />
+
+        <StatCard
+          label="In progress"
+          value={stats.progressCount}
+          meta="Active negotiations"
+          icon={Clock3}
+          iconClass="bg-amber-50 text-amber-600"
+        />
+
+        <StatCard
+          label="Converted"
+          value={stats.convertedCount}
+          meta="Current page"
+          icon={CheckCircle2}
+          iconClass="bg-emerald-50 text-emerald-600"
+        />
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
+          <div className="relative min-w-0 flex-1">
+            <Search
+              size={16}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+            />
+
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search enquiry, customer, project or product..."
+              className="h-10 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-[#315b89] focus:bg-white focus:ring-3 focus:ring-blue-50"
+            />
           </div>
 
-          <div className="enq-stat-value">{total}</div>
+          <select
+            value={statusFilter}
+            onChange={(e) => {
+              setStatusFilter(e.target.value);
+              setPage(1);
+            }}
+            className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-600 outline-none focus:border-[#315b89]"
+          >
+            <option>All Statuses</option>
 
-          <div className="enq-stat-meta">
-            <span>active records</span>
-          </div>
-        </div>
+            {STATUS_OPTIONS.map((status) => (
+              <option key={status}>{status}</option>
+            ))}
+          </select>
 
-        <div className="enq-stat-card">
-          <div className="enq-stat-top">
-            <span className="enq-stat-label">NEW</span>
+          <select
+            value={sourceFilter}
+            onChange={(e) => {
+              setSourceFilter(e.target.value);
+              setPage(1);
+            }}
+            className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-600 outline-none focus:border-[#315b89]"
+          >
+            <option>All Sources</option>
 
-            <div className="enq-stat-icon blue">
-              <MessageSquare size={15} />
-            </div>
-          </div>
+            {SOURCE_OPTIONS.map((source) => (
+              <option key={source}>{source}</option>
+            ))}
+          </select>
 
-          <div className="enq-stat-value">
-            {stats.newCount}
-          </div>
+          <button
+            type="button"
+            onClick={() => setDateFilter((value) => !value)}
+            className={`inline-flex h-10 items-center justify-center gap-2 rounded-lg border px-3 text-sm font-medium transition ${
+              dateFilter
+                ? "border-blue-200 bg-blue-50 text-blue-700"
+                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+            }`}
+          >
+            <CalendarDays size={14} />
+            Last 30 days
+          </button>
 
-          <div className="enq-stat-meta">
-            <span>current page</span>
-          </div>
-        </div>
-
-        <div className="enq-stat-card">
-          <div className="enq-stat-top">
-            <span className="enq-stat-label">
-              IN PROGRESS
-            </span>
-
-            <div className="enq-stat-icon amber">
-              <Clock3 size={15} />
-            </div>
-          </div>
-
-          <div className="enq-stat-value">
-            {stats.progressCount}
-          </div>
-
-          <div className="enq-stat-meta">
-            <span>active negotiations</span>
-          </div>
-        </div>
-
-        <div className="enq-stat-card">
-          <div className="enq-stat-top">
-            <span className="enq-stat-label">
-              CONVERTED
-            </span>
-
-            <div className="enq-stat-icon green">
-              <CheckCircle2 size={15} />
-            </div>
-          </div>
-
-          <div className="enq-stat-value">
-            {stats.convertedCount}
-          </div>
-
-          <div className="enq-stat-meta">
-            <span>current page</span>
-          </div>
+          <button
+            type="button"
+            onClick={resetFilters}
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+          >
+            <RotateCcw size={14} />
+            Reset
+          </button>
         </div>
       </div>
 
-      <div className="enq-filter-bar">
-        <div className="enq-search">
-          <Search size={15} />
+      <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-bold text-slate-900">
+                Enquiry queue
+              </h2>
 
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search enquiry by ID, customer, project or product..."
-          />
-        </div>
-
-        <select
-          className="filter-select"
-          value={statusFilter}
-          onChange={(e) => {
-            setStatusFilter(e.target.value);
-            setPage(1);
-          }}
-        >
-          <option>All Statuses</option>
-
-          {STATUS_OPTIONS.map((status) => (
-            <option key={status}>{status}</option>
-          ))}
-        </select>
-
-        <select
-          className="filter-select"
-          value={sourceFilter}
-          onChange={(e) => {
-            setSourceFilter(e.target.value);
-            setPage(1);
-          }}
-        >
-          <option>All Sources</option>
-
-          {SOURCE_OPTIONS.map((source) => (
-            <option key={source}>{source}</option>
-          ))}
-        </select>
-
-        <button className="filter-button">
-          <CalendarDays size={14} />
-          Last 30 days
-        </button>
-
-        <button
-          className="filter-button"
-          onClick={resetFilters}
-        >
-          <RotateCcw size={13} />
-          Reset
-        </button>
-      </div>
-
-      <div className="enq-workspace">
-        <section className="enq-queue card">
-          <div className="enq-queue-header">
-            <div>
-              <h2>Active Enquiries Queue</h2>
-
-              <span className="text-muted text-sm">
-                {loading
-                  ? "Loading..."
-                  : `${enquiries.length} displayed`}
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">
+                {total}
               </span>
             </div>
 
-            <div className="enq-view-toggle">
-              <button className="active">
-                Standard
-              </button>
-
-              <button>Compact</button>
-
-              <button
-                className="icon-only"
-                title="Column settings"
-              >
-                <SlidersHorizontal size={14} />
-              </button>
-            </div>
+            <p className="mt-1 text-xs text-slate-400">
+              Click an enquiry to view its details.
+            </p>
           </div>
 
-          <div className="table-wrap">
-            {loading ? (
-              <div className="empty-state">
-                <Clock3 size={28} />
+          <div className="flex items-center rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+            <button
+              type="button"
+              className="rounded-md bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm"
+            >
+              Standard
+            </button>
 
-                <h4>Loading enquiries...</h4>
+            <button
+              type="button"
+              className="rounded-md px-3 py-1.5 text-xs font-medium text-slate-400 hover:text-slate-600"
+            >
+              Compact
+            </button>
 
-                <p>
-                  Fetching enquiry data from the server.
-                </p>
+            <button
+              type="button"
+              className="ml-0.5 flex h-7 w-7 items-center justify-center rounded-md text-slate-400 hover:bg-white hover:text-slate-600"
+              title="Column settings"
+            >
+              <SlidersHorizontal size={14} />
+            </button>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          {loading ? (
+            <div className="flex min-h-[360px] flex-col items-center justify-center text-center">
+              <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 text-slate-400">
+                <Clock3 size={21} />
               </div>
-            ) : (
-              <table className="table enq-table">
-                <thead>
-                  <tr>
-                    <th>ENQUIRY ID</th>
-                    <th>CUSTOMER</th>
-                    <th>COMPANY</th>
-                    <th>PROJECT / LOCATION</th>
-                    <th>STATUS</th>
-                  </tr>
-                </thead>
 
-                <tbody>
-                  {enquiries.map((item) => (
+              <h4 className="text-sm font-semibold text-slate-700">
+                Loading enquiries
+              </h4>
+
+              <p className="mt-1 text-xs text-slate-400">
+                Fetching enquiry data from the server.
+              </p>
+            </div>
+          ) : enquiries.length === 0 ? (
+            <div className="flex min-h-[360px] flex-col items-center justify-center px-6 text-center">
+              <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 text-slate-400">
+                <Search size={20} />
+              </div>
+
+              <h4 className="text-sm font-semibold text-slate-700">
+                No enquiries found
+              </h4>
+
+              <p className="mt-1 max-w-xs text-xs leading-5 text-slate-400">
+                Try changing your search or filters.
+              </p>
+            </div>
+          ) : (
+            <table className="w-full min-w-[820px] border-collapse">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50/70">
+                  <th className="px-5 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    Enquiry
+                  </th>
+
+                  <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    Customer
+                  </th>
+
+                  <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    Company
+                  </th>
+
+                  <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    Project
+                  </th>
+
+                  <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    Status
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {enquiries.map((item) => {
+                  const selected = selectedId === item.id;
+
+                  return (
                     <tr
                       key={item.mongoId}
-                      className={
-                        selectedId === item.id
-                          ? "selected"
-                          : ""
-                      }
-                      onClick={() =>
-                        setSelectedId(item.id)
-                      }
+                      onClick={() => setSelectedId(item.id)}
+                      className={`cursor-pointer border-b border-slate-100 transition last:border-0 ${
+                        selected
+                          ? "bg-blue-50/60"
+                          : "hover:bg-slate-50"
+                      }`}
                     >
-                      <td>
-                        <button
-                          className="enq-id-btn"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedId(item.id);
-                          }}
-                        >
-                          {item.id}
-                        </button>
-                      </td>
+                      <td className="px-5 py-4">
+                        <div className="flex items-center gap-3">
+                          <div
+                            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold ${
+                              selected
+                                ? "bg-[#002244] text-white"
+                                : "bg-slate-100 text-slate-500"
+                            }`}
+                          >
+                            {getInitials(item.id)}
+                          </div>
 
-                      <td>
-                        <div className="enq-customer">
-                          <strong>
-                            {item.customer}
-                          </strong>
+                          <div>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedId(item.id);
+                              }}
+                              className="font-mono text-xs font-bold text-[#315b89] hover:underline"
+                            >
+                              {item.id}
+                            </button>
 
-                          <span>{item.role}</span>
+                            <div className="mt-0.5 text-[11px] text-slate-400">
+                              {item.created}
+                            </div>
+                          </div>
                         </div>
                       </td>
 
-                      <td>
-                        <span className="text-sm">
-                          {item.company}
-                        </span>
+                      <td className="px-4 py-4">
+                        <div className="max-w-[180px]">
+                          <div className="truncate text-sm font-semibold text-slate-800">
+                            {item.customer}
+                          </div>
+
+                          <div className="mt-0.5 truncate text-xs text-slate-400">
+                            {item.role}
+                          </div>
+                        </div>
                       </td>
 
-                      <td>
-                        <div className="enq-project-cell">
-                          <span>{item.project}</span>
+                      <td className="px-4 py-4">
+                        <div className="flex max-w-[150px] items-center gap-2">
+                          <Building2
+                            size={14}
+                            className="shrink-0 text-slate-400"
+                          />
 
-                          <span className="text-muted text-xs flex items-center gap-1">
-                            <MapPin size={11} />
-
-                            {item.location}
+                          <span className="truncate text-sm text-slate-600">
+                            {item.company}
                           </span>
                         </div>
                       </td>
 
-                      <td>
-                        <EnquiryStatus
-                          status={item.status}
-                        />
+                      <td className="px-4 py-4">
+                        <div className="max-w-[190px]">
+                          <div className="truncate text-sm font-medium text-slate-700">
+                            {item.project}
+                          </div>
+
+                          <div className="mt-1 flex items-center gap-1 truncate text-xs text-slate-400">
+                            <MapPin size={11} />
+                            {item.location}
+                          </div>
+                        </div>
+                      </td>
+
+                      <td className="px-4 py-4">
+                        <EnquiryStatus status={item.status} />
                       </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-
-            {!loading && enquiries.length === 0 && (
-              <div className="empty-state">
-                <Search size={28} />
-
-                <h4>No enquiries found</h4>
-
-                <p>
-                  Try changing your search or filters.
-                </p>
-              </div>
-            )}
-          </div>
-          <div className="enq-pagination">
-            <span>
-              Showing{" "}
-              <strong>
-                {startRecord}–{endRecord}
-              </strong>{" "}
-              of <strong>{total}</strong>
-            </span>
-
-            <span className="text-muted">
-              Page <strong>{page}</strong> of{" "}
-              <strong>{pages}</strong>
-            </span>
-
-            <div className="pagination-buttons">
-              <button
-                disabled={page === 1}
-                onClick={() => goToPage(page - 1)}
-              >
-                <ChevronLeft size={14} />
-              </button>
-
-              {Array.from(
-                { length: Math.min(pages, 5) },
-                (_, index) => {
-                  const pageNumber = index + 1;
-
-                  return (
-                    <button
-                      key={pageNumber}
-                      className={
-                        page === pageNumber
-                          ? "pagination-active"
-                          : ""
-                      }
-                      onClick={() =>
-                        goToPage(pageNumber)
-                      }
-                    >
-                      {pageNumber}
-                    </button>
                   );
-                }
-              )}
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
 
-              <button
-                disabled={page === pages}
-                onClick={() => goToPage(page + 1)}
-              >
-                <ChevronRight size={14} />
-              </button>
-            </div>
+        <div className="flex flex-col gap-3 border-t border-slate-200 px-5 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+          <span>
+            Showing{" "}
+            <strong className="font-semibold text-slate-700">
+              {startRecord}–{endRecord}
+            </strong>{" "}
+            of{" "}
+            <strong className="font-semibold text-slate-700">{total}</strong>
+          </span>
+
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              disabled={page === 1}
+              onClick={() => goToPage(page - 1)}
+              className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <ChevronLeft size={14} />
+            </button>
+
+            {Array.from({ length: Math.min(pages, 5) }, (_, index) => {
+              const pageNumber = index + 1;
+
+              return (
+                <button
+                  type="button"
+                  key={pageNumber}
+                  onClick={() => goToPage(pageNumber)}
+                  className={`flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-xs font-medium transition ${
+                    page === pageNumber
+                      ? "bg-[#002244] text-white"
+                      : "text-slate-500 hover:bg-slate-100"
+                  }`}
+                >
+                  {pageNumber}
+                </button>
+              );
+            })}
+
+            <button
+              type="button"
+              disabled={page === pages}
+              onClick={() => goToPage(page + 1)}
+              className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <ChevronRight size={14} />
+            </button>
           </div>
-        </section>
+        </div>
+      </section>
 
-        <aside className="enq-detail card">
-          {!selectedEnquiry ? (
-            <div className="empty-state">
-              <ClipboardList size={30} />
-
-              <h4>Select an enquiry</h4>
-
-              <p>
-                Select an enquiry from the queue to view
-                its details.
-              </p>
-            </div>
-          ) : (
-            <>
-            <div className="enq-detail-header">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="enq-detail-id">
+      {selectedEnquiry && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-[2px]"
+          onClick={closeDetailModal}
+        >
+          <div
+            className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between border-b border-slate-200 px-6 py-5">
+              <div className="min-w-0">
+                <div className="mb-1.5 flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-xs font-bold text-[#315b89]">
                     {selectedEnquiry.id}
                   </span>
 
-                  <EnquiryStatus
-                    status={selectedEnquiry.status}
-                  />
+                  <EnquiryStatus status={selectedEnquiry.status} />
                 </div>
 
-                <h2>Enquiry Details</h2>
+                <h2 className="text-base font-bold text-slate-900">
+                  Enquiry details
+                </h2>
 
-                <p className="text-muted text-sm">
+                <p className="mt-1 text-xs text-slate-400">
                   Created {selectedEnquiry.created} · {selectedEnquiry.source}
                 </p>
               </div>
 
               <button
-                className="icon-button"
-                onClick={() => setSelectedId(null)}
+                type="button"
+                onClick={closeDetailModal}
+                className="ml-3 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-400 transition hover:bg-slate-50 hover:text-slate-700"
                 aria-label="Close enquiry details"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <div className="space-y-5 p-6">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-[#315b89]">
+                      <BriefcaseBusiness size={19} />
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        Product requirement
+                      </span>
+
+                      <h3 className="mt-1 truncate text-sm font-bold text-slate-800">
+                        {selectedEnquiry.product}
+                      </h3>
+
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        Heavy Galvanized Grade 1
+                      </p>
+
+                      <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2">
+                        <div>
+                          <span className="block text-[10px] uppercase tracking-wide text-slate-400">
+                            Quantity
+                          </span>
+
+                          <strong className="text-sm text-slate-700">
+                            {selectedEnquiry.quantity || "Not specified"}
+                          </strong>
+                        </div>
+
+                        <div>
+                          <span className="block text-[10px] uppercase tracking-wide text-slate-400">
+                            Estimated value
+                          </span>
+
+                          <strong className="flex items-center gap-1 text-sm text-slate-700">
+                            <CircleDollarSign
+                              size={13}
+                              className="text-emerald-500"
+                            />
+                            {selectedEnquiry.value}
+                          </strong>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <DetailSection title="Customer & enterprise">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#002244] text-xs font-bold text-white">
+                      {getInitials(selectedEnquiry.customer)}
+                    </div>
+
+                    <div className="min-w-0">
+                      <strong className="block truncate text-sm font-semibold text-slate-800">
+                        {selectedEnquiry.customer}
+                      </strong>
+
+                      <span className="block truncate text-xs text-slate-400">
+                        {selectedEnquiry.role}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 space-y-3">
+                    <ContactLine
+                      icon={Building2}
+                      value={selectedEnquiry.company}
+                    />
+
+                    <ContactLine icon={Phone} value={selectedEnquiry.phone} />
+
+                    <ContactLine icon={Mail} value={selectedEnquiry.email} />
+
+                    <ContactLine
+                      icon={FileText}
+                      value={`Project: ${selectedEnquiry.projectRef}`}
+                    />
+                  </div>
+                </DetailSection>
+
+                <DetailSection title="Project information">
+                  <div className="grid grid-cols-2 gap-3">
+                    <InfoItem
+                      label="Project"
+                      value={selectedEnquiry.project}
+                    />
+
+                    <InfoItem
+                      label="Location"
+                      value={selectedEnquiry.location}
+                    />
+
+                    <InfoItem label="Source" value={selectedEnquiry.source} />
+
+                    <InfoItem
+                      label="Priority"
+                      value={
+                        <span
+                          className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                            PRIORITY_STYLES[selectedEnquiry.priority] ||
+                            "bg-slate-100 text-slate-600"
+                          }`}
+                        >
+                          {selectedEnquiry.priority || "Medium"}
+                        </span>
+                      }
+                    />
+                  </div>
+                </DetailSection>
+
+                <DetailSection title="Sales state">
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        Status
+                      </label>
+
+                      <select
+                        value={selectedEnquiry.status}
+                        disabled={saving}
+                        onChange={(e) => handleStatusChange(e.target.value)}
+                        className="h-9 w-full rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 outline-none focus:border-[#315b89]"
+                      >
+                        {STATUS_OPTIONS.map((status) => (
+                          <option key={status}>{status}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <span className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        Assigned lead
+                      </span>
+
+                      <div className="flex min-w-0 items-center gap-2.5 rounded-lg border border-slate-200 px-2.5 py-1.5">
+                        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[10px] font-bold text-slate-600">
+                          {getInitials(selectedEnquiry.assigned)}
+                        </div>
+
+                        <div className="min-w-0">
+                          <strong className="block truncate text-xs font-semibold text-slate-700">
+                            {selectedEnquiry.assigned}
+                          </strong>
+
+                          {selectedEnquiry.assignedRole && (
+                            <span className="block truncate text-[10px] text-slate-400">
+                              {selectedEnquiry.assignedRole}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </DetailSection>
+
+                <DetailSection title="Technical & dispatch notes">
+                  <div className="rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-600">
+                    {selectedEnquiry.requirement}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowNoteModal(true)}
+                    className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-[#315b89] hover:underline"
+                  >
+                    <Plus size={13} />
+                    Add note
+                  </button>
+                </DetailSection>
+
+                <DetailSection
+                  title="Activity timeline"
+                  action={
+                    <button
+                      type="button"
+                      onClick={() => setShowNoteModal(true)}
+                      className="text-[11px] font-semibold text-[#315b89] hover:underline"
+                    >
+                      + Add note
+                    </button>
+                  }
+                >
+                  {selectedEnquiry.timeline.length > 0 ? (
+                    <div className="space-y-0">
+                      {selectedEnquiry.timeline.map((event, index) => (
+                        <div
+                          key={index}
+                          className="relative flex gap-3 pb-4 last:pb-0"
+                        >
+                          <div className="relative flex w-4 shrink-0 justify-center">
+                            <span className="mt-1.5 h-2 w-2 rounded-full bg-[#315b89] ring-4 ring-blue-50" />
+
+                            {index !==
+                              selectedEnquiry.timeline.length - 1 && (
+                              <span className="absolute top-4 h-full w-px bg-slate-200" />
+                            )}
+                          </div>
+
+                          <div className="min-w-0 flex-1">
+                            <div className="text-[10px] font-semibold text-slate-400">
+                              {formatTimelineDate(event.date)}
+                            </div>
+
+                            <p className="mt-1 text-xs leading-5 text-slate-600">
+                              {event.text}
+                            </p>
+
+                            {event.createdBy && (
+                              <span className="mt-1 block text-[10px] text-slate-400">
+                                By {event.createdBy}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-400">
+                      No activity recorded yet.
+                    </p>
+                  )}
+                </DetailSection>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 border-t border-slate-200 bg-slate-50/70 px-6 py-4">
+              <button
+                type="button"
+                className="inline-flex h-9 flex-1 items-center justify-center gap-2 rounded-lg bg-[#002244] px-3 text-xs font-semibold text-white transition hover:bg-[#00345f]"
+              >
+                <Send size={14} />
+                Generate quote
+              </button>
+
+              <button
+                type="button"
+                disabled={saving}
+                onClick={handleDeleteEnquiry}
+                className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-400 transition hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                title="Delete enquiry"
+              >
+                <Trash2 size={15} />
+              </button>
+
+              <button
+                type="button"
+                className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-400 transition hover:bg-slate-50 hover:text-slate-700"
+                title="More actions"
+              >
+                <MoreHorizontal size={16} />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showNewModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-[2px]"
+          onClick={() => !saving && setShowNewModal(false)}
+        >
+          <div
+            className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between border-b border-slate-200 px-6 py-5">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">
+                  New enquiry
+                </h3>
+
+                <p className="mt-1 text-xs text-slate-400">
+                  Create a new customer or project enquiry.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => setShowNewModal(false)}
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700"
               >
                 <X size={17} />
               </button>
             </div>
 
-              <div className="enq-detail-body">
-
-              {/* PRODUCT */}
-              <div className="enq-product-card">
-                <div className="enq-product-image">
-                  <div className="wire-placeholder">
-                    <span />
-                    <span />
-                    <span />
-                  </div>
-                </div>
-
-                <div className="enq-product-info">
-                  <span className="enq-detail-label">
-                    MATERIAL GRADE
-                  </span>
-
-                  <strong>
-                    {selectedEnquiry.product}
-                  </strong>
-
-                  <span className="enq-product-grade">
-                    Heavy Galvanized Grade 1
-                  </span>
-
-                  <div className="enq-product-meta">
-                    <b>
-                      {selectedEnquiry.quantity ||
-                        "Quantity not specified"}
-                    </b>
-
-                    <span>
-                      Est. {selectedEnquiry.value}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-
-              {/* CUSTOMER */}
-              <div className="enq-section">
-                <div className="enq-section-title">
-                  CUSTOMER & ENTERPRISE PROFILE
-                </div>
-
-                <div className="enq-profile">
-                  <div className="avatar avatar-md">
-                    {selectedEnquiry.customer
-                      .split(" ")
-                      .map((n) => n[0])
-                      .join("")
-                      .slice(0, 2)
-                      .toUpperCase()}
-                  </div>
-
-                  <div className="enq-profile-info">
-                    <strong>
-                      {selectedEnquiry.customer}
-                    </strong>
-
-                    <span>
-                      {selectedEnquiry.role}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="enq-contact-list">
-                  <div className="enq-contact-item">
-                    <Building2 size={15} />
-                    <span>{selectedEnquiry.company}</span>
-                  </div>
-
-                  <div className="enq-contact-item">
-                    <Phone size={15} />
-                    <span>{selectedEnquiry.phone}</span>
-                  </div>
-
-                  <div className="enq-contact-item">
-                    <Mail size={15} />
-                    <span>{selectedEnquiry.email}</span>
-                  </div>
-
-                  <div className="enq-contact-item">
-                    <FileText size={15} />
-                    <span>
-                      Project: {selectedEnquiry.projectRef}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-
-              {/* STATUS + ASSIGNED */}
-              <div className="enq-two-col">
-
-                <div>
-                  <div className="enq-section-title">
-                    STATUS STATE
-                  </div>
-
-                  <select
-                    className="filter-select enq-status-select"
-                    value={selectedEnquiry.status}
-                    disabled={saving}
-                    onChange={(e) =>
-                      handleStatusChange(e.target.value)
-                    }
-                  >
-                    {STATUS_OPTIONS.map((status) => (
-                      <option key={status}>
-                        {status}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <div className="enq-section-title">
-                    ASSIGNED LEAD
-                  </div>
-
-                  <div className="enq-assigned">
-                    <div className="avatar avatar-sm">
-                      {selectedEnquiry.assigned
-                        .split(" ")
-                        .map((n) => n[0])
-                        .join("")
-                        .slice(0, 2)
-                        .toUpperCase()}
-                    </div>
-
-                    <div className="enq-assigned-info">
-                      <strong>
-                        {selectedEnquiry.assigned}
-                      </strong>
-
-                      {selectedEnquiry.assignedRole && (
-                        <span>
-                          {selectedEnquiry.assignedRole}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-              </div>
-
-
-              {/* NOTES */}
-              <div className="enq-section">
-                <div className="enq-section-title">
-                  TECHNICAL & DISPATCH NOTES
-                </div>
-
-                <p className="enq-notes">
-                  {selectedEnquiry.requirement}
-                </p>
-
-                <button
-                  className="text-button"
-                  onClick={() => setShowNoteModal(true)}
-                >
-                  <Plus size={13} />
-                  Add note
-                </button>
-              </div>
-
-
-              {/* TIMELINE */}
-              <div className="enq-section">
-                <div className="enq-section-title enq-timeline-header">
-                  <span>
-                    AUDIT & ACTIVITY TIMELINE
-                  </span>
-
-                  <button
-                    className="text-button"
-                    onClick={() => setShowNoteModal(true)}
-                  >
-                    + Add note
-                  </button>
-                </div>
-
-                <div className="enq-timeline">
-                  {selectedEnquiry.timeline.length > 0 ? (
-                    selectedEnquiry.timeline.map(
-                      (event, index) => (
-                        <div
-                          className="enq-timeline-item"
-                          key={index}
-                        >
-                          <div className="enq-timeline-dot" />
-
-                          <div className="enq-timeline-content">
-                            <strong>
-                              {formatTimelineDate(event.date)}
-                            </strong>
-
-                            <p>{event.text}</p>
-
-                            {event.createdBy && (
-                              <small>
-                                By {event.createdBy}
-                              </small>
-                            )}
-                          </div>
-                        </div>
-                      )
-                    )
-                  ) : (
-                    <p className="text-muted text-sm">
-                      No activity recorded yet.
-                    </p>
-                  )}
-                </div>
-              </div>
-
-            </div>
-
-              <div className="enq-detail-footer">
-                <button className="btn btn-primary">
-                  <Send size={14} />
-                  Generate Quote
-                </button>
-
-                <button
-                  className="btn btn-secondary btn-sm"
-                  title="Delete enquiry"
-                  disabled={saving}
-                  onClick={handleDeleteEnquiry}
-                >
-                  <MoreHorizontal size={16} />
-                </button>
-              </div>
-            </>
-          )}
-        </aside>
-      </div>
-
-      {showNewModal && (
-        <div
-          className="modal-overlay"
-          onClick={() =>
-            !saving && setShowNewModal(false)
-          }
-        >
-          <div
-            className="modal"
-            onClick={(e) =>
-              e.stopPropagation()
-            }
-            style={{ maxWidth: 700 }}
-          >
-            <div className="modal-header">
-              <div>
-                <h3>New enquiry</h3>
-
-                <p className="text-muted text-sm">
-                  Create a new customer/project enquiry.
-                </p>
-              </div>
-
-              <button
-                className="icon-button"
-                disabled={saving}
-                onClick={() =>
-                  setShowNewModal(false)
-                }
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="modal-body">
-              <div className="grid grid-2 gap-4">
-                <div className="form-group">
-                  <label className="form-label">
-                    Customer name *
-                  </label>
-
+            <div className="overflow-y-auto px-6 py-5">
+              <div className="grid grid-cols-1 gap-x-4 gap-y-4 md:grid-cols-2">
+                <FormField label="Customer name" required>
                   <input
-                    className="input"
-                    value={
-                      newEnquiry.customerName
-                    }
+                    className="form-input"
+                    value={newEnquiry.customerName}
                     onChange={(e) =>
                       setNewEnquiry({
                         ...newEnquiry,
-                        customerName:
-                          e.target.value,
+                        customerName: e.target.value,
                       })
                     }
                     placeholder="Enter customer name"
                   />
-                </div>
+                </FormField>
 
-                {/* ROLE */}
-
-                <div className="form-group">
-                  <label className="form-label">
-                    Customer role
-                  </label>
-
+                <FormField label="Customer role">
                   <input
-                    className="input"
-                    value={
-                      newEnquiry.customerRole
-                    }
+                    className="form-input"
+                    value={newEnquiry.customerRole}
                     onChange={(e) =>
                       setNewEnquiry({
                         ...newEnquiry,
-                        customerRole:
-                          e.target.value,
+                        customerRole: e.target.value,
                       })
                     }
                     placeholder="Procurement Head"
                   />
-                </div>
+                </FormField>
 
-                {/* COMPANY */}
-
-                <div className="form-group">
-                  <label className="form-label">
-                    Company
-                  </label>
-
+                <FormField label="Company">
                   <input
-                    className="input"
+                    className="form-input"
                     value={newEnquiry.company}
                     onChange={(e) =>
                       setNewEnquiry({
                         ...newEnquiry,
-                        company:
-                          e.target.value,
+                        company: e.target.value,
                       })
                     }
                     placeholder="Enter company name"
                   />
-                </div>
+                </FormField>
 
-                {/* PHONE */}
-
-                <div className="form-group">
-                  <label className="form-label">
-                    Phone
-                  </label>
-
+                <FormField label="Phone">
                   <input
-                    className="input"
+                    className="form-input"
                     value={newEnquiry.phone}
                     onChange={(e) =>
                       setNewEnquiry({
@@ -1231,17 +1311,12 @@ function Enquiries() {
                     }
                     placeholder="+91 XXXXX XXXXX"
                   />
-                </div>
+                </FormField>
 
-                {/* EMAIL */}
-
-                <div className="form-group">
-                  <label className="form-label">
-                    Email
-                  </label>
-
+                <FormField label="Email">
                   <input
-                    className="input"
+                    className="form-input"
+                    type="email"
                     value={newEnquiry.email}
                     onChange={(e) =>
                       setNewEnquiry({
@@ -1251,195 +1326,122 @@ function Enquiries() {
                     }
                     placeholder="customer@company.com"
                   />
-                </div>
+                </FormField>
 
-                {/* PROJECT */}
-
-                <div className="form-group">
-                  <label className="form-label">
-                    Project
-                  </label>
-
+                <FormField label="Project">
                   <input
-                    className="input"
+                    className="form-input"
                     value={newEnquiry.project}
                     onChange={(e) =>
                       setNewEnquiry({
                         ...newEnquiry,
-                        project:
-                          e.target.value,
+                        project: e.target.value,
                       })
                     }
                     placeholder="Project name"
                   />
-                </div>
+                </FormField>
 
-                {/* LOCATION */}
-
-                <div className="form-group">
-                  <label className="form-label">
-                    Location
-                  </label>
-
+                <FormField label="Location">
                   <input
-                    className="input"
+                    className="form-input"
                     value={newEnquiry.location}
                     onChange={(e) =>
                       setNewEnquiry({
                         ...newEnquiry,
-                        location:
-                          e.target.value,
+                        location: e.target.value,
                       })
                     }
                     placeholder="City, State"
                   />
-                </div>
+                </FormField>
 
-                {/* PROJECT REF */}
-
-                <div className="form-group">
-                  <label className="form-label">
-                    Project reference
-                  </label>
-
+                <FormField label="Project reference">
                   <input
-                    className="input"
-                    value={
-                      newEnquiry.projectRef
-                    }
+                    className="form-input"
+                    value={newEnquiry.projectRef}
                     onChange={(e) =>
                       setNewEnquiry({
                         ...newEnquiry,
-                        projectRef:
-                          e.target.value,
+                        projectRef: e.target.value,
                       })
                     }
                     placeholder="Project reference"
                   />
-                </div>
+                </FormField>
 
-                {/* PRODUCT */}
-
-                <div className="form-group">
-                  <label className="form-label">
-                    Product
-                  </label>
-
+                <FormField label="Product">
                   <select
-                    className="select"
+                    className="form-input"
                     value={newEnquiry.product}
                     onChange={(e) =>
                       setNewEnquiry({
                         ...newEnquiry,
-                        product:
-                          e.target.value,
+                        product: e.target.value,
                       })
                     }
                   >
-                    {PRODUCT_OPTIONS.map(
-                      (product) => (
-                        <option
-                          key={product}
-                        >
-                          {product}
-                        </option>
-                      )
-                    )}
+                    {PRODUCT_OPTIONS.map((product) => (
+                      <option key={product}>{product}</option>
+                    ))}
                   </select>
-                </div>
+                </FormField>
 
-                {/* QUANTITY */}
-
-                <div className="form-group">
-                  <label className="form-label">
-                    Quantity
-                  </label>
-
+                <FormField label="Quantity">
                   <input
-                    className="input"
+                    className="form-input"
                     value={newEnquiry.quantity}
                     onChange={(e) =>
                       setNewEnquiry({
                         ...newEnquiry,
-                        quantity:
-                          e.target.value,
+                        quantity: e.target.value,
                       })
                     }
                     placeholder="2,500 Kg"
                   />
-                </div>
+                </FormField>
 
-                {/* VALUE */}
-
-                <div className="form-group">
-                  <label className="form-label">
-                    Estimated value
-                  </label>
-
+                <FormField label="Estimated value">
                   <input
-                    className="input"
+                    className="form-input"
                     type="number"
-                    value={
-                      newEnquiry.estimatedValue
-                    }
+                    min="0"
+                    value={newEnquiry.estimatedValue}
                     onChange={(e) =>
                       setNewEnquiry({
                         ...newEnquiry,
-                        estimatedValue:
-                          e.target.value,
+                        estimatedValue: e.target.value,
                       })
                     }
                     placeholder="225000"
                   />
-                </div>
+                </FormField>
 
-                {/* SOURCE */}
-
-                <div className="form-group">
-                  <label className="form-label">
-                    Source
-                  </label>
-
+                <FormField label="Source">
                   <select
-                    className="select"
+                    className="form-input"
                     value={newEnquiry.source}
                     onChange={(e) =>
                       setNewEnquiry({
                         ...newEnquiry,
-                        source:
-                          e.target.value,
+                        source: e.target.value,
                       })
                     }
                   >
-                    {SOURCE_OPTIONS.map(
-                      (source) => (
-                        <option
-                          key={source}
-                        >
-                          {source}
-                        </option>
-                      )
-                    )}
+                    {SOURCE_OPTIONS.map((source) => (
+                      <option key={source}>{source}</option>
+                    ))}
                   </select>
-                </div>
+                </FormField>
 
-                {/* PRIORITY */}
-
-                <div className="form-group">
-                  <label className="form-label">
-                    Priority
-                  </label>
-
+                <FormField label="Priority">
                   <select
-                    className="select"
-                    value={
-                      newEnquiry.priority
-                    }
+                    className="form-input"
+                    value={newEnquiry.priority}
                     onChange={(e) =>
                       setNewEnquiry({
                         ...newEnquiry,
-                        priority:
-                          e.target.value,
+                        priority: e.target.value,
                       })
                     }
                   >
@@ -1447,188 +1449,223 @@ function Enquiries() {
                     <option>Medium</option>
                     <option>High</option>
                   </select>
-                </div>
+                </FormField>
 
-                {/* ASSIGNED */}
-
-                <div className="form-group">
-                  <label className="form-label">
-                    Assigned to
-                  </label>
-
+                <FormField label="Assigned to">
                   <input
-                    className="input"
-                    value={
-                      newEnquiry.assignedTo
-                    }
+                    className="form-input"
+                    value={newEnquiry.assignedTo}
                     onChange={(e) =>
                       setNewEnquiry({
                         ...newEnquiry,
-                        assignedTo:
-                          e.target.value,
+                        assignedTo: e.target.value,
                       })
                     }
                     placeholder="Sales executive"
                   />
-                </div>
+                </FormField>
 
-                {/* ASSIGNED ROLE */}
-
-                <div className="form-group">
-                  <label className="form-label">
-                    Assigned role
-                  </label>
-
+                <FormField label="Assigned role">
                   <input
-                    className="input"
-                    value={
-                      newEnquiry.assignedRole
-                    }
+                    className="form-input"
+                    value={newEnquiry.assignedRole}
                     onChange={(e) =>
                       setNewEnquiry({
                         ...newEnquiry,
-                        assignedRole:
-                          e.target.value,
+                        assignedRole: e.target.value,
                       })
                     }
                     placeholder="Sales Executive"
                   />
-                </div>
+                </FormField>
               </div>
 
-              {/* REQUIREMENT */}
-
-              <div className="form-group">
-                <label className="form-label">
-                  Requirement / notes
-                </label>
-
-                <textarea
-                  className="textarea"
-                  value={
-                    newEnquiry.requirement
-                  }
-                  onChange={(e) =>
-                    setNewEnquiry({
-                      ...newEnquiry,
-                      requirement:
-                        e.target.value,
-                    })
-                  }
-                  placeholder="Describe the customer's requirement..."
-                  rows={4}
-                />
+              <div className="mt-4">
+                <FormField label="Requirement / notes">
+                  <textarea
+                    className="form-input min-h-[110px] resize-y py-2.5"
+                    value={newEnquiry.requirement}
+                    onChange={(e) =>
+                      setNewEnquiry({
+                        ...newEnquiry,
+                        requirement: e.target.value,
+                      })
+                    }
+                    placeholder="Describe the customer's requirement..."
+                  />
+                </FormField>
               </div>
             </div>
 
-            <div className="modal-footer">
+            <div className="flex items-center justify-end gap-2 border-t border-slate-200 bg-slate-50/70 px-6 py-4">
               <button
-                className="btn btn-secondary"
+                type="button"
                 disabled={saving}
-                onClick={() =>
-                  setShowNewModal(false)
-                }
+                onClick={() => setShowNewModal(false)}
+                className="h-9 rounded-lg border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
               >
                 Cancel
               </button>
 
               <button
-                className="btn btn-primary"
+                type="button"
                 disabled={saving}
                 onClick={handleCreateEnquiry}
+                className="inline-flex h-9 items-center gap-2 rounded-lg bg-[#002244] px-4 text-xs font-semibold text-white hover:bg-[#00345f] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                <Plus size={15} />
+                <Plus size={14} />
 
-                {saving
-                  ? "Creating..."
-                  : "Create enquiry"}
+                {saving ? "Creating..." : "Create enquiry"}
               </button>
             </div>
           </div>
         </div>
       )}
+
       {showNoteModal && selectedEnquiry && (
         <div
-          className="modal-overlay"
-          onClick={() =>
-            !saving && setShowNoteModal(false)
-          }
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-[2px]"
+          onClick={() => !saving && setShowNoteModal(false)}
         >
           <div
-            className="modal"
-            onClick={(e) =>
-              e.stopPropagation()
-            }
-            style={{ maxWidth: 520 }}
+            className="w-full max-w-lg overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
           >
-            <div className="modal-header">
+            <div className="flex items-start justify-between border-b border-slate-200 px-6 py-5">
               <div>
-                <h3>Add timeline note</h3>
+                <h3 className="text-base font-bold text-slate-900">
+                  Add timeline note
+                </h3>
 
-                <p className="text-muted text-sm">
-                  Add activity to{" "}
-                  {selectedEnquiry.id}.
+                <p className="mt-1 text-xs text-slate-400">
+                  Add activity to {selectedEnquiry.id}.
                 </p>
               </div>
 
               <button
-                className="icon-button"
+                type="button"
                 disabled={saving}
-                onClick={() =>
-                  setShowNoteModal(false)
-                }
+                onClick={() => setShowNoteModal(false)}
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700"
               >
-                <X size={18} />
+                <X size={17} />
               </button>
             </div>
 
-            <div className="modal-body">
-              <div className="form-group">
-                <label className="form-label">
-                  Note
-                </label>
-
+            <div className="px-6 py-5">
+              <FormField label="Note">
                 <textarea
-                  className="textarea"
-                  value={noteText}
-                  onChange={(e) =>
-                    setNoteText(
-                      e.target.value
-                    )
-                  }
-                  placeholder="Enter follow-up, quotation, dispatch or customer communication details..."
-                  rows={5}
                   autoFocus
+                  className="form-input min-h-[130px] resize-y py-2.5"
+                  value={noteText}
+                  onChange={(e) => setNoteText(e.target.value)}
+                  placeholder="Enter follow-up, quotation, dispatch or customer communication details..."
                 />
-              </div>
+              </FormField>
             </div>
 
-            <div className="modal-footer">
+            <div className="flex items-center justify-end gap-2 border-t border-slate-200 bg-slate-50/70 px-6 py-4">
               <button
-                className="btn btn-secondary"
+                type="button"
                 disabled={saving}
-                onClick={() =>
-                  setShowNoteModal(false)
-                }
+                onClick={() => setShowNoteModal(false)}
+                className="h-9 rounded-lg border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-600 hover:bg-slate-50"
               >
                 Cancel
               </button>
 
               <button
-                className="btn btn-primary"
+                type="button"
                 disabled={saving}
                 onClick={handleAddNote}
+                className="inline-flex h-9 items-center gap-2 rounded-lg bg-[#002244] px-4 text-xs font-semibold text-white hover:bg-[#00345f] disabled:opacity-60"
               >
-                <Plus size={15} />
+                <Plus size={14} />
 
-                {saving
-                  ? "Adding..."
-                  : "Add note"}
+                {saving ? "Adding..." : "Add note"}
               </button>
             </div>
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function StatCard({ label, value, meta, icon: Icon, iconClass }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex items-start justify-between">
+        <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-slate-400">
+          {label}
+        </span>
+
+        <div
+          className={`flex h-8 w-8 items-center justify-center rounded-lg ${iconClass}`}
+        >
+          <Icon size={15} />
+        </div>
+      </div>
+
+      <div className="mt-3 text-[24px] font-bold tracking-[-0.02em] text-slate-900">
+        {value}
+      </div>
+
+      <div className="mt-1 text-[11px] text-slate-400">{meta}</div>
+    </div>
+  );
+}
+
+function DetailSection({ title, action, children }) {
+  return (
+    <section>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="text-[10px] font-bold uppercase tracking-[0.08em] text-slate-400">
+          {title}
+        </h3>
+
+        {action}
+      </div>
+
+      {children}
+    </section>
+  );
+}
+
+function ContactLine({ icon: Icon, value }) {
+  return (
+    <div className="flex min-w-0 items-center gap-2.5 text-xs text-slate-600">
+      <Icon size={14} className="shrink-0 text-slate-400" />
+
+      <span className="truncate">{value}</span>
+    </div>
+  );
+}
+
+function InfoItem({ label, value }) {
+  return (
+    <div className="min-w-0">
+      <span className="block text-[10px] uppercase tracking-wide text-slate-400">
+        {label}
+      </span>
+
+      <div className="mt-1 truncate text-xs font-medium text-slate-700">
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function FormField({ label, required = false, children }) {
+  return (
+    <div>
+      <label className="mb-1.5 block text-xs font-semibold text-slate-600">
+        {label}
+
+        {required && <span className="ml-0.5 text-red-500">*</span>}
+      </label>
+
+      {children}
     </div>
   );
 }

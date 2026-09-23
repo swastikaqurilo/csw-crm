@@ -6,9 +6,15 @@ import {
   Clock,
   CheckCircle2,
   FileText,
-  Send,
   Download,
   X,
+  Mail,
+  MessageCircle,
+  Pencil,
+  Trash2,
+  RefreshCw,
+  AlertCircle,
+  ArrowUpRight,
 } from "lucide-react";
 
 import {
@@ -22,38 +28,60 @@ import {
 
 const tabs = ["Today", "Upcoming", "Overdue", "Completed"];
 
+const typeOptions = [
+  "All Types",
+  "Call",
+  "Email",
+  "Meeting",
+  "WhatsApp",
+  "Other",
+];
+
+const priorityOptions = [
+  "All Priorities",
+  "High",
+  "Medium",
+  "Low",
+];
+
+const stateOptions = [
+  "All States",
+  "Pending",
+  "Completed",
+  "Cancelled",
+];
+
+const EMPTY_FORM = {
+  contact: "",
+  enquiry: "",
+  type: "Call",
+  subject: "",
+  notes: "",
+  scheduledAt: "",
+  status: "Pending",
+  priority: "Medium",
+};
+
 function FollowUps() {
   const [followUps, setFollowUps] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [enquiries, setEnquiries] = useState([]);
 
   const [activeTab, setActiveTab] = useState("Today");
-  
+
   const [typeFilter, setTypeFilter] = useState("All Types");
-  const [priorityFilter, setPriorityFilter] = useState("All Priorities");
-  const [stateFilter, setStateFilter] = useState("Pending Execution");
+  const [priorityFilter, setPriorityFilter] =
+    useState("All Priorities");
+  const [stateFilter, setStateFilter] =
+    useState("All States");
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const [editingFollowUp, setEditingFollowUp] = useState(null);
 
-  // const [selectedDate, setSelectedDate] = useState(
-  //   new Date().toISOString().split("T")[0]
-  // );
-
-  const [formData, setFormData] = useState({
-    contact: "",
-    enquiry: "",
-    type: "Call",
-    subject: "",
-    notes: "",
-    scheduledAt: "",
-    status: "Pending",
-    priority: "Medium",
-  });
+  const [formData, setFormData] = useState(EMPTY_FORM);
 
   const fetchFollowUps = async () => {
     try {
@@ -65,6 +93,7 @@ function FollowUps() {
       setFollowUps(response.data?.data || []);
     } catch (err) {
       console.error(err);
+
       setError(
         err.response?.data?.message ||
           "Failed to load follow-ups."
@@ -83,7 +112,7 @@ function FollowUps() {
 
       setContacts(response.data?.data || []);
     } catch (err) {
-      console.error("Failed to load contacts", err);
+      console.error("Failed to load contacts:", err);
     }
   };
 
@@ -96,7 +125,7 @@ function FollowUps() {
 
       setEnquiries(response.data?.data || []);
     } catch (err) {
-      console.error("Failed to load enquiries", err);
+      console.error("Failed to load enquiries:", err);
     }
   };
 
@@ -106,27 +135,64 @@ function FollowUps() {
     fetchEnquiries();
   }, []);
 
-  const getCustomerName = (followUp) => {
-    return followUp.contact?.name || "Unknown Contact";
-  };
+  const getCustomerName = (item) => {
+    if (item.contact?.name) return item.contact.name;
 
-  const getCompanyName = (followUp) => {
-    return followUp.contact?.company || "No Company";
-  };
-
-  const getEnquiryNumber = (followUp) => {
-    return (
-      followUp.enquiry?.enquiryNumber ||
-      "No Enquiry"
+    const contact = contacts.find(
+      (c) => c._id === item.contact
     );
+
+    return contact?.name || "Unknown Contact";
+  };
+
+  const getCompanyName = (item) => {
+    if (item.contact?.company) return item.contact.company;
+
+    const contact = contacts.find(
+      (c) => c._id === item.contact
+    );
+
+    return contact?.company || "";
+  };
+
+  const getEnquiryNumber = (item) => {
+    if (item.enquiry?.enquiryNumber) {
+      return item.enquiry.enquiryNumber;
+    }
+
+    const enquiry = enquiries.find(
+      (e) => e._id === item.enquiry
+    );
+
+    return enquiry?.enquiryNumber || "";
+  };
+
+  const getPhoneNumber = (item) => {
+    if (item.contact?.phone) {
+      return item.contact.phone;
+    }
+
+    const contact = contacts.find(
+      (c) => c._id === item.contact
+    );
+
+    return contact?.phone || "";
+  };
+
+  const getInitials = (name = "") => {
+    return name
+      .split(" ")
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0])
+      .join("")
+      .toUpperCase();
   };
 
   const formatDateTime = (date) => {
-    if (!date) return "No date";
+    if (!date) return "—";
 
-    const d = new Date(date);
-
-    return d.toLocaleString("en-IN", {
+    return new Date(date).toLocaleString("en-IN", {
       day: "2-digit",
       month: "short",
       hour: "2-digit",
@@ -135,96 +201,136 @@ function FollowUps() {
     });
   };
 
-  const getColor = (item) => {
-    if (item.priority === "High") return "red";
-    if (item.priority === "Medium") return "orange";
-    return "amber";
-  };
+  const formatDate = (date) => {
+    if (!date) return "—";
 
-  const getInitials = (name) => {
-    if (!name) return "?";
-
-    return name
-      .split(" ")
-      .map((n) => n[0])
-      .join("")
-      .slice(0, 2)
-      .toUpperCase();
+    return new Date(date).toLocaleDateString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
   };
 
   const isToday = (date) => {
-    const today = new Date();
+    if (!date) return false;
+
+    const current = new Date();
     const target = new Date(date);
 
     return (
-      today.getFullYear() === target.getFullYear() &&
-      today.getMonth() === target.getMonth() &&
-      today.getDate() === target.getDate()
+      current.getDate() === target.getDate() &&
+      current.getMonth() === target.getMonth() &&
+      current.getFullYear() === target.getFullYear()
     );
   };
 
-  const isCompleted = (item) =>
-    item.status === "Completed";
+  const isCompleted = (item) => {
+    return item.status === "Completed";
+  };
 
   const isOverdue = (item) => {
-    if (item.status !== "Pending") return false;
+    return (
+      item.status === "Pending" &&
+      new Date(item.scheduledAt) < new Date()
+    );
+  };
 
-    return new Date(item.scheduledAt) < new Date();
+  const getTypeIcon = (type) => {
+    switch (type) {
+      case "Call":
+        return <Phone size={14} />;
+
+      case "Email":
+        return <Mail size={14} />;
+
+      case "Meeting":
+        return <Calendar size={14} />;
+
+      case "WhatsApp":
+        return <MessageCircle size={14} />;
+
+      default:
+        return <FileText size={14} />;
+    }
+  };
+
+  const getTypeClasses = (type) => {
+    switch (type) {
+      case "Call":
+        return "bg-blue-50 text-blue-700 border-blue-100";
+
+      case "Meeting":
+        return "bg-violet-50 text-violet-700 border-violet-100";
+
+      case "Email":
+        return "bg-emerald-50 text-emerald-700 border-emerald-100";
+
+      case "WhatsApp":
+        return "bg-green-50 text-green-700 border-green-100";
+
+      default:
+        return "bg-slate-50 text-slate-600 border-slate-200";
+    }
+  };
+
+  const getPriorityClasses = (priority) => {
+    switch (priority) {
+      case "High":
+        return "bg-red-50 text-red-700 border-red-100";
+
+      case "Medium":
+        return "bg-amber-50 text-amber-700 border-amber-100";
+
+      default:
+        return "bg-slate-50 text-slate-600 border-slate-200";
+    }
   };
 
   const filteredFollowUps = useMemo(() => {
     return followUps.filter((item) => {
-      const today = isToday(item.scheduledAt);
-      const completed = isCompleted(item);
-      const overdue = isOverdue(item);
+      const scheduled = new Date(item.scheduledAt);
 
-      let tabMatch = true;
+      let matchesTab = true;
 
       if (activeTab === "Today") {
-        tabMatch = today && !completed;
+        matchesTab =
+          isToday(scheduled) &&
+          item.status === "Pending";
       }
 
       if (activeTab === "Upcoming") {
-        tabMatch =
-          new Date(item.scheduledAt) > new Date() &&
-          !completed;
+        matchesTab =
+          scheduled > new Date() &&
+          item.status === "Pending";
       }
 
       if (activeTab === "Overdue") {
-        tabMatch = overdue;
+        matchesTab =
+          scheduled < new Date() &&
+          item.status === "Pending";
       }
 
       if (activeTab === "Completed") {
-        tabMatch = completed;
+        matchesTab = item.status === "Completed";
       }
 
-      const typeMatch =
+      const matchesType =
         typeFilter === "All Types" ||
         item.type === typeFilter;
 
-      const priorityMatch =
+      const matchesPriority =
         priorityFilter === "All Priorities" ||
         item.priority === priorityFilter;
 
-      let stateMatch = true;
-
-      if (stateFilter === "Pending Execution") {
-        stateMatch = item.status === "Pending";
-      }
-
-      if (stateFilter === "Completed") {
-        stateMatch = item.status === "Completed";
-      }
-
-      if (stateFilter === "Rescheduled") {
-        stateMatch = false;
-      }
+      const matchesState =
+        stateFilter === "All States" ||
+        item.status === stateFilter;
 
       return (
-        tabMatch &&
-        typeMatch &&
-        priorityMatch &&
-        stateMatch
+        matchesTab &&
+        matchesType &&
+        matchesPriority &&
+        matchesState
       );
     });
   }, [
@@ -235,24 +341,27 @@ function FollowUps() {
     stateFilter,
   ]);
 
-  const todayFollowUps = followUps.filter(
-    (item) =>
-      isToday(item.scheduledAt) &&
-      item.status !== "Cancelled"
-  );
+  const todayFollowUps = useMemo(() => {
+    return followUps.filter(
+      (item) =>
+        isToday(item.scheduledAt) &&
+        item.status !== "Cancelled"
+    );
+  }, [followUps]);
 
-  const completedToday = todayFollowUps.filter(
-    (item) => item.status === "Completed"
-  );
+  const completedToday = useMemo(() => {
+    return followUps.filter(
+      (item) =>
+        isToday(item.completedAt || item.scheduledAt) &&
+        item.status === "Completed"
+    ).length;
+  }, [followUps]);
 
-  const commitmentRate =
-    todayFollowUps.length > 0
-      ? Math.round(
-          (completedToday.length /
-            todayFollowUps.length) *
-            100
-        )
-      : 0;
+  const commitmentRate = todayFollowUps.length
+    ? Math.round(
+        (completedToday / todayFollowUps.length) * 100
+      )
+    : 0;
 
   const scheduledCallsMeetings = followUps.filter(
     (item) =>
@@ -260,43 +369,9 @@ function FollowUps() {
       ["Call", "Meeting"].includes(item.type)
   ).length;
 
-  const openCreateModal = () => {
-    setEditingId(null);
-
-    setFormData({
-      contact: contacts[0]?._id || "",
-      enquiry: "",
-      type: "Call",
-      subject: "",
-      notes: "",
-      scheduledAt: "",
-      status: "Pending",
-      priority: "Medium",
-    });
-
-    setShowModal(true);
-  };
-
-  const openEditModal = (item) => {
-    setEditingId(item._id);
-
-    setFormData({
-      contact: item.contact?._id || item.contact || "",
-      enquiry: item.enquiry?._id || item.enquiry || "",
-      type: item.type || "Call",
-      subject: item.subject || "",
-      notes: item.notes || "",
-      scheduledAt: item.scheduledAt
-        ? new Date(item.scheduledAt)
-            .toISOString()
-            .slice(0, 16)
-        : "",
-      status: item.status || "Pending",
-      priority: item.priority || "Medium",
-    });
-
-    setShowModal(true);
-  };
+  const pendingExecution = followUps.filter(
+    (item) => item.status === "Pending"
+  ).length;
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -307,10 +382,61 @@ function FollowUps() {
     }));
   };
 
+  const openCreateModal = () => {
+    setEditingId(null);
+
+    setFormData({
+      ...EMPTY_FORM,
+      contact: contacts[0]?._id || "",
+    });
+
+    setShowModal(true);
+  };
+
+  const openEditModal = (item) => {
+    setEditingId(item._id);
+
+    const scheduledDate = item.scheduledAt
+      ? new Date(item.scheduledAt)
+      : null;
+
+    const localDateTime = scheduledDate
+      ? new Date(
+          scheduledDate.getTime() -
+            scheduledDate.getTimezoneOffset() * 60000
+        )
+          .toISOString()
+          .slice(0, 16)
+      : "";
+
+    setFormData({
+      contact:
+        item.contact?._id ||
+        item.contact ||
+        "",
+
+      enquiry:
+        item.enquiry?._id ||
+        item.enquiry ||
+        "",
+
+      type: item.type || "Call",
+      subject: item.subject || "",
+      notes: item.notes || "",
+      scheduledAt: localDateTime,
+      status: item.status || "Pending",
+      priority: item.priority || "Medium",
+    });
+
+    setShowModal(true);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
 
     try {
+      setError("");
+
       const payload = {
         ...formData,
         enquiry: formData.enquiry || null,
@@ -324,29 +450,50 @@ function FollowUps() {
 
       setShowModal(false);
       setEditingId(null);
+      setFormData(EMPTY_FORM);
 
       await fetchFollowUps();
     } catch (err) {
       console.error(err);
 
-      alert(
+      setError(
         err.response?.data?.message ||
           "Failed to save follow-up."
       );
     }
   };
+
   const markCompleted = async (item) => {
     try {
-      await updateFollowup(item._id, {
+      const response = await updateFollowup(item._id, {
+        ...item,
         status: "Completed",
         completedAt: new Date().toISOString(),
       });
 
-      await fetchFollowUps();
+      const updated =
+        response.data?.data || {
+          ...item,
+          status: "Completed",
+        };
+
+      setFollowUps((prev) =>
+        prev.map((followUp) =>
+          followUp._id === item._id
+            ? updated
+            : followUp
+        )
+      );
+
+      setActiveTab("Completed");
+      setStateFilter("Completed");
     } catch (err) {
       console.error(err);
 
-      alert("Failed to mark follow-up as completed.");
+      setError(
+        err.response?.data?.message ||
+          "Failed to complete follow-up."
+      );
     }
   };
 
@@ -363,675 +510,1106 @@ function FollowUps() {
     } catch (err) {
       console.error(err);
 
-      alert("Failed to delete follow-up.");
+      setError(
+        err.response?.data?.message ||
+          "Failed to delete follow-up."
+      );
     }
   };
 
+  const handleTabChange = (tab) => {
+    setActiveTab(tab);
+
+    if (tab === "Completed") {
+      setStateFilter("Completed");
+    } else {
+      setStateFilter("All States");
+    }
+  };
+
+  const handleExportLedger = () => {
+    const rows = [
+      [
+        "Subject",
+        "Contact",
+        "Company",
+        "Type",
+        "Priority",
+        "Status",
+        "Scheduled At",
+        "Enquiry",
+        "Notes",
+      ],
+      ...followUps.map((item) => [
+        item.subject || "",
+        getCustomerName(item),
+        getCompanyName(item),
+        item.type || "",
+        item.priority || "",
+        item.status || "",
+        formatDateTime(item.scheduledAt),
+        getEnquiryNumber(item),
+        item.notes || "",
+      ]),
+    ];
+
+    const csv = rows
+      .map((row) =>
+        row
+          .map((value) =>
+            `"${String(value)
+              .replace(/"/g, '""')
+              .replace(/\n/g, " ")}"`
+          )
+          .join(",")
+      )
+      .join("\n");
+
+    const blob = new Blob([csv], {
+      type: "text/csv;charset=utf-8;",
+    });
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = "csw-follow-up-ledger.csv";
+
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    URL.revokeObjectURL(url);
+  };
+
+  const getTabCount = (tab) => {
+    const now = new Date();
+
+    return followUps.filter((item) => {
+      const scheduled = new Date(item.scheduledAt);
+
+      if (tab === "Today") {
+        return (
+          isToday(scheduled) &&
+          item.status === "Pending"
+        );
+      }
+
+      if (tab === "Upcoming") {
+        return (
+          scheduled > now &&
+          item.status === "Pending"
+        );
+      }
+
+      if (tab === "Overdue") {
+        return (
+          scheduled < now &&
+          item.status === "Pending"
+        );
+      }
+
+      return item.status === "Completed";
+    }).length;
+  };
+
   return (
-    <div className="followups-page">
-      {/* PAGE HEADER */}
-      <div className="page-heading">
+    <div className="min-h-full bg-[#f7f9fc]">
+
+      <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+
         <div>
-          <div className="fu-breadcrumb">
-            SALES OPERATIONS & EXECUTION{" "}
-            <span>•</span> IST Soft Active
+          <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+            <span>Sales Operations</span>
+            <span className="text-slate-300">•</span>
+            <span>Execution</span>
           </div>
 
-          <h1>Follow-ups</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-950">
+            Follow-ups
+          </h1>
 
-          <p>
-            Stay on top of customer conversations and
-            pending actions.
+          <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">
+            Manage customer calls, meetings and commercial
+            follow-ups from one place.
           </p>
         </div>
 
-        <div className="fu-header-right">
-          <div className="fu-metric">
-            <span className="fu-metric-label">
-              Commitment Rate
-            </span>
+        <div className="flex items-center gap-3">
 
-            <strong>{commitmentRate}%</strong>
+          <div className="hidden items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-2.5 shadow-sm sm:flex">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+              <CheckCircle2 size={16} />
+            </div>
+
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                Commitment Rate
+              </p>
+
+              <p className="text-sm font-semibold text-slate-900">
+                {commitmentRate}%
+              </p>
+            </div>
           </div>
-{/* 
-          <div className="fu-metric">
-            <span className="fu-metric-label">
-              Target Pipeline
-            </span>
 
-            <strong>₹5.3L</strong>
-          </div> */}
-
-          <button
-            className="btn btn-primary"
+          {/* <button
+            type="button"
             onClick={openCreateModal}
+            className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#002244] px-4 text-sm font-medium text-white shadow-sm transition hover:bg-[#00345f] hover:shadow-md"
           >
             <Plus size={16} />
-            Schedule follow-up
-          </button>
+            Schedule Follow-up
+          </button> */}
         </div>
       </div>
 
-      {/* TABS */}
-      <div className="fu-tabs-row">
-        <div className="tabs">
-          {tabs.map((tab) => (
-            <button
-              key={tab}
-              className={`tab ${
-                activeTab === tab ? "active" : ""
-              }`}
-              onClick={() => setActiveTab(tab)}
-            >
-              {tab}
-            </button>
-          ))}
-        </div>
-
-        {/* <div className="fu-date-selector">
-          <label htmlFor="followup-date">Date</label>
-
-          <input
-            id="followup-date"
-            type="date"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-          />
-
-          <span className="fu-date-today">
-            {selectedDate === new Date().toISOString().split("T")[0]
-              ? "Today"
-              : ""}
-          </span>
-        </div> */}
-      </div>
-
-      {/* FILTERS */}
-      <div className="fu-filters">
-        <div className="fu-filter-group">
-          <label>Follow-up Type</label>
-
-          <select
-            className="filter-select"
-            value={typeFilter}
-            onChange={(e) =>
-              setTypeFilter(e.target.value)
-            }
-          >
-            <option>All Types</option>
-            <option>Call</option>
-            <option>Email</option>
-            <option>Meeting</option>
-            <option>WhatsApp</option>
-            <option>Other</option>
-          </select>
-        </div>
-
-        <div className="fu-filter-group">
-          <label>Priority</label>
-
-          <select
-            className="filter-select"
-            value={priorityFilter}
-            onChange={(e) =>
-              setPriorityFilter(e.target.value)
-            }
-          >
-            <option>All Priorities</option>
-            <option>High</option>
-            <option>Medium</option>
-            <option>Low</option>
-          </select>
-        </div>
-
-        <div className="fu-filter-group">
-          <label>State</label>
-
-          <select
-            className="filter-select"
-            value={stateFilter}
-            onChange={(e) =>
-              setStateFilter(e.target.value)
-            }
-          >
-            <option>Pending Execution</option>
-            <option>Completed</option>
-          </select>
-        </div>
-      </div>
-
-      {/* ERROR */}
       {error && (
-        <div className="error-message">
-          {error}
+        <div className="mb-5 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <AlertCircle size={17} className="mt-0.5 shrink-0" />
+
+          <div className="flex-1">
+            <p className="font-medium">
+              Something went wrong
+            </p>
+
+            <p className="mt-0.5 text-red-600/80">
+              {error}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setError("")}
+            className="text-red-400 hover:text-red-700"
+          >
+            <X size={16} />
+          </button>
         </div>
       )}
 
-      {/* MAIN CONTENT */}
-      <div className="fu-workspace">
-        {/* LEFT */}
-        <div className="fu-list">
-          {loading ? (
-            <div className="card">
-              Loading follow-ups...
+      <section className="mb-5 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+
+        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">
+              Quick Actions
+            </h2>
+
+            <p className="mt-0.5 text-xs text-slate-500">
+              Frequently used follow-up operations
+            </p>
+          </div>
+
+          <div className="rounded-lg bg-slate-50 p-2 text-slate-500">
+            <ArrowUpRight size={16} />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 p-4 sm:grid-cols-2">
+
+          <button
+            type="button"
+            onClick={openCreateModal}
+            className="group flex items-center gap-3 rounded-xl border border-slate-200 px-4 py-3.5 text-left transition hover:border-[#002244]/20 hover:bg-slate-50"
+          >
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#002244]/10 text-[#002244] transition group-hover:bg-[#002244] group-hover:text-white">
+              <Plus size={18} />
             </div>
-          ) : filteredFollowUps.length === 0 ? (
-            <div className="card">
-              No follow-ups found.
+
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-slate-800">
+                Schedule Follow-up
+              </p>
+
+              <p className="mt-0.5 text-xs text-slate-400">
+                Create a new customer activity
+              </p>
             </div>
-          ) : (
-            filteredFollowUps.map((item) => {
-              const color = getColor(item);
+          </button>
+
+          <button
+            type="button"
+            onClick={handleExportLedger}
+            className="group flex items-center gap-3 rounded-xl border border-slate-200 px-4 py-3.5 text-left transition hover:border-slate-300 hover:bg-slate-50"
+          >
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition group-hover:bg-[#002244] group-hover:text-white">
+              <Download size={18} />
+            </div>
+
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-slate-800">
+                Export Daily Ledger
+              </p>
+
+              <p className="mt-0.5 text-xs text-slate-400">
+                Download the follow-up activity
+              </p>
+            </div>
+          </button>
+
+        </div>
+      </section>
+
+      <section className="mb-5 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+
+        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">
+              Follow-up Summary
+            </h2>
+
+            <p className="mt-0.5 text-xs text-slate-500">
+              Current execution overview
+            </p>
+          </div>
+
+          <div className="rounded-lg bg-slate-50 p-2 text-slate-500">
+            <FileText size={16} />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3">
+
+          <div className="border-b border-slate-100 px-5 py-4 sm:border-b-0 sm:border-r">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium text-slate-500">
+                Calls & Meetings
+              </p>
+
+              <Phone
+                size={15}
+                className="text-slate-300"
+              />
+            </div>
+
+            <p className="mt-2 text-2xl font-semibold tracking-tight !text-black">
+              {scheduledCallsMeetings}
+            </p>
+
+            <p className="mt-1 text-xs text-slate-400">
+              Pending scheduled
+            </p>
+          </div>
+
+          <div className="border-b border-slate-100 px-5 py-4 sm:border-b-0 sm:border-r">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium text-slate-500">
+                Pending Execution
+              </p>
+
+              <Clock
+                size={15}
+                className="text-slate-300"
+              />
+            </div>
+
+            <p className="mt-2 text-2xl font-semibold tracking-tight !text-black">
+              {pendingExecution}
+            </p>
+
+            <p className="mt-1 text-xs text-slate-400">
+              Activities awaiting action
+            </p>
+          </div>
+
+          <div className="px-5 py-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium text-slate-500">
+                Total Follow-ups
+              </p>
+
+              <Calendar
+                size={15}
+                className="text-slate-300"
+              />
+            </div>
+
+            <p className="mt-2 text-2xl font-semibold tracking-tight !text-black">
+              {followUps.length}
+            </p>
+
+            <p className="mt-1 text-xs text-slate-400">
+              All recorded activities
+            </p>
+          </div>
+
+        </div>
+
+        </section>
+
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,3fr)_minmax(250px,1fr)]">
+
+        <section className="min-w-0">
+
+          <div className="mb-4 flex overflow-x-auto rounded-xl border border-slate-200 bg-slate-100/70 p-1">
+
+            {tabs.map((tab) => {
+              const active = activeTab === tab;
+              const count = getTabCount(tab);
 
               return (
-                <div
-                  key={item._id}
-                  className={`fu-card fu-card-${color}`}
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => handleTabChange(tab)}
+                  className={`flex shrink-0 items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition ${
+                    active
+                      ? "bg-white text-[#002244] shadow-sm"
+                      : "text-slate-500 hover:text-slate-800"
+                  }`}
                 >
-                  {/* TOP */}
-                  <div className="fu-card-top">
-                    <div className="fu-card-badges">
-                      <span
-                        className={`fu-type-badge fu-type-${color}`}
-                      >
-                        {item.type === "Call" && (
-                          <Phone size={12} />
-                        )}
+                  {tab}
 
-                        {item.type === "Meeting" && (
-                          <Calendar size={12} />
-                        )}
-
-                        {item.type !== "Call" &&
-                          item.type !== "Meeting" && (
-                            <FileText size={12} />
-                          )}
-
-                        {item.type}
-                      </span>
-
-                      <span
-                        className={`badge ${
-                          item.priority === "High"
-                            ? "badge-danger"
-                            : item.priority === "Medium"
-                            ? "badge-warning"
-                            : "badge-neutral"
-                        }`}
-                      >
-                        {item.priority} Priority
-                      </span>
-
-                      <span className="badge badge-neutral">
-                        {item.status}
-                      </span>
-                    </div>
-
-                    <div className="fu-card-time">
-                      <Clock size={13} />
-                      {formatDateTime(
-                        item.scheduledAt
-                      )}
-                    </div>
-                  </div>
-
-                  {/* CUSTOMER */}
-                  <div className="fu-card-customer">
-                    <div className="fu-customer-label">
-                      CUSTOMER & ACCOUNT
-                    </div>
-
-                    <strong>
-                      {getCustomerName(item)} /{" "}
-                      {getCompanyName(item)}
-                    </strong>
-                  </div>
-
-                  {/* COMMERCIAL */}
-                  <div className="fu-card-linkage">
-                    <div>
-                      <div className="fu-customer-label">
-                        COMMERCIAL LINKAGE
-                      </div>
-
-                      <div className="fu-linkage-value">
-                        <span className="font-mono text-brand">
-                          {getEnquiryNumber(item)}
-                        </span>
-
-                        {item.subject && (
-                          <span className="text-muted">
-                            {" "}
-                            · {item.subject}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* AGENDA */}
-                  <div className="fu-card-agenda">
-                    <div className="fu-customer-label">
-                      ACTION AGENDA
-                    </div>
-
-                    <p>
-                      {item.notes ||
-                        "No notes added for this follow-up."}
-                    </p>
-                  </div>
-
-                  {/* FOOTER */}
-                  <div className="fu-card-footer">
-                    <div className="fu-assigned">
-                      <div className="avatar avatar-sm">
-                        {getInitials(getCustomerName(item))}
-                      </div>
-
-                      <span>
-                        Contact:{" "}
-                        <strong>
-                          {getCustomerName(item)}
-                        </strong>
-                      </span>
-                    </div>
-                   <div className="fu-card-actions">
-                      {item.type === "Call" && (
-                        <button className="btn btn-primary btn-sm">
-                          <Phone size={13} />
-                          Call Now
-                        </button>
-                      )}
-
-                      <button
-                        className="btn btn-secondary btn-sm"
-                        onClick={() =>
-                          openEditModal(item)
-                        }
-                      >
-                        Edit
-                      </button>
-
-                      {item.status === "Pending" && (
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          onClick={() =>
-                            markCompleted(item)
-                          }
-                        >
-                          <CheckCircle2 size={13} />
-                          Mark Completed
-                        </button>
-                      )}
-
-                      <button
-                        className="btn btn-secondary btn-sm"
-                        onClick={() =>
-                          handleDelete(item._id)
-                        }
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                  <span
+                    className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                      active
+                        ? "bg-[#002244]/10 text-[#002244]"
+                        : "bg-slate-200 text-slate-500"
+                    }`}
+                  >
+                    {count}
+                  </span>
+                </button>
               );
-            })
-          )}
-        </div>
-
-        <aside className="fu-sidebar">
-
-  {/* SLA */}
-  <div className="card fu-sla-card">
-    <div className="fu-sla-card-header">
-      <h3>Daily Conversion SLA</h3>
-
-      <span className="badge badge-brand">
-        TARGET 100%
-      </span>
-    </div>
-
-    <div className="fu-sla-card-body">
-      <div className="fu-sla-circle">
-        <svg viewBox="0 0 120 120">
-          <circle
-            cx="60"
-            cy="60"
-            r="52"
-            fill="none"
-            stroke="var(--color-ink-100)"
-            strokeWidth="10"
-          />
-
-          <circle
-            cx="60"
-            cy="60"
-            r="52"
-            fill="none"
-            stroke="var(--color-brand-500)"
-            strokeWidth="10"
-            strokeDasharray={`${
-              (commitmentRate / 100) *
-              2 *
-              Math.PI *
-              52
-            } ${2 * Math.PI * 52}`}
-            strokeLinecap="round"
-            transform="rotate(-90 60 60)"
-          />
-        </svg>
-
-        <div className="fu-sla-value">
-          <strong>{commitmentRate}%</strong>
-
-          <span>
-            {completedToday.length} OF{" "}
-            {todayFollowUps.length} DONE
-          </span>
-        </div>
-      </div>
-    </div>
-  </div>
-
-
-  {/* SUMMARY */}
-  <div className="card fu-side-card">
-    <div className="fu-side-card-header">
-      <h3>Follow-up Summary</h3>
-    </div>
-
-    <div className="fu-side-card-body">
-
-      <div className="fu-side-row">
-        <div>
-          <div className="fu-card-section-label">
-            Calls & Meetings
+            })}
           </div>
 
-          <strong className="fu-side-number">
-            {scheduledCallsMeetings}
-          </strong>
+          <div className="mb-4 flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:flex-row">
 
-          <span className="fu-side-unit">
-            Scheduled
-          </span>
-        </div>
+            <div className="flex-1">
+              <select
+                value={typeFilter}
+                onChange={(e) =>
+                  setTypeFilter(e.target.value)
+                }
+                className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-600 outline-none transition focus:border-[#002244] focus:ring-2 focus:ring-[#002244]/10"
+              >
+                {typeOptions.map((option) => (
+                  <option key={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-        <div className="fu-side-metric-right">
-          <div className="fu-card-section-label">
-            Commercial & Payments
-          </div>
+            <div className="flex-1">
+              <select
+                value={priorityFilter}
+                onChange={(e) =>
+                  setPriorityFilter(e.target.value)
+                }
+                className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-600 outline-none transition focus:border-[#002244] focus:ring-2 focus:ring-[#002244]/10"
+              >
+                {priorityOptions.map((option) => (
+                  <option key={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          <strong className="fu-side-amount">
-            ₹65,000
-          </strong>
-        </div>
-      </div>
-
-      <div className="fu-side-divider" />
-
-      <div className="fu-side-row">
-        <div>
-          <div className="fu-card-section-label">
-            Total Follow-ups
-          </div>
-
-          <strong className="fu-side-number">
-            {followUps.length}
-          </strong>
-        </div>
-      </div>
-
-    </div>
-  </div>
-
-
-  {/* QUICK ACTIONS */}
-  <div className="card fu-side-card">
-    <div className="fu-side-card-header">
-      <h3>Quick Actions</h3>
-    </div>
-
-    <div className="fu-side-card-body">
-      <div className="fu-quick-actions">
-
-        <button className="btn btn-secondary btn-sm">
-          <Send size={13} />
-          Send Bulk Payment Reminders
-        </button>
-
-        <button className="btn btn-secondary btn-sm">
-          <Download size={13} />
-          Export Daily Follow-up Ledger
-        </button>
-
-      </div>
-    </div>
-  </div>
-
-</aside>
-      </div>
-
-    {showModal && (
-      <div
-        className="contact-modal-overlay"
-        onClick={() => setShowModal(false)}
-      >
-        <div
-          className="contact-modal"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {/* HEADER */}
-          <div className="contact-modal-header">
-            <div>
-              <h2>Schedule Follow-up</h2>
-              <p>Create a new follow-up for a customer or enquiry.</p>
+            <div className="flex-1">
+              <select
+                value={stateFilter}
+                onChange={(e) =>
+                  setStateFilter(e.target.value)
+                }
+                className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-600 outline-none transition focus:border-[#002244] focus:ring-2 focus:ring-[#002244]/10"
+              >
+                {stateOptions.map((option) => (
+                  <option key={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <button
               type="button"
-              className="contact-modal-close"
-              onClick={() => setShowModal(false)}
+              onClick={fetchFollowUps}
+              className="flex h-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 px-3 text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
+              title="Refresh"
             >
-              <X size={18} />
+              <RefreshCw
+                size={16}
+                className={loading ? "animate-spin" : ""}
+              />
             </button>
+
           </div>
 
-          {/* FORM */}
-          <form onSubmit={handleSubmit}>
-            <div className="contact-form-grid">
+          <div className="space-y-3">
 
-              {/* Contact */}
-              <div className="contact-form-group">
-                <label>
-                  Contact <span>*</span>
-                </label>
+            {loading ? (
+              <div className="rounded-xl border border-slate-200 bg-white px-6 py-16 text-center shadow-sm">
+                <div className="mx-auto h-7 w-7 animate-spin rounded-full border-2 border-slate-200 border-t-[#002244]" />
 
-                <select
-                  value={formData.contact}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      contact: e.target.value,
-                    })
-                  }
-                  required
+                <p className="mt-4 text-sm font-medium text-slate-700">
+                  Loading follow-ups
+                </p>
+
+                <p className="mt-1 text-xs text-slate-400">
+                  Fetching your latest activities...
+                </p>
+              </div>
+            ) : filteredFollowUps.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-white px-6 py-16 text-center">
+                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 text-slate-400">
+                  <Calendar size={21} />
+                </div>
+
+                <h3 className="mt-4 text-sm font-semibold text-slate-900">
+                  No follow-ups found
+                </h3>
+
+                <p className="mx-auto mt-1 max-w-sm text-sm text-slate-500">
+                  There are no activities matching the
+                  current tab and filters.
+                </p>
+
+                <button
+                  type="button"
+                  onClick={openCreateModal}
+                  className="mt-5 inline-flex items-center gap-2 rounded-lg bg-[#002244] px-4 py-2.5 text-sm font-medium text-white transition hover:bg-[#00345f]"
                 >
-                  <option value="">Select contact</option>
+                  <Plus size={15} />
+                  Schedule Follow-up
+                </button>
+              </div>
+            ) : (
+              filteredFollowUps.map((item) => {
+                const customer =
+                  getCustomerName(item);
 
-                  {contacts.map((contact) => (
-                    <option key={contact._id} value={contact._id}>
-                      {contact.name} — {contact.company}
-                    </option>
-                  ))}
-                </select>
+                const company =
+                  getCompanyName(item);
+
+                const enquiry =
+                  getEnquiryNumber(item);
+
+                const phone =
+                  getPhoneNumber(item);
+
+                return (
+                  <article
+                    key={item._id}
+                    className="group overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition duration-200 hover:border-slate-300 hover:shadow-md"
+                  >
+                    <div className="flex">
+
+                      {/* LEFT DATE */}
+                      <div className="hidden w-20 shrink-0 border-r border-slate-100 bg-slate-50/70 px-3 py-4 text-center sm:block">
+
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                          {new Date(
+                            item.scheduledAt
+                          ).toLocaleDateString(
+                            "en-IN",
+                            {
+                              weekday: "short",
+                            }
+                          )}
+                        </p>
+
+                        <p className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
+                          {new Date(
+                            item.scheduledAt
+                          ).getDate()}
+                        </p>
+
+                        <p className="text-[10px] font-medium uppercase text-slate-400">
+                          {new Date(
+                            item.scheduledAt
+                          ).toLocaleDateString(
+                            "en-IN",
+                            {
+                              month: "short",
+                            }
+                          )}
+                        </p>
+                      </div>
+
+                      <div className="min-w-0 flex-1 p-4">
+
+                        <div className="flex flex-wrap items-center gap-2">
+
+                          <span
+                            className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-semibold ${getTypeClasses(
+                              item.type
+                            )}`}
+                          >
+                            {getTypeIcon(item.type)}
+                            {item.type}
+                          </span>
+
+                          <span
+                            className={`rounded-md border px-2 py-1 text-[11px] font-semibold ${getPriorityClasses(
+                              item.priority
+                            )}`}
+                          >
+                            {item.priority}
+                          </span>
+
+                          <span
+                            className={`rounded-md px-2 py-1 text-[11px] font-semibold ${
+                              item.status ===
+                              "Completed"
+                                ? "bg-emerald-50 text-emerald-700"
+                                : item.status ===
+                                  "Cancelled"
+                                ? "bg-slate-100 text-slate-500"
+                                : "bg-blue-50 text-blue-700"
+                            }`}
+                          >
+                            {item.status}
+                          </span>
+
+                          {isOverdue(item) && (
+                            <span className="rounded-md bg-red-50 px-2 py-1 text-[11px] font-semibold text-red-600">
+                              Overdue
+                            </span>
+                          )}
+
+                        </div>
+
+
+                        <div className="mt-3">
+                          <h3 className="text-sm font-semibold text-slate-900">
+                            {item.subject}
+                          </h3>
+
+                          <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-slate-500">
+
+                            <span className="inline-flex items-center gap-1">
+                              <Clock size={12} />
+                              {formatDateTime(
+                                item.scheduledAt
+                              )}
+                            </span>
+
+                            <span className="text-slate-300">
+                              •
+                            </span>
+
+                            <span className="font-medium text-slate-600">
+                              {customer}
+                            </span>
+
+                            {company && (
+                              <>
+                                <span className="text-slate-300">
+                                  •
+                                </span>
+
+                                <span>
+                                  {company}
+                                </span>
+                              </>
+                            )}
+
+                          </div>
+                        </div>
+
+                        {enquiry && (
+                          <div className="mt-3 inline-flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-2.5 py-1.5">
+                            <FileText
+                              size={12}
+                              className="text-slate-400"
+                            />
+
+                            <span className="text-[11px] font-semibold text-slate-600">
+                              {enquiry}
+                            </span>
+                          </div>
+                        )}
+
+                        {item.notes && (
+                          <p className="mt-3 line-clamp-2 text-xs leading-5 text-slate-500">
+                            {item.notes}
+                          </p>
+                        )}
+
+                        <div className="mt-4 flex flex-col gap-3 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
+
+                          <div className="flex items-center gap-2">
+                            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[#002244] text-[10px] font-semibold text-white">
+                              {getInitials(
+                                customer
+                              )}
+                            </div>
+
+                            <div>
+                              <p className="text-xs font-medium text-slate-700">
+                                {customer}
+                              </p>
+
+                              <p className="text-[10px] text-slate-400">
+                                {formatDate(
+                                  item.scheduledAt
+                                )}
+                              </p>
+                            </div>
+                          </div>
+
+
+                          <div className="flex flex-wrap items-center gap-1.5">
+
+                            {item.type === "Call" &&
+                              item.status ===
+                                "Pending" &&
+                              phone && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    (window.location.href = `tel:${phone}`)
+                                  }
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-medium text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
+                                >
+                                  <Phone size={12} />
+                                  Call
+                                </button>
+                              )}
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                openEditModal(item)
+                              }
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-medium text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
+                            >
+                              <Pencil size={12} />
+                              Edit
+                            </button>
+
+                            {item.status ===
+                              "Pending" && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  markCompleted(item)
+                                }
+                                className="inline-flex items-center gap-1.5 rounded-lg bg-[#002244] px-2.5 py-1.5 text-[11px] font-medium text-white transition hover:bg-[#00345f]"
+                              >
+                                <CheckCircle2
+                                  size={12}
+                                />
+                                Complete
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleDelete(
+                                  item._id
+                                )
+                              }
+                              className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                              title="Delete"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+
+                          </div>
+
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })
+            )}
+
+          </div>
+        </section>
+
+        <aside className="min-w-0">
+          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  Daily Conversion SLA
+                </p>
+
+                <p className="mt-1 text-xs text-slate-500">
+                  Today's execution
+                </p>
               </div>
 
-              {/* Enquiry */}
-              <div className="contact-form-group">
-                <label>Enquiry</label>
-
-                <select
-                  value={formData.enquiry}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      enquiry: e.target.value,
-                    })
-                  }
-                >
-                  <option value="">Select enquiry</option>
-
-                  {enquiries.map((enquiry) => (
-                    <option key={enquiry._id} value={enquiry._id}>
-                      {enquiry.enquiryNumber} — {enquiry.customerName}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Type */}
-              <div className="contact-form-group">
-                <label>
-                  Follow-up Type <span>*</span>
-                </label>
-
-                <select
-                  value={formData.type}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      type: e.target.value,
-                    })
-                  }
-                  required
-                >
-                  <option value="Call">Call</option>
-                  <option value="Email">Email</option>
-                  <option value="Meeting">Meeting</option>
-                  <option value="WhatsApp">WhatsApp</option>
-                  <option value="Other">Other</option>
-                </select>
-              </div>
-
-              {/* Priority */}
-              <div className="contact-form-group">
-                <label>Priority</label>
-
-                <select
-                  value={formData.priority}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      priority: e.target.value,
-                    })
-                  }
-                >
-                  <option value="Low">Low</option>
-                  <option value="Medium">Medium</option>
-                  <option value="High">High</option>
-                </select>
-              </div>
-
-              {/* Subject */}
-              <div className="contact-form-group full-width">
-                <label>
-                  Subject <span>*</span>
-                </label>
-
-                <input
-                  type="text"
-                  placeholder="e.g. Discuss GI wire requirement"
-                  value={formData.subject}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      subject: e.target.value,
-                    })
-                  }
-                  required
-                />
-              </div>
-
-              {/* Date & Time */}
-              <div className="contact-form-group">
-                <label>
-                  Scheduled Date & Time <span>*</span>
-                </label>
-
-                <input
-                  type="datetime-local"
-                  value={formData.scheduledAt}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      scheduledAt: e.target.value,
-                    })
-                  }
-                  required
-                />
-              </div>
-
-              {/* Status */}
-              <div className="contact-form-group">
-                <label>Status</label>
-
-                <select
-                  value={formData.status}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      status: e.target.value,
-                    })
-                  }
-                >
-                  <option value="Pending">Pending</option>
-                  <option value="Completed">Completed</option>
-                  <option value="Cancelled">Cancelled</option>
-                </select>
-              </div>
-
-              {/* Notes */}
-              <div className="contact-form-group full-width">
-                <label>Notes</label>
-
-                <textarea
-                  rows="4"
-                  placeholder="Add agenda, discussion points or additional notes..."
-                  value={formData.notes}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      notes: e.target.value,
-                    })
-                  }
-                />
-              </div>
+              <span className="rounded-md bg-emerald-50 px-2 py-1 text-[10px] font-semibold text-emerald-700">
+                TARGET 100%
+              </span>
 
             </div>
 
-            {/* FOOTER */}
-            <div className="contact-modal-footer">
+            <div className="flex justify-center py-7">
+
+              <div className="relative h-36 w-36">
+
+                <svg
+                  viewBox="0 0 120 120"
+                  className="h-full w-full -rotate-90"
+                >
+                  <circle
+                    cx="60"
+                    cy="60"
+                    r="48"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="9"
+                    className="text-slate-100"
+                  />
+
+                  <circle
+                    cx="60"
+                    cy="60"
+                    r="48"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="9"
+                    strokeLinecap="round"
+                    strokeDasharray={`${Math.min(
+                      commitmentRate,
+                      100
+                    ) * 3.0159} 301.59`}
+                    className="text-[#002244]"
+                  />
+                </svg>
+
+                <div className="absolute inset-0 flex flex-col items-center justify-center">
+
+                  <span className="text-2xl font-semibold tracking-tight text-slate-900">
+                    {commitmentRate}%
+                  </span>
+
+                  <span className="mt-0.5 text-[10px] text-slate-400">
+                    completed
+                  </span>
+
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-3 border-t border-slate-100 pt-4">
+
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-500">
+                  Completed today
+                </span>
+
+                <span className="text-xs font-semibold text-slate-900">
+                  {completedToday}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-500">
+                  Today's follow-ups
+                </span>
+
+                <span className="text-xs font-semibold text-slate-900">
+                  {todayFollowUps.length}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-500">
+                  Pending
+                </span>
+
+                <span className="text-xs font-semibold text-slate-900">
+                  {pendingExecution}
+                </span>
+              </div>
+
+            </div>
+          </div>
+
+        </aside>
+      </div>
+
+      {showModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
+          onClick={() => setShowModal(false)}
+        >
+          <div
+            className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-2xl"
+            onClick={(e) =>
+              e.stopPropagation()
+            }
+          >
+            <div className="flex items-start justify-between border-b border-slate-100 px-6 py-5">
+
+              <div className="flex items-start gap-3">
+
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#002244]/10 text-[#002244]">
+                  <Calendar size={18} />
+                </div>
+
+                <div>
+                  <h2 className="text-lg font-semibold tracking-tight text-slate-900">
+                    {editingId
+                      ? "Edit Follow-up"
+                      : "Schedule Follow-up"}
+                  </h2>
+
+                  <p className="mt-1 text-sm text-slate-500">
+                    {editingId
+                      ? "Update the follow-up details."
+                      : "Create a new customer activity."}
+                  </p>
+                </div>
+
+              </div>
+
               <button
                 type="button"
-                className="contact-cancel-btn"
-                onClick={() => setShowModal(false)}
+                onClick={() =>
+                  setShowModal(false)
+                }
+                className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
               >
-                Cancel
+                <X size={18} />
               </button>
 
-              <button
-                type="submit"
-                className="contact-save-btn"
-              >
-                Schedule Follow-up
-              </button>
             </div>
-          </form>
+
+            <form onSubmit={handleSubmit}>
+
+              <div className="grid grid-cols-1 gap-x-5 gap-y-5 px-6 py-6 md:grid-cols-2">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    Contact{" "}
+                    <span className="text-red-500">
+                      *
+                    </span>
+                  </label>
+
+                  <select
+                    name="contact"
+                    value={formData.contact}
+                    onChange={handleChange}
+                    required
+                    className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-[#002244] focus:ring-2 focus:ring-[#002244]/10"
+                  >
+                    <option value="">
+                      Select contact
+                    </option>
+
+                    {contacts.map(
+                      (contact) => (
+                        <option
+                          key={contact._id}
+                          value={contact._id}
+                        >
+                          {contact.name} —{" "}
+                          {contact.company}
+                        </option>
+                      )
+                    )}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    Enquiry
+                  </label>
+
+                  <select
+                    name="enquiry"
+                    value={formData.enquiry}
+                    onChange={handleChange}
+                    className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-[#002244] focus:ring-2 focus:ring-[#002244]/10"
+                  >
+                    <option value="">
+                      Select enquiry
+                    </option>
+
+                    {enquiries.map(
+                      (enquiry) => (
+                        <option
+                          key={enquiry._id}
+                          value={enquiry._id}
+                        >
+                          {enquiry.enquiryNumber} —{" "}
+                          {enquiry.customerName}
+                        </option>
+                      )
+                    )}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    Follow-up Type{" "}
+                    <span className="text-red-500">
+                      *
+                    </span>
+                  </label>
+
+                  <select
+                    name="type"
+                    value={formData.type}
+                    onChange={handleChange}
+                    required
+                    className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-[#002244] focus:ring-2 focus:ring-[#002244]/10"
+                  >
+                    <option value="Call">
+                      Call
+                    </option>
+
+                    <option value="Email">
+                      Email
+                    </option>
+
+                    <option value="Meeting">
+                      Meeting
+                    </option>
+
+                    <option value="WhatsApp">
+                      WhatsApp
+                    </option>
+
+                    <option value="Other">
+                      Other
+                    </option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    Priority
+                  </label>
+
+                  <select
+                    name="priority"
+                    value={formData.priority}
+                    onChange={handleChange}
+                    className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-[#002244] focus:ring-2 focus:ring-[#002244]/10"
+                  >
+                    <option value="Low">
+                      Low
+                    </option>
+
+                    <option value="Medium">
+                      Medium
+                    </option>
+
+                    <option value="High">
+                      High
+                    </option>
+                  </select>
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    Subject{" "}
+                    <span className="text-red-500">
+                      *
+                    </span>
+                  </label>
+
+                  <input
+                    type="text"
+                    name="subject"
+                    value={formData.subject}
+                    onChange={handleChange}
+                    required
+                    placeholder="e.g. Discuss GI wire requirement"
+                    className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none placeholder:text-slate-400 transition focus:border-[#002244] focus:ring-2 focus:ring-[#002244]/10"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    Scheduled Date & Time{" "}
+                    <span className="text-red-500">
+                      *
+                    </span>
+                  </label>
+
+                  <input
+                    type="datetime-local"
+                    name="scheduledAt"
+                    value={formData.scheduledAt}
+                    onChange={handleChange}
+                    required
+                    className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-[#002244] focus:ring-2 focus:ring-[#002244]/10"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    Status
+                  </label>
+
+                  <select
+                    name="status"
+                    value={formData.status}
+                    onChange={handleChange}
+                    className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-[#002244] focus:ring-2 focus:ring-[#002244]/10"
+                  >
+                    <option value="Pending">
+                      Pending
+                    </option>
+
+                    <option value="Completed">
+                      Completed
+                    </option>
+
+                    <option value="Cancelled">
+                      Cancelled
+                    </option>
+                  </select>
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="mb-2 block text-sm font-medium text-slate-700">
+                    Notes
+                  </label>
+
+                  <textarea
+                    name="notes"
+                    value={formData.notes}
+                    onChange={handleChange}
+                    rows={4}
+                    placeholder="Add agenda, discussion points or additional notes..."
+                    className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-3 text-sm text-slate-700 outline-none placeholder:text-slate-400 transition focus:border-[#002244] focus:ring-2 focus:ring-[#002244]/10"
+                  />
+                </div>
+
+              </div>
+
+              <div className="flex items-center justify-end gap-3 border-t border-slate-100 bg-slate-50/70 px-6 py-4">
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setShowModal(false)
+                  }
+                  className="h-10 rounded-lg border border-slate-200 bg-white px-4 text-sm font-medium text-slate-600 transition hover:bg-slate-50 hover:text-slate-800"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#002244] px-5 text-sm font-medium text-white shadow-sm transition hover:bg-[#00345f] hover:shadow-md"
+                >
+                  <CheckCircle2 size={15} />
+
+                  {editingId
+                    ? "Update Follow-up"
+                    : "Schedule Follow-up"}
+                </button>
+
+              </div>
+
+            </form>
+          </div>
         </div>
-      </div>
-    )}
+      )}
     </div>
   );
 }

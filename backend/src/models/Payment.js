@@ -91,22 +91,36 @@ const paymentSchema = new mongoose.Schema(
   }
 );
 
-paymentSchema.pre('validate', function (next) {
+paymentSchema.pre('validate', function () {
   if (this.paymentMode === 'Cheque') {
     if (!this.chequeNumber) {
-      this.invalidate('chequeNumber', 'Cheque number is required for Cheque payments');
+      this.invalidate(
+        'chequeNumber',
+        'Cheque number is required for Cheque payments'
+      );
     }
+
     if (!this.bankName) {
-      this.invalidate('bankName', 'Bank name is required for Cheque payments');
+      this.invalidate(
+        'bankName',
+        'Bank name is required for Cheque payments'
+      );
     }
   }
 
-  const needsTransactionId = ['UPI', 'NEFT', 'RTGS', 'Bank Transfer'].includes(this.paymentMode);
-  if (needsTransactionId && !this.transactionId) {
-    this.invalidate('transactionId', `Transaction ID is required for ${this.paymentMode} payments`);
-  }
+  const needsTransactionId = [
+    'UPI',
+    'NEFT',
+    'RTGS',
+    'Bank Transfer',
+  ].includes(this.paymentMode);
 
-  next();
+  if (needsTransactionId && !this.transactionId) {
+    this.invalidate(
+      'transactionId',
+      `Transaction ID is required for ${this.paymentMode}`
+    );
+  }
 });
 
 paymentSchema.index({ order: 1 });
