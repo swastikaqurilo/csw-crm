@@ -8,8 +8,6 @@ dotenv.config();
 
 const app = express();
 
-connectDB();
-
 const enquiryRoutes = require("./routes/enquiryRoutes");
 const contactRoutes = require("./routes/contactRoutes");
 const followUpRoutes = require("./routes/followUpRoutes");
