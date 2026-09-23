@@ -21,13 +21,18 @@ const revenueRoutes = require("./routes/revenueRoutes");
 
 const personRoutes = require("./routes/personRoutes");
 const expenseRoutes = require("./routes/expenseRoutes");
+const accountingRoutes = require("./routes/accountingRoutes");
+
 
 const authRoutes = require("./routes/authRoutes");
 const { protect } = require("./middleware/auth");
 
 app.use(
   cors({
-    origin: true,
+    origin: [
+      "http://localhost:5173",
+      "https://csw-crm.vercel.app",
+    ],
     credentials: true,
   })
 );
@@ -42,7 +47,6 @@ app.get("/", (req, res) => {
 });
 
 
-
 app.use("/api/auth", authRoutes); 
 app.use("/api/enquiries", enquiryRoutes);
 app.use("/api/contacts", contactRoutes);
@@ -54,6 +58,7 @@ app.use("/api/payment", paymentRoutes);
 app.use("/api/revenue", revenueRoutes);
 app.use("/api/people", personRoutes);
 app.use("/api/expense", expenseRoutes);
+app.use("/api/accounting", accountingRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
@@ -73,6 +78,10 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
-  console.log(`CSW CRM API running on http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`CSW CRM API running on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
