@@ -15,13 +15,34 @@ function badRequest(message) {
 function parseAsOfDate(value) {
   if (!value) {
     const now = new Date();
-    return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999));
+    return new Date(
+      Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+    );
   }
+
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     throw badRequest('asOf must be YYYY-MM-DD');
   }
+
   const [y, m, d] = value.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d, 23, 59, 59, 999));
+
+  // Range guard
+  if (y < 2000 || y > 2100 || m < 1 || m > 12 || d < 1 || d > 31) {
+    throw badRequest('asOf is out of range');
+  }
+
+  const date = new Date(Date.UTC(y, m - 1, d, 23, 59, 59, 999));
+
+  // Catch roll-over (e.g. 2026-02-30 becomes 2026-03-02)
+  if (
+    date.getUTCFullYear() !== y ||
+    date.getUTCMonth() !== m - 1 ||
+    date.getUTCDate() !== d
+  ) {
+    throw badRequest('asOf is not a valid calendar date');
+  }
+
+  return date;
 }
 
 function fiscalYearStart(asOf) {
@@ -75,6 +96,7 @@ const getAccountingDashboard = async (req, res) => {
       expensesPeriodAgg,
       expensesByMonth,
       unpaidExpenses,
+      payablesTotalAgg,
       paidExpensesToDate,
       receivablesAgg,
       periodPayments,
@@ -127,6 +149,11 @@ const getAccountingDashboard = async (req, res) => {
         .sort({ date: -1 })
         .limit(100)
         .lean(),
+      // 👈 Full payables total — not limited by the 100-row list cap
+      Expense.aggregate([
+        { $match: { ...expenseMatchToDate, paymentStatus: 'Pending' } },
+        { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } },
+      ]),
       Expense.aggregate([
         {
           $match: {
@@ -254,7 +281,8 @@ const getAccountingDashboard = async (req, res) => {
       };
     });
 
-    const totalPayables = money(payables.reduce((s, p) => s + p.amount, 0));
+    // 👈 True total from aggregate — not limited by the 100-row list cap
+    const totalPayables = money(payablesTotalAgg[0]?.total || 0);
 
     const monthMap = {};
     for (const row of revenueByMonth) {
@@ -523,11 +551,20 @@ const getAccountingDashboard = async (req, res) => {
       recentActivity,
     });
   } catch (error) {
-    console.error('Accounting dashboard error:', error);
-    const status = error.status || 500;
-    res.status(status).json({
+    console.error('[getAccountingDashboard]', error);
+
+    // 400 errors we threw ourselves — safe to show the message
+    if (error.status === 400) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    // 500 — don't leak internal details
+    res.status(500).json({
       success: false,
-      message: error.message || 'Failed to load accounting dashboard',
+      message: 'Failed to load accounting dashboard',
     });
   }
 };

@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { useState } from "react";
+import logo from "../assets/cswlogo.png";
 
 const mainItems = [
   { name: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
@@ -29,15 +30,16 @@ const mainItems = [
 
 const businessItems = [
   { name: "Products", path: "/products", icon: Package },
-  { name: "Inventory", path: "/inventory", icon: Warehouse },
+  // { name: "Inventory", path: "/inventory", icon: Warehouse },
+  { name: "Raw Materials", path: "/rawmats", icon: Warehouse },
   { name: "Orders", path: "/orders", icon: ShoppingCart },
 ];
 
 const financeItems = [
   { name: "Payments", path: "/payments", icon: CreditCard },
-  { name: "Revenue", path: "/revenue", icon: TrendingUp },
+  // { name: "Revenue", path: "/revenue", icon: TrendingUp },
   { name: "Accounting", path: "/accounting", icon: Landmark },
-  { name: "Expenses", path:"/expenses", icon: ReceiptText},
+  { name: "Expenses", path: "/expenses", icon: ReceiptText },
 ];
 
 const systemItems = [
@@ -92,9 +94,7 @@ function SidebarSection({
                     "group flex h-10 items-center rounded-md",
                     "text-[13px] font-medium",
                     "transition-all duration-150",
-                    collapsed
-                      ? "justify-center px-0"
-                      : "gap-3 px-3",
+                    collapsed ? "justify-center px-0" : "gap-3 px-3",
                     isActive
                       ? "bg-white/10 text-white shadow-sm"
                       : "text-slate-300 hover:bg-white/[0.06] hover:text-white",
@@ -150,30 +150,36 @@ function Sidebar() {
         collapsed ? "w-[68px]" : "w-[250px]"
       }`}
     >
-      <div
-        className={`flex h-16 shrink-0 items-center border-b border-white/10 ${
-          collapsed ? "justify-center px-2" : "gap-3 px-5"
-        }`}
-      >
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-sm font-bold text-[#002244] shadow-sm">
-          C
-        </div>
+      {/* Logo Header */}
+      {/* Logo Header */}
+<div
+  className={`flex h-16 shrink-0 items-center border-b border-white/10 ${
+    collapsed ? "justify-center px-2" : "gap-3 px-4"
+  }`}
+>
+  <div
+    className={`flex shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white shadow-md ring-1 ring-white/20 ${
+      collapsed ? "h-10 w-10" : "h-12 w-12"
+    }`}
+  >
+    <img
+      src={logo}
+      alt="CSW Logo"
+      className="h-full w-full object-contain p-1"
+    />
+  </div>
 
-        {!collapsed && (
-          <div className="flex min-w-0 items-baseline gap-1.5">
-            <h2 className="text-base font-bold tracking-tight">
-              <div className="text-white">
-              CSW
-              </div>
-            </h2>
-
-            <span className="text-[10px] font-semibold tracking-[0.08em] text-slate-400">
-              ERP
-            </span>
-          </div>
-        )}
-      </div>
-
+  {!collapsed && (
+    <div className="flex min-w-0 flex-col">
+      <span className="text-[15px] font-bold tracking-tight text-white leading-none">
+        CSW
+      </span>
+      {/* <span className="mt-0.5 text-[10px] font-semibold tracking-[0.12em] text-slate-400 uppercase">
+        ERP
+      </span> */}
+    </div>
+  )}
+</div>
       <nav className="flex-1 overflow-y-auto py-3">
         <div className="space-y-2">
           <SidebarSection
@@ -217,9 +223,7 @@ function Sidebar() {
       >
         <div
           className={`flex items-center rounded-md ${
-            collapsed
-              ? "justify-center px-0 py-2"
-              : "gap-3 px-2 py-2"
+            collapsed ? "justify-center px-0 py-2" : "gap-3 px-2 py-2"
           }`}
         >
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-xs font-semibold text-white">
@@ -231,7 +235,6 @@ function Sidebar() {
               <strong className="block truncate text-xs font-semibold text-white">
                 Admin
               </strong>
-
               <span className="block truncate text-[10px] text-slate-400">
                 Administrator
               </span>
@@ -243,9 +246,7 @@ function Sidebar() {
           type="button"
           onClick={() => setCollapsed((prev) => !prev)}
           title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className={`flex h-9 w-full items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-white ${
-            collapsed ? "mt-1" : "mt-1"
-          }`}
+          className="mt-1 flex h-9 w-full items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-white"
         >
           {collapsed ? (
             <ChevronRight size={16} />

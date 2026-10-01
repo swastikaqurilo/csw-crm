@@ -12,7 +12,7 @@ const enquiryRoutes = require("./routes/enquiryRoutes");
 const contactRoutes = require("./routes/contactRoutes");
 const followUpRoutes = require("./routes/followUpRoutes");
 const productRoutes = require("./routes/productRoutes");
-const inventoryRoutes = require("./routes/inventoryRoutes");
+// const inventoryRoutes = require("./routes/inventoryRoutes");
 const orderRoutes = require("./routes/orderRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const revenueRoutes = require("./routes/revenueRoutes");
@@ -20,6 +20,7 @@ const revenueRoutes = require("./routes/revenueRoutes");
 const personRoutes = require("./routes/personRoutes");
 const expenseRoutes = require("./routes/expenseRoutes");
 const accountingRoutes = require("./routes/accountingRoutes");
+const rawMaterialRoutes = require("./routes/rawMaterialRoutes");
 
 
 const authRoutes = require("./routes/authRoutes");
@@ -30,6 +31,8 @@ app.use(
     origin: [
       "http://localhost:5173",
       "https://csw-crm.vercel.app",
+      "http://192.168.88.6:5173",
+      "https://4nq08695-5173.inc1.devtunnels.ms"
     ],
     credentials: true,
   })
@@ -50,13 +53,14 @@ app.use("/api/enquiries", enquiryRoutes);
 app.use("/api/contacts", contactRoutes);
 app.use("/api/follow-ups", followUpRoutes);
 app.use("/api/products", productRoutes);
-app.use("/api/inventory", inventoryRoutes);
+// app.use("/api/inventory", inventoryRoutes);
 app.use("/api/order", orderRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/api/revenue", revenueRoutes);
 app.use("/api/people", personRoutes);
 app.use("/api/expense", expenseRoutes);
 app.use("/api/accounting", accountingRoutes);
+app.use("/api/raw-material", rawMaterialRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
@@ -77,9 +81,16 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 5000;
 
 if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`CSW CRM API running on http://localhost:${PORT}`);
+  connectDB()
+    .then(() => {
+     app.listen(PORT, "0.0.0.0", () => {
+    console.log(`CSW CRM API running on http://0.0.0.0:${PORT}`);
   });
+    })
+    .catch((error) => {
+      console.error("Failed to start server:", error);
+      process.exit(1);
+    });
 }
 
 module.exports = app;

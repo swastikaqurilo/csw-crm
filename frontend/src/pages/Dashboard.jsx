@@ -1,157 +1,1257 @@
+import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
-  Inbox,
-  Activity,
-  IndianRupee,
-  CreditCard,
-  ArrowUpRight,
-  Phone,
-  Calendar,
-  CheckCircle2,
-  Clock,
-  FileText,
-  MoreHorizontal,
-  Factory,
-  Package,
-  TrendingUp,
+  Search, RefreshCw, ChevronDown, Command,
+  Wallet, Package, TrendingUp, ShieldCheck,
+  ArrowRight, AlertTriangle, Clock, Truck, IndianRupee,
+  PauseCircle, CheckCircle2, ArrowDownToLine, ArrowUpFromLine,
+  TrendingDown, Circle, FileText, Inbox,
 } from "lucide-react";
+import {
+  getEnquiries, getOrders, getPayments, getInventorySummary,
+  getLowStock, getCriticalStock, getDeadStock, getQuotations,
+  getFollowups, getAccountingDashboard,
+} from "../api/api";
 
-const stats = [
-  {
-    label: "TOTAL ENQUIRIES",
-    value: "148",
-    meta: "+12.5% vs last month",
-    icon: Inbox,
-    accent: "blue",
-  },
-  {
-    label: "ACTIVE ENQUIRIES",
-    value: "24",
-    meta: "+3 vs last week",
-    icon: Activity,
-    accent: "indigo",
-  },
-  {
-    label: "SEPTEMBER REVENUE",
-    value: "₹5.58L",
-    meta: "+18.4% local growth",
-    icon: IndianRupee,
-    accent: "green",
-  },
-  {
-    label: "PENDING PAYMENTS",
-    value: "₹2.03L",
-    meta: "8.5 invoices awaiting",
-    icon: CreditCard,
-    accent: "amber",
-  },
-];
+/* ══════════════════════════════════════════════════════════════════
+   HELPERS
+   ══════════════════════════════════════════════════════════════════ */
 
-const pipelineStages = [
-  {
-    name: "New Enquiries",
-    count: "₹4.8L",
-    pct: 40,
-    color: "#3b82f6",
-  },
-  {
-    name: "In Discussion",
-    count: "₹3.2L",
-    pct: 27,
-    color: "#8b5cf6",
-  },
-  {
-    name: "Confirmed",
-    count: "₹2.4L",
-    pct: 20,
-    color: "#10b981",
-  },
-  {
-    name: "Processing",
-    count: "₹1.6L",
-    pct: 13,
-    color: "#f59e0b",
-  },
-];
+const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
-const recentOrders = [
-  {
-    id: "ORD-2040",
-    customer: "Larsen & Toubro Infra",
-    product: "GI Wire 4.0mm",
-    amount: "₹1,08,000",
-    status: "Confirmed",
-    date: "10 Sep 2026",
-  },
-  {
-    id: "ORD-2039",
-    customer: "Delhi Metro Rail Corp",
-    product: "Barbed Wire Heavy",
-    amount: "₹91,500",
-    status: "Processing",
-    date: "09 Sep 2026",
-  },
-  {
-    id: "ORD-2038",
-    customer: "GMR Airport Projects",
-    product: "Concertina Wire DTO",
-    amount: "₹1,64,000",
-    status: "Dispatched",
-    date: "08 Sep 2026",
-  },
-  {
-    id: "ORD-2037",
-    customer: "Tata Projects Ltd",
-    product: "PVC Coated Wire Green",
-    amount: "₹72,000",
-    status: "Confirmed",
-    date: "07 Sep 2026",
-  },
-];
+const formatINR = (v) => {
+  const n = num(v);
+  const abs = Math.abs(n);
+  if (abs >= 1e7) return `₹${(n / 1e7).toFixed(2)} Cr`;
+  if (abs >= 1e5) return `₹${(n / 1e5).toFixed(2)} L`;
+  if (abs >= 1e3) return `₹${(n / 1e3).toFixed(1)}K`;
+  return `₹${n.toFixed(0)}`;
+};
 
-const todayFollowUps = [
-  {
-    name: "Rajesh Kumar",
-    company: "ABC Infrastructure",
-    type: "Call",
-    priority: "High",
-    time: "10:30 AM",
-    action: "Call",
-  },
-  {
-    name: "Amit Sharma",
-    company: "Metro Security Solutions",
-    type: "Email",
-    priority: "Medium",
-    time: "12:00 PM",
-    action: "Email",
-  },
-  {
-    name: "Vikas Mehta",
-    company: "Northern Fence Works",
-    type: "Meeting",
-    priority: "Medium",
-    time: "02:30 PM",
-    action: "Meeting",
-  },
-  {
-    name: "Ankit Verma",
-    company: "SecureLand Projects",
-    type: "Payment",
-    priority: "High",
-    time: "04:00 PM",
-    action: "Payment",
-  },
-];
+const formatDate = (v) => {
+  if (!v) return "—";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+};
 
-function Dashboard() {
+const daysAgo = (d) =>
+  d ? Math.floor((Date.now() - new Date(d).getTime()) / 86400_000) : 0;
+
+const timeAgo = (date) => {
+  if (!date) return "";
+  const s = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+};
+
+const safeArr = (res) => {
+  const d = res?.data;
+  if (Array.isArray(d)) return d;
+  if (Array.isArray(d?.data)) return d.data;
+  return [];
+};
+const safeObj = (res) => res?.data?.data || res?.data || null;
+
+const ORDER_ACTIVE = ["confirmed", "processing", "ready for dispatch", "dispatched"];
+const ORDER_DONE = ["delivered", "cancelled", "canceled", "closed"];
+const ENQUIRY_OPEN = ["new", "contacted", "in progress", "in discussion", "quoted"];
+const ENQUIRY_CLOSED = ["converted", "lost"];
+
+/* ══════════════════════════════════════════════════════════════════
+   SPARKLINE — monochrome navy, subtle
+   ══════════════════════════════════════════════════════════════════ */
+
+function Sparkline({ values = [], w = 80, h = 20 }) {
+  const data = values.length > 1 ? values : [1, 1, 1, 1, 1, 1, 1, 1];
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+  const step = w / (data.length - 1);
+  const pts = data.map((v, i) => [
+    i * step,
+    h - ((v - min) / range) * (h - 4) - 2,
+  ]);
+  const d = pts
+    .map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`)
+    .join(" ");
+  return (
+    <svg width={w} height={h} className="overflow-visible">
+      <path d={`${d} L${w},${h} L0,${h} Z`} fill="#0f172a" fillOpacity="0.05" />
+      <path
+        d={d}
+        fill="none"
+        stroke="#0f172a"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   HOOK
+   ══════════════════════════════════════════════════════════════════ */
+
+function useDashboardData({ autoRefreshMs = 0 } = {}) {
+  const [data, setData] = useState({
+    accounting: null, inventorySummary: null,
+    lowStock: [], criticalStock: [], deadStock: [],
+    orders: [], quotations: [], enquiries: [], payments: [], followups: [],
+  });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const fetchAll = useCallback(async () => {
+    try {
+      setError("");
+      const r = await Promise.allSettled([
+        getAccountingDashboard({}),
+        getInventorySummary(),
+        getLowStock(),
+        getCriticalStock(),
+        getDeadStock({ days: 30 }),
+        getOrders({ limit: 50, sort: "-createdAt" }),
+        getQuotations({ limit: 50, sort: "-createdAt" }),
+        getEnquiries({ limit: 200, sort: "-createdAt" }),
+        getPayments({ limit: 100, sort: "-createdAt" }),
+        getFollowups({ limit: 100 }),
+      ]);
+      const v = (x) => (x.status === "fulfilled" ? x.value : null);
+      setData({
+        accounting: safeObj(v(r[0])),
+        inventorySummary: safeObj(v(r[1])),
+        lowStock: safeArr(v(r[2])),
+        criticalStock: safeArr(v(r[3])),
+        deadStock: safeArr(v(r[4])),
+        orders: safeArr(v(r[5])),
+        quotations: safeArr(v(r[6])),
+        enquiries: safeArr(v(r[7])),
+        payments: safeArr(v(r[8])),
+        followups: safeArr(v(r[9])),
+      });
+    } catch (err) {
+      console.error("Dashboard fetch failed:", err);
+      setError(err?.message || "Failed to load dashboard data.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchAll();
+    if (autoRefreshMs > 0) {
+      const id = setInterval(fetchAll, autoRefreshMs);
+      return () => clearInterval(id);
+    }
+  }, [fetchAll, autoRefreshMs]);
+
+  const cash = (() => {
+    const o = data.accounting?.overview || {};
+    return {
+      net: num(o.netCashPosition),
+      payables: num(o.totalPayables),
+      receivables: num(o.accountsReceivable),
+      netProfit: num(o.netProfit),
+    };
+  })();
+
+  const orderBook = (() => {
+    const active = data.orders.filter((o) =>
+      ORDER_ACTIVE.includes(String(o.status || "").toLowerCase())
+    );
+    return {
+      count: active.length,
+      total: active.reduce((s, o) => s + num(o.grandTotal), 0),
+    };
+  })();
+
+  const pipeline = (() => {
+    const open = data.enquiries.filter((e) =>
+      ENQUIRY_OPEN.includes(String(e.status || "").toLowerCase())
+    );
+    const total = open.reduce((s, e) => s + num(e.estimatedValue), 0);
+    const closed = data.enquiries.filter((e) =>
+      ENQUIRY_CLOSED.includes(String(e.status || "").toLowerCase())
+    );
+    const won = closed.filter(
+      (e) => String(e.status || "").toLowerCase() === "converted"
+    ).length;
+    return {
+      count: open.length,
+      total,
+      convRate: closed.length > 0 ? Math.round((won / closed.length) * 100) : 0,
+    };
+  })();
+
+  const stockHealth = (() => {
+    const s = data.inventorySummary || {};
+    const totalRecords = (s.rawMaterial?.count || 0) + (s.product?.count || 0);
+    const lowCount = s.alerts?.lowStockCount || data.lowStock.length;
+    const criticalCount = s.alerts?.criticalStockCount || data.criticalStock.length;
+    const healthy = Math.max(totalRecords - lowCount, 0);
+    return {
+      totalRecords, lowCount, criticalCount,
+      pct: totalRecords > 0 ? Math.round((healthy / totalRecords) * 100) : 100,
+    };
+  })();
+
+  const revenueSeries = (data.accounting?.profitLoss?.monthlyData || []).map((m) => ({
+    label: m.month || m.label || "",
+    revenue: num(m.revenue),
+    expenses: num(m.expenses),
+    net: num(m.netProfit),
+  }));
+
+  const delayedOrders = (() => {
+    const now = Date.now();
+    return data.orders.filter((o) => {
+      if (ORDER_DONE.includes(String(o.status || "").toLowerCase())) return false;
+      const due = o.expectedDeliveryDate;
+      return due && new Date(due).getTime() < now;
+    });
+  })();
+
+  const unpaidOrders = (() => {
+    const now = Date.now();
+    return data.orders.filter((o) => {
+      if (ORDER_DONE.includes(String(o.status || "").toLowerCase())) return false;
+      const paid = num(o.amountPaid);
+      const total = num(o.grandTotal);
+      if (total <= 0 || paid >= total - 0.01) return false;
+      const due = o.expectedDeliveryDate;
+      return due && new Date(due).getTime() < now;
+    });
+  })();
+
+  const stuckEnquiries = (() => {
+    const cutoff = Date.now() - 7 * 86400_000;
+    return data.enquiries.filter((e) => {
+      if (ENQUIRY_CLOSED.includes(String(e.status || "").toLowerCase())) return false;
+      const last = e.updatedAt || e.createdAt;
+      return last && new Date(last).getTime() < cutoff;
+    });
+  })();
+
+  const overdueFollowups = (() => {
+    const now = Date.now();
+    return data.followups.filter((f) => {
+      if (String(f.status || "") !== "Pending") return false;
+      return f.scheduledAt && new Date(f.scheduledAt).getTime() < now;
+    });
+  })();
+
+  const todayFollowups = (() => {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const end = start + 86400_000;
+    return data.followups.filter((f) => {
+      if (String(f.status || "") !== "Pending") return false;
+      if (!f.scheduledAt) return false;
+      const t = new Date(f.scheduledAt).getTime();
+      return t >= start && t < end;
+    });
+  })();
+
+  const readyForDispatch = data.orders.filter(
+    (o) => String(o.status || "").toLowerCase() === "ready for dispatch"
+  );
+
+  return {
+    data, loading, error, refetch: fetchAll,
+    derived: {
+      cash, orderBook, pipeline, stockHealth, revenueSeries,
+      delayedOrders, unpaidOrders, stuckEnquiries,
+      overdueFollowups, todayFollowups, readyForDispatch,
+    },
+  };
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   ZONE 1 — CONTROL STRIP
+   ══════════════════════════════════════════════════════════════════ */
+
+function HeroMetric({ label, value, context, icon: Icon, tint, sparkValues, loading }) {
+  return (
+    <div className="group rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+      <div className="mb-5 flex items-start justify-between">
+        <div className={`flex h-9 w-9 items-center justify-center rounded-lg border ${tint}`}>
+          <Icon size={17} />
+        </div>
+      </div>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-black">
+        {label}
+      </p>
+      {loading ? (
+        <div className="mt-2 space-y-2">
+          <div className="shimmer h-7 w-32 rounded-md" />
+          <div className="shimmer h-3 w-24 rounded-md" />
+        </div>
+      ) : (
+        <>
+          <p className="mt-1.5 text-[26px] font-bold tracking-tight text-black">
+            {value}
+          </p>
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <p className="truncate text-[11px] text-slate-500">{context}</p>
+            <Sparkline values={sparkValues} />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ControlStrip({ loading, cash, orderBook, pipeline, stockHealth, revenueSeries }) {
+  const spark = revenueSeries.map((r) => r.revenue);
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <HeroMetric
+        label="Cash Position"
+        value={formatINR(cash.net)}
+        context={cash.payables > 0 ? `${formatINR(cash.payables)} payables` : "No payables"}
+        icon={Wallet}
+        tint="bg-slate-100 text-slate-700 border-slate-200"
+        sparkValues={spark}
+        loading={loading}
+      />
+      <HeroMetric
+        label="Order Book"
+        value={formatINR(orderBook.total)}
+        context={`${orderBook.count} active order${orderBook.count !== 1 ? "s" : ""}`}
+        icon={Package}
+        tint="bg-blue-50 text-blue-600 border-blue-100"
+        sparkValues={spark}
+        loading={loading}
+      />
+      <HeroMetric
+        label="Pipeline"
+        value={formatINR(pipeline.total)}
+        context={`${pipeline.count} enquir${pipeline.count !== 1 ? "ies" : "y"} open · ${pipeline.convRate}% conv`}
+        icon={TrendingUp}
+        tint="bg-indigo-50 text-indigo-600 border-indigo-100"
+        sparkValues={spark}
+        loading={loading}
+      />
+      <HeroMetric
+        label="Stock Health"
+        value={`${stockHealth.pct}%`}
+        context={
+          stockHealth.criticalCount > 0
+            ? `${stockHealth.criticalCount} critical · ${stockHealth.lowCount} low`
+            : stockHealth.lowCount > 0
+            ? `${stockHealth.lowCount} low`
+            : "All above reorder"
+        }
+        icon={ShieldCheck}
+        tint={
+          stockHealth.pct >= 80
+            ? "bg-emerald-50 text-emerald-600 border-emerald-100"
+            : stockHealth.pct >= 60
+            ? "bg-amber-50 text-amber-600 border-amber-100"
+            : "bg-red-50 text-red-600 border-red-100"
+        }
+        sparkValues={spark}
+        loading={loading}
+      />
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   ZONE 2 — ACTION QUEUE
+   ══════════════════════════════════════════════════════════════════ */
+
+const SEVERITY_DOT = {
+  critical: "bg-red-500",
+  warning: "bg-amber-500",
+  neutral: "bg-slate-400",
+};
+
+function buildActionQueue(d) {
+  const items = [];
+
+  if (d.criticalStock.length > 0) {
+    const names = d.criticalStock
+      .slice(0, 2)
+      .map((c) => c.materialName || c.product?.name)
+      .filter(Boolean);
+    items.push({
+      id: "critical-stock", severity: "critical", icon: AlertTriangle,
+      title: `${d.criticalStock.length} material${d.criticalStock.length !== 1 ? "s" : ""} at critical stock`,
+      detail: names.length > 0
+        ? `${names.join(", ")}${d.criticalStock.length > 2 ? ` +${d.criticalStock.length - 2} more` : ""}`
+        : "Production may stop",
+      action: "Order now", route: "/inventory",
+    });
+  }
+
+  if (d.delayedOrders.length > 0) {
+    const value = d.delayedOrders.reduce((s, o) => s + num(o.grandTotal), 0);
+    const first = d.delayedOrders[0];
+    const customer = first.contact?.company || first.contact?.name || "";
+    const late = daysAgo(first.expectedDeliveryDate);
+    items.push({
+      id: "delayed-orders", severity: "critical", icon: Truck,
+      title: `${d.delayedOrders.length} order${d.delayedOrders.length !== 1 ? "s" : ""} past delivery date`,
+      detail: `${formatINR(value)} at risk · ${customer ? `${customer} ${late}d late` : "Reschedule"}`,
+      action: "Dispatch", route: "/orders",
+    });
+  }
+
+  if (d.overdueFollowups.length > 0) {
+    const oldest = d.overdueFollowups[0];
+    const late = daysAgo(oldest.scheduledAt);
+    items.push({
+      id: "overdue-followups", severity: "critical", icon: Clock,
+      title: `${d.overdueFollowups.length} overdue follow-up${d.overdueFollowups.length !== 1 ? "s" : ""}`,
+      detail: oldest.contact?.name ? `${oldest.contact.name} · ${late}d late` : `${late}d late`,
+      action: "Call", route: "/follow-ups",
+    });
+  }
+
+  if (d.unpaidOrders.length > 0) {
+    const due = d.unpaidOrders.reduce(
+      (s, o) => s + Math.max(num(o.grandTotal) - num(o.amountPaid), 0), 0
+    );
+    items.push({
+      id: "unpaid-orders", severity: "warning", icon: IndianRupee,
+      title: `${d.unpaidOrders.length} order${d.unpaidOrders.length !== 1 ? "s" : ""} with balance past delivery`,
+      detail: `${formatINR(due)} receivable at risk`,
+      action: "Collect", route: "/payments",
+    });
+  }
+
+  const lowOnly = d.lowStock.filter(
+    (l) => !d.criticalStock.some((c) => c._id === l._id)
+  );
+  if (lowOnly.length > 0) {
+    items.push({
+      id: "low-stock", severity: "warning", icon: AlertTriangle,
+      title: `${lowOnly.length} item${lowOnly.length !== 1 ? "s" : ""} below reorder`,
+      detail: "Purchase or reorder recommended",
+      action: "Review", route: "/inventory",
+    });
+  }
+
+  if (d.stuckEnquiries.length > 0) {
+    const oldest = d.stuckEnquiries[0];
+    const stuck = daysAgo(oldest.updatedAt || oldest.createdAt);
+    items.push({
+      id: "stuck-enquiries", severity: "warning", icon: PauseCircle,
+      title: `${d.stuckEnquiries.length} enquir${d.stuckEnquiries.length !== 1 ? "ies" : "y"} stuck 7d+`,
+      detail: `Oldest: ${oldest.customerName || "—"} (${stuck}d)`,
+      action: "Follow up", route: "/enquiries",
+    });
+  }
+
+  if (d.readyForDispatch.length > 0) {
+    items.push({
+      id: "ready-to-dispatch", severity: "warning", icon: Package,
+      title: `${d.readyForDispatch.length} order${d.readyForDispatch.length !== 1 ? "s" : ""} ready for dispatch`,
+      detail: "Awaiting pickup or invoice",
+      action: "Dispatch", route: "/orders",
+    });
+  }
+
+  if (d.todayFollowups.length > 0) {
+    const names = d.todayFollowups.slice(0, 2).map((f) => f.contact?.name).filter(Boolean);
+    items.push({
+      id: "today-followups", severity: "neutral", icon: Clock,
+      title: `${d.todayFollowups.length} follow-up${d.todayFollowups.length !== 1 ? "s" : ""} today`,
+      detail: names.length > 0 ? names.join(", ") : "Open schedule",
+      action: "Open", route: "/follow-ups",
+    });
+  }
+
+  if (d.deadStock.length > 0) {
+    items.push({
+      id: "dead-stock", severity: "neutral", icon: Package,
+      title: `${d.deadStock.length} item${d.deadStock.length !== 1 ? "s" : ""} idle 30d+`,
+      detail: "Consider discounting or repurposing",
+      action: "Review", route: "/inventory",
+    });
+  }
+
+  return items;
+}
+
+function ActionQueue({ loading, ...d }) {
+  const navigate = useNavigate();
+  const queue = buildActionQueue(d);
+  const criticalCount = queue.filter((q) => q.severity === "critical").length;
+
+  return (
+    <div className="flex h-full flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
+        <div className="min-w-0">
+          <h2 className="text-[12px] font-bold uppercase tracking-[0.08em] text-black">
+            Action Queue
+          </h2>
+          <p className="mt-1 text-xs text-slate-500">
+            {loading
+              ? "Scanning across the business…"
+              : queue.length === 0
+              ? "All clear — nothing needs attention"
+              : `${queue.length} item${queue.length !== 1 ? "s" : ""} need${queue.length === 1 ? "s" : ""} action`}
+          </p>
+        </div>
+        {!loading && queue.length > 0 && (
+          <span
+            className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-semibold tabular-nums ${
+              criticalCount > 0
+                ? "bg-red-50 text-red-700"
+                : "bg-slate-100 text-slate-600"
+            }`}
+          >
+            {queue.length}
+          </span>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="space-y-3 p-5">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="flex items-center gap-3">
+              <div className="shimmer h-8 w-8 rounded-lg" />
+              <div className="flex-1 space-y-1.5">
+                <div className="shimmer h-3 w-3/4 rounded" />
+                <div className="shimmer h-2.5 w-1/2 rounded" />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : queue.length === 0 ? (
+        <div className="flex flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
+            <CheckCircle2 size={20} />
+          </div>
+          <h4 className="mt-3 text-sm font-semibold text-black">All clear</h4>
+          <p className="mt-1 max-w-[220px] text-xs text-slate-500">
+            No critical actions or pending warnings right now.
+          </p>
+        </div>
+      ) : (
+        <ul className="thin-scroll divide-y divide-slate-100 overflow-y-auto">
+          {queue.map((item) => {
+            const Icon = item.icon;
+            return (
+              <li
+                key={item.id}
+                className="group flex items-center gap-3 px-5 py-3.5 transition hover:bg-slate-50"
+              >
+                <div className="relative flex h-8 w-8 shrink-0 items-center justify-center">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600">
+                    <Icon size={14} />
+                  </div>
+                  <span
+                    className={`absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full ring-2 ring-white ${
+                      SEVERITY_DOT[item.severity]
+                    }`}
+                  />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-xs font-semibold text-black">
+                    {item.title}
+                  </p>
+                  <p className="mt-0.5 truncate text-[10px] text-slate-500">
+                    {item.detail}
+                  </p>
+                </div>
+                <button
+                  onClick={() => navigate(item.route)}
+                  className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-semibold text-black transition hover:border-slate-300 hover:bg-slate-50 active:translate-y-px"
+                >
+                  {item.action}
+                  <ArrowRight size={10} />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {!loading && queue.length > 0 && (
+        <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50/50 px-5 py-2.5">
+          <span className="flex items-center gap-3 text-[10px] text-slate-500">
+            <span className="flex items-center gap-1">
+              <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+              {queue.filter((q) => q.severity === "critical").length} critical
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+              {queue.filter((q) => q.severity === "warning").length} warning
+            </span>
+          </span>
+          <span className="text-[10px] text-slate-400">Ranked by urgency</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   ZONE 3 — FINANCIAL SNAPSHOT
+   ══════════════════════════════════════════════════════════════════ */
+
+function StatTile({ label, value, sub, icon: Icon, tint }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <div className="flex items-start justify-between">
+        <div className={`flex h-9 w-9 items-center justify-center rounded-lg border ${tint}`}>
+          <Icon size={16} />
+        </div>
+      </div>
+      <p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.08em] text-black">
+        {label}
+      </p>
+      <p className="mt-1.5 text-[20px] font-bold tracking-tight text-black">
+        {value}
+      </p>
+      <p className="mt-1 text-[11px] text-slate-500">{sub}</p>
+    </div>
+  );
+}
+
+function FinancialSnapshot({ loading, accounting }) {
+  const navigate = useNavigate();
+  const o = accounting?.overview || {};
+  const pl = accounting?.profitLoss || {};
+  const meta = accounting?.meta || {};
+
+  const cash = num(o.netCashPosition);
+  const payables = num(o.totalPayables);
+  const receivables = num(o.accountsReceivable);
+  const netProfit = num(o.netProfit);
+  const monthly = pl.monthlyData || [];
+  const ytdRev = num(pl.totalRevenue);
+  const ytdExp = num(pl.totalExpenses);
+  const margin = ytdRev > 0 ? Math.round((netProfit / ytdRev) * 100) : 0;
+
+  return (
+    <div className="flex h-full flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
+        <div className="min-w-0">
+          <h2 className="text-[12px] font-bold uppercase tracking-[0.08em] text-black">
+            Financial Snapshot
+          </h2>
+          <p className="mt-1 text-xs text-slate-500">
+            {meta.fiscalYearStart
+              ? `${formatDate(meta.fiscalYearStart)} → ${formatDate(meta.asOf)}`
+              : "Current fiscal period"}
+          </p>
+        </div>
+        <button
+          onClick={() => navigate("/accounting")}
+          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-semibold text-black transition hover:border-slate-300 hover:bg-slate-50"
+        >
+          Accounting
+          <ArrowRight size={10} />
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="grid grid-cols-2 gap-3 p-4">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="rounded-xl border border-slate-200 bg-white p-4">
+              <div className="shimmer h-9 w-9 rounded-lg" />
+              <div className="shimmer mt-3 h-3 w-20 rounded" />
+              <div className="shimmer mt-2 h-5 w-24 rounded" />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-3 p-4">
+            <StatTile
+              label="Cash Position"
+              value={formatINR(cash)}
+              sub="Payments − paid expenses"
+              icon={Wallet}
+              tint="bg-slate-100 text-slate-700 border-slate-200"
+            />
+            <StatTile
+              label="Receivables"
+              value={formatINR(receivables)}
+              sub="Open order balances"
+              icon={ArrowDownToLine}
+              tint="bg-blue-50 text-blue-600 border-blue-100"
+            />
+            <StatTile
+              label="Payables"
+              value={formatINR(payables)}
+              sub="Unpaid expenses"
+              icon={ArrowUpFromLine}
+              tint="bg-amber-50 text-amber-600 border-amber-100"
+            />
+            <StatTile
+              label="Net Profit"
+              value={formatINR(netProfit)}
+              sub={ytdRev > 0 ? `${margin}% margin on ${formatINR(ytdRev)}` : "No revenue yet"}
+              icon={netProfit >= 0 ? TrendingUp : TrendingDown}
+              tint={
+                netProfit >= 0
+                  ? "bg-emerald-50 text-emerald-600 border-emerald-100"
+                  : "bg-red-50 text-red-600 border-red-100"
+              }
+            />
+          </div>
+          <div className="grid grid-cols-2 divide-x divide-slate-100 border-t border-slate-100 bg-slate-50/50">
+            <div className="px-5 py-2.5">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                Revenue YTD
+              </span>
+              <p className="mt-0.5 text-sm font-bold tabular-nums text-black">
+                {formatINR(ytdRev)}
+              </p>
+            </div>
+            <div className="px-5 py-2.5">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                Expenses YTD
+              </span>
+              <p className="mt-0.5 text-sm font-bold tabular-nums text-black">
+                {formatINR(ytdExp)}
+              </p>
+            </div>
+          </div>
+        </>
+      )}
+
+      <div className="mt-auto flex items-center justify-between border-t border-slate-100 bg-slate-50/50 px-5 py-2.5">
+        <span className="text-[10px] text-slate-500">
+          {loading ? "Loading…" : `${monthly.length} month${monthly.length !== 1 ? "s" : ""} of data`}
+        </span>
+        <button
+          onClick={() => navigate("/accounting")}
+          className="text-[10px] font-semibold text-black transition hover:text-slate-600"
+        >
+          Full accounting →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   ZONE 4 — PIPELINE VELOCITY
+   ══════════════════════════════════════════════════════════════════ */
+
+function PipelineVelocity({ loading, enquiries, quotations, orders }) {
+  const STAGES = ["Enquiry", "Quotation", "Order", "Delivered"];
+  const enqCount = enquiries.length;
+  const quoteCount = quotations.length;
+  const orderCount = orders.length;
+  const delivered = orders.filter((o) =>
+    ["delivered", "Delivered"].includes(o.status)
+  ).length;
+  const counts = [enqCount, quoteCount, orderCount, delivered];
+  const conv = [
+    null,
+    enqCount > 0 ? Math.round((quoteCount / enqCount) * 100) : 0,
+    quoteCount > 0 ? Math.round((orderCount / quoteCount) * 100) : 0,
+    orderCount > 0 ? Math.round((delivered / orderCount) * 100) : 0,
+  ];
+  const max = Math.max(...counts, 1);
+
+  const stuck = [
+    ...quotations
+      .filter(
+        (q) =>
+          ["sent", "Sent", "negotiating"].includes(q.status) &&
+          daysAgo(q.updatedAt || q.createdAt) >= 7
+      )
+      .map((q) => ({
+        id: q._id,
+        name: q.customer?.name || q.customerName || "Unknown",
+        stage: "Quotation",
+        days: daysAgo(q.updatedAt || q.createdAt),
+      })),
+    ...enquiries
+      .filter(
+        (e) =>
+          !["converted", "lost", "Converted", "Lost"].includes(e.status) &&
+          daysAgo(e.updatedAt || e.createdAt) >= 7
+      )
+      .map((e) => ({
+        id: e._id,
+        name: e.customerName || "Unknown",
+        stage: "Enquiry",
+        days: daysAgo(e.updatedAt || e.createdAt),
+      })),
+  ]
+    .sort((a, b) => b.days - a.days)
+    .slice(0, 4);
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="border-b border-slate-200 px-5 py-4">
+        <h2 className="text-[12px] font-bold uppercase tracking-[0.08em] text-black">
+          Pipeline Velocity
+        </h2>
+        <p className="mt-1 text-xs text-slate-500">
+          Enquiry → Quote → Order → Delivered
+        </p>
+      </div>
+
+      <div className="space-y-4 px-5 py-5">
+        {STAGES.map((stage, i) => (
+          <div key={stage}>
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="text-xs font-semibold text-black">{stage}</span>
+              <div className="flex items-center gap-3">
+                {conv[i] != null && (
+                  <span className="text-[10px] font-medium text-slate-400">
+                    ▼ {conv[i]}%
+                  </span>
+                )}
+                <span className="w-10 text-right text-sm font-bold tabular-nums text-black">
+                  {loading ? "—" : counts[i]}
+                </span>
+              </div>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+              <div
+                className="h-full rounded-full bg-[#0f172a] transition-all duration-500"
+                style={{ width: loading ? "0%" : `${(counts[i] / max) * 100}%` }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="border-t border-slate-200">
+        <div className="flex items-center justify-between px-5 py-3">
+          <div className="flex items-center gap-2">
+            <Clock size={13} className="text-slate-400" />
+            <span className="text-[11px] font-bold uppercase tracking-[0.08em] text-black">
+              Stuck 7d+
+            </span>
+          </div>
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold tabular-nums text-slate-600">
+            {stuck.length}
+          </span>
+        </div>
+        {loading ? (
+          <div className="space-y-2 px-5 pb-4">
+            {[1, 2].map((i) => (
+              <div key={i} className="shimmer h-8 rounded" />
+            ))}
+          </div>
+        ) : stuck.length === 0 ? (
+          <div className="px-5 pb-5 text-center text-[11px] text-slate-400">
+            No stuck deals. Pipeline is moving.
+          </div>
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {stuck.map((s) => (
+              <li
+                key={s.id}
+                className="flex items-center justify-between gap-3 px-5 py-2.5 transition hover:bg-slate-50"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-semibold text-black">
+                    {s.name}
+                  </p>
+                  <p className="mt-0.5 text-[10px] text-slate-500">
+                    {s.stage} · {s.days}d inactive
+                  </p>
+                </div>
+                <button className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-semibold text-black transition hover:bg-slate-50">
+                  Chase
+                  <ArrowRight size={10} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   ZONE 5 — ACTIVITY STREAM
+   ══════════════════════════════════════════════════════════════════ */
+
+const TONE_TILE = {
+  blue: "bg-blue-50 text-blue-600 border-blue-100",
+  emerald: "bg-emerald-50 text-emerald-600 border-emerald-100",
+  indigo: "bg-indigo-50 text-indigo-600 border-indigo-100",
+  amber: "bg-amber-50 text-amber-600 border-amber-100",
+};
+
+function buildFeed({ orders, payments, quotations, enquiries }) {
+  const feed = [];
+  orders.slice(0, 8).forEach((o) => {
+    feed.push({
+      id: `o-${o._id}`, icon: Package, tone: "blue",
+      text: `Order ${o.orderNumber || ""} · ${o.status}`,
+      meta: `${o.contact?.company || o.contact?.name || "Customer"} · ${formatINR(o.grandTotal)}`,
+      at: o.updatedAt || o.createdAt,
+    });
+  });
+  payments.slice(0, 8).forEach((p) => {
+    feed.push({
+      id: `p-${p._id}`, icon: IndianRupee, tone: "emerald",
+      text: p.status === "Completed"
+        ? `Payment received · ${formatINR(p.amount)}`
+        : `Payment ${p.status?.toLowerCase()} · ${formatINR(p.amount)}`,
+      meta: p.contact?.company || p.contact?.name || p.order?.contact?.company || "Customer",
+      at: p.updatedAt || p.createdAt,
+    });
+  });
+  quotations.slice(0, 6).forEach((q) => {
+    feed.push({
+      id: `q-${q._id}`, icon: FileText, tone: "indigo",
+      text: `Quotation · ${q.status || "draft"}`,
+      meta: `${q.customer?.name || q.customerName || "Customer"} · ${formatINR(q.amount || q.total)}`,
+      at: q.updatedAt || q.createdAt,
+    });
+  });
+  (enquiries || []).slice(0, 8).forEach((e) => {
+    feed.push({
+      id: `e-${e._id}`, icon: Inbox, tone: "amber",
+      text: `Enquiry · ${e.status || "New"}`,
+      meta: e.customerName || "Customer",
+      at: e.updatedAt || e.createdAt,
+    });
+  });
+  return feed
+    .filter((f) => f.at)
+    .sort((a, b) => new Date(b.at) - new Date(a.at))
+    .slice(0, 12);
+}
+
+function ActivityStream({ loading, orders, payments, quotations, enquiries }) {
+  const feed = buildFeed({ orders, payments, quotations, enquiries });
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+        <div>
+          <h2 className="text-[12px] font-bold uppercase tracking-[0.08em] text-black">
+            Activity Stream
+          </h2>
+          <p className="mt-1 text-xs text-slate-500">Live across the business</p>
+        </div>
+        <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-600">
+          <Circle size={6} className="fill-emerald-500" />
+          Live
+        </span>
+      </div>
+
+      {loading ? (
+        <div className="space-y-3 p-5">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="flex gap-3">
+              <div className="shimmer h-7 w-7 rounded-lg" />
+              <div className="flex-1 space-y-1.5">
+                <div className="shimmer h-3 w-3/4 rounded" />
+                <div className="shimmer h-2.5 w-1/2 rounded" />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : feed.length === 0 ? (
+        <div className="px-5 py-10 text-center text-xs text-slate-400">
+          No recent activity.
+        </div>
+      ) : (
+        <ul className="thin-scroll max-h-[520px] divide-y divide-slate-100 overflow-y-auto">
+          {feed.map((f) => {
+            const Icon = f.icon;
+            const tone = TONE_TILE[f.tone] || TONE_TILE.blue;
+            return (
+              <li
+                key={f.id}
+                className="flex items-start gap-3 px-5 py-3 transition hover:bg-slate-50"
+              >
+                <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border ${tone}`}>
+                  <Icon size={13} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-xs font-semibold text-black">
+                    {f.text}
+                  </p>
+                  <p className="mt-0.5 truncate text-[10px] text-slate-500">
+                    {f.meta}
+                  </p>
+                </div>
+                <span className="shrink-0 whitespace-nowrap text-[10px] text-slate-400">
+                  {timeAgo(f.at)}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   ZONE 6 — LOW STOCK ALERT
+   ══════════════════════════════════════════════════════════════════ */
+
+function getSeverity(item) {
+  const q = num(item.quantity);
+  const c = num(item.criticalLevel);
+  if (q === 0) return "out";
+  if (c > 0 && q <= c) return "critical";
+  return "low";
+}
+
+const SEV_BADGE = {
+  out: "bg-red-50 text-red-700 border-red-100",
+  critical: "bg-red-50 text-red-700 border-red-100",
+  low: "bg-amber-50 text-amber-700 border-amber-100",
+};
+
+const SEV_LABEL = { out: "Out", critical: "Critical", low: "Low" };
+
+function LowStockPanel({ loading, lowStock, criticalStock }) {
+  const [filter, setFilter] = useState("all");
+
+  const allItems = (() => {
+    const seen = new Set();
+    const merged = [];
+    [...criticalStock, ...lowStock].forEach((it) => {
+      if (!seen.has(it._id)) {
+        seen.add(it._id);
+        merged.push(it);
+      }
+    });
+    const order = { out: 0, critical: 1, low: 2 };
+    return merged.sort((a, b) => order[getSeverity(a)] - order[getSeverity(b)]);
+  })();
+
+  const filtered = allItems.filter((it) => {
+    if (filter === "all") return true;
+    if (filter === "raw") return it.inventoryType === "Raw Material";
+    if (filter === "product") return it.inventoryType === "Product";
+    return true;
+  });
+
+  const rawCount = allItems.filter((i) => i.inventoryType === "Raw Material").length;
+  const prodCount = allItems.filter((i) => i.inventoryType === "Product").length;
+  const criticalCount = allItems.filter((i) => getSeverity(i) !== "low").length;
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-amber-100 bg-amber-50 text-amber-600">
+            <AlertTriangle size={17} />
+          </div>
+          <div>
+            <h2 className="text-[12px] font-bold uppercase tracking-[0.08em] text-black">
+              Low Stock Alert
+            </h2>
+            <p className="mt-0.5 text-xs text-slate-500">
+              {loading
+                ? "Scanning…"
+                : allItems.length === 0
+                ? "All items above reorder level"
+                : `${allItems.length} item${allItems.length !== 1 ? "s" : ""} need${allItems.length === 1 ? "s" : ""} attention`}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+          {[
+            ["all", `All · ${allItems.length}`],
+            ["raw", `Raw · ${rawCount}`],
+            ["product", `Product · ${prodCount}`],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => setFilter(id)}
+              className={`rounded-md px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider transition ${
+                filter === id
+                  ? "bg-white text-black shadow-sm"
+                  : "text-slate-500 hover:text-slate-700"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="space-y-2 p-5">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="flex items-center gap-3">
+              <div className="shimmer h-8 w-8 rounded-lg" />
+              <div className="flex-1 space-y-1.5">
+                <div className="shimmer h-3 w-2/3 rounded" />
+                <div className="shimmer h-2.5 w-1/3 rounded" />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="flex flex-col items-center justify-center px-6 py-10 text-center">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
+            <CheckCircle2 size={20} />
+          </div>
+          <h4 className="mt-3 text-sm font-semibold text-black">Stock is healthy</h4>
+          <p className="mt-1 max-w-[260px] text-xs text-slate-500">
+            {filter === "all"
+              ? "No items below reorder level right now."
+              : `No ${filter} items below reorder level.`}
+          </p>
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px] text-left">
+            <thead>
+              <tr className="border-b border-slate-200 bg-slate-50/70">
+                <th className="px-5 py-3 text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
+                  Item
+                </th>
+                <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
+                  Type
+                </th>
+                <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
+                  Warehouse
+                </th>
+                <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
+                  Available
+                </th>
+                <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
+                  Reorder
+                </th>
+                <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
+                  Shortfall
+                </th>
+                <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
+                  Status
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {filtered.map((item) => {
+                const sev = getSeverity(item);
+                const qty = num(item.quantity);
+                const reorder = num(item.reorderLevel);
+                const shortfall = Math.max(reorder - qty, 0);
+                const unit = item.unit || "t";
+                const isRaw = item.inventoryType === "Raw Material";
+
+                return (
+                  <tr key={item._id} className="transition hover:bg-slate-50">
+                    <td className="px-5 py-3">
+                      <div className="flex items-center gap-2.5">
+                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600">
+                          <Package size={14} />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-semibold text-black">
+                            {item.materialName || item.product?.name || "—"}
+                          </p>
+                          {item.batchNumber && (
+                            <p className="mt-0.5 truncate text-[10px] text-slate-400">
+                              Batch {item.batchNumber}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">
+                        {isRaw ? "Raw" : "Product"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-xs text-slate-600">
+                      {item.warehouse || "Main"}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <span className="text-xs font-semibold tabular-nums text-black">
+                        {qty.toFixed(2)}
+                      </span>
+                      <span className="ml-1 text-[10px] text-slate-400">
+                        {unit}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <span className="text-xs font-medium tabular-nums text-slate-600">
+                        {reorder.toFixed(2)}
+                      </span>
+                      <span className="ml-1 text-[10px] text-slate-400">
+                        {unit}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <span className="text-xs font-bold tabular-nums text-red-600">
+                        −{shortfall.toFixed(2)}
+                      </span>
+                      <span className="ml-1 text-[10px] text-slate-400">
+                        {unit}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold ${SEV_BADGE[sev]}`}
+                      >
+                        <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                        {SEV_LABEL[sev]}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {!loading && filtered.length > 0 && (
+        <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50/50 px-5 py-2.5">
+          <span className="text-[10px] text-slate-500">
+            {criticalCount > 0
+              ? `${criticalCount} critical · ${allItems.length - criticalCount} low`
+              : `${allItems.length} low`}
+          </span>
+          <button
+            onClick={() => (window.location.href = "/inventory")}
+            className="text-[10px] font-semibold text-black transition hover:text-slate-600"
+          >
+            Manage inventory →
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   DASHBOARD — PAGE
+   ══════════════════════════════════════════════════════════════════ */
+
+export default function Dashboard() {
+  
+  const { data, loading, error, refetch, derived } = useDashboardData({
+    autoRefreshMs: 60_000,
+  });
+
+  const today = new Date().toLocaleDateString("en-IN", {
+    weekday: "long",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+
   return (
     <div className="min-h-full bg-slate-50 p-5 sm:p-6 lg:p-7">
-
-      {/* =========================================================
-          PAGE HEADER
-      ========================================================= */}
+      {/* HEADER */}
       <div className="mb-6 flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
-
         <div>
           <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-black">
             <span>COMMAND CONSOLE</span>
@@ -161,670 +1261,112 @@ function Dashboard() {
               Live Operations
             </span>
           </div>
-
           <h1 className="text-[28px] font-semibold tracking-tight text-black">
             Good morning, Admin
           </h1>
-
           <p className="mt-1.5 text-sm text-black">
-            Here’s what’s happening across enquiries, orders and revenue today.
+            {today} · Here's what needs your attention.
           </p>
         </div>
 
-        <div className="flex flex-wrap gap-2.5">
-          <button className="inline-flex h-10 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-xs font-semibold text-black shadow-sm transition hover:border-slate-300 hover:bg-slate-50">
-            View enquiries
-          </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* <button
+            className="inline-flex h-10 items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-500 shadow-sm transition hover:border-slate-300"
+            onClick={() => {}}
+          >
+            <Search size={14} />
+            <span>Search…</span>
+            <kbd className="hidden rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[10px] text-slate-400 sm:inline-flex">
+              <Command size={9} className="mr-0.5" />K
+            </kbd>
+          </button> */}
 
-          <button className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-[#0f172a] px-4 text-xs font-semibold text-white shadow-sm transition hover:bg-[#1e293b] hover:shadow-md">
-            <span className="text-base leading-none">+</span>
-            New enquiry
-          </button>
-        </div>
-      </div>
-
-      {/* =========================================================
-          KPI CARDS
-      ========================================================= */}
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {stats.map((stat) => {
-          const Icon = stat.icon;
-
-          const accentClasses = {
-            blue: "bg-blue-50 text-blue-600 border-blue-100",
-            indigo: "bg-indigo-50 text-indigo-600 border-indigo-100",
-            green: "bg-emerald-50 text-emerald-600 border-emerald-100",
-            amber: "bg-amber-50 text-amber-600 border-amber-100",
-          };
-
-          return (
-            <div
-              key={stat.label}
-              className="group rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md !text=black  "
+          {/* <div className="relative">
+            <select
+              value={viewMode}
+              onChange={(e) => setViewMode(e.target.value)}
+              className="h-10 appearance-none rounded-lg border border-slate-200 bg-white pl-3 pr-9 text-xs font-semibold text-black shadow-sm outline-none transition hover:border-slate-300"
             >
-              <div className="mb-5 flex items-start justify-between">
-                <div
-                  className={`flex h-9 w-9 items-center justify-center rounded-lg border ${
-                    accentClasses[stat.accent]
-                  }`}
-                >
-                  <Icon size={17} />
-                </div>
+              <option value="Owner">View: Owner</option>
+              <option value="Sales">View: Sales</option>
+              <option value="Operations">View: Operations</option>
+            </select>
+            <ChevronDown
+              size={13}
+              className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"
+            />
+          </div> */}
 
-                <ArrowUpRight
-                  size={15}
-                  className="text-slate-300 transition group-hover:text-black"
-                />
-              </div>
-
-              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-black">
-                {stat.label}
-              </p>
-
-              <p className="mt-1.5 text-[26px] font-bold tracking-tight !text-black">
-                {stat.value}
-              </p>
-
-              <p className="mt-1 text-[11px] text-black">
-                {stat.meta}
-              </p>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* =========================================================
-          REVENUE + PIPELINE
-      ========================================================= */}
-      <div className="mb-6 grid grid-cols-1 gap-5 xl:grid-cols-[1.65fr_1fr]">
-
-        {/* REVENUE */}
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-
-          <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-
-            <div>
-              <h2 className="text-[12px] font-bold uppercase tracking-[0.08em] text-black">
-                Financial Trajectory
-              </h2>
-
-              <p className="mt-1 text-xs text-black">
-                Revenue Overview · FY 2025–26
-              </p>
-            </div>
-
-            <div className="flex w-fit rounded-lg border border-slate-200 bg-slate-50 p-0.5">
-              <button className="rounded-md bg-white px-3 py-1.5 text-[10px] font-semibold text-black shadow-sm">
-                Monthly
-              </button>
-
-              <button className="px-3 py-1.5 text-[10px] font-medium text-black hover:text-black">
-                Quarterly
-              </button>
-
-              <button className="px-3 py-1.5 text-[10px] font-medium text-black hover:text-black">
-                FY 25–26
-              </button>
-            </div>
-          </div>
-
-          <div className="p-5">
-
-            {/* SUMMARY */}
-            <div className="mb-6 grid grid-cols-1 gap-5 sm:grid-cols-3">
-
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-[0.06em] text-black">
-                  YTD Revenue
-                </p>
-
-                <p className="mt-1 text-xl font-bold tracking-tight !text-black">
-                  ₹38.08 Lakhs
-                </p>
-              </div>
-
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-[0.06em] text-black">
-                  August Peak
-                </p>
-
-                <div className="mt-1 flex items-baseline gap-2">
-                  <p className="text-sm font-bold !text-black">
-                    ₹7.35L
-                  </p>
-
-                  <span className="text-[10px] font-semibold text-emerald-600">
-                    +24.1%
-                  </span>
-                </div>
-              </div>
-
-              <div>
-                <p className="text-[10px] font-medium uppercase tracking-[0.06em] text-black">
-                  Avg Monthly Run-Rate
-                </p>
-
-                <p className="mt-1 text-sm font-bold !text-black">
-                  ₹5.51L / mo
-                </p>
-              </div>
-
-            </div>
-            <div className="overflow-hidden">
-              <svg
-                viewBox="0 0 600 180"
-                className="h-[180px] w-full"
-                preserveAspectRatio="none"
-              >
-                <line
-                  x1="0"
-                  y1="40"
-                  x2="600"
-                  y2="40"
-                  stroke="#e2e8f0"
-                  strokeWidth="1"
-                />
-
-                <line
-                  x1="0"
-                  y1="90"
-                  x2="600"
-                  y2="90"
-                  stroke="#e2e8f0"
-                  strokeWidth="1"
-                />
-
-                <line
-                  x1="0"
-                  y1="140"
-                  x2="600"
-                  y2="140"
-                  stroke="#e2e8f0"
-                  strokeWidth="1"
-                />
-
-                <path
-                  d="M0,140 L40,120 L120,100 L200,110 L280,70 L360,50 L440,45 L520,60 L600,40 L600,180 L0,180 Z"
-                  fill="url(#chartGradient)"
-                />
-
-                <path
-                  d="M0,140 L40,120 L120,100 L200,110 L280,70 L360,50 L440,45 L520,60 L600,40"
-                  fill="none"
-                  stroke="#0f172a"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-
-                {[
-                  [0, 140],
-                  [40, 120],
-                  [120, 100],
-                  [200, 110],
-                  [280, 70],
-                  [360, 50],
-                  [440, 45],
-                  [520, 60],
-                  [600, 40],
-                ].map(([x, y], i) => (
-                  <circle
-                    key={i}
-                    cx={x}
-                    cy={y}
-                    r="3.5"
-                    fill="#0f172a"
-                  />
-                ))}
-
-                <defs>
-                  <linearGradient
-                    id="chartGradient"
-                    x1="0"
-                    y1="0"
-                    x2="0"
-                    y2="1"
-                  >
-                    <stop
-                      offset="0%"
-                      stopColor="#0f172a"
-                      stopOpacity="0.14"
-                    />
-
-                    <stop
-                      offset="100%"
-                      stopColor="#0f172a"
-                      stopOpacity="0"
-                    />
-                  </linearGradient>
-                </defs>
-              </svg>
-
-              <div className="mt-1 flex justify-between px-0.5 text-[10px] text-black">
-                <span>Apr</span>
-                <span>May</span>
-                <span>Jun</span>
-                <span>Jul</span>
-                <span>Aug</span>
-                <span>Sep</span>
-                <span>Oct</span>
-                <span>Nov</span>
-                <span>Dec</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-            <div>
-              <h2 className="text-[12px] font-bold uppercase tracking-[0.08em] text-black">
-                Conversion Funnel
-              </h2>
-
-              <p className="mt-1 text-xs text-black">
-                Enquiry Pipeline
-              </p>
-            </div>
-
-            <div className="text-right">
-              <p className="text-[10px] text-black">
-                Total Pipeline
-              </p>
-
-              <p className="mt-0.5 text-lg font-bold text-black">
-                ₹12.0L
-              </p>
-            </div>
-
-          </div>
-
-          <div className="p-5">
-
-            <div className="space-y-6">
-
-              {pipelineStages.map((stage) => (
-                <div key={stage.name}>
-
-                  <div className="mb-2 flex items-center justify-between">
-
-                    <span className="text-xs font-medium text-black">
-                      {stage.name}
-                    </span>
-
-                    <div className="flex items-center gap-3">
-                      <span className="text-xs font-semibold text-black">
-                        {stage.count}
-                      </span>
-
-                      <span className="w-8 text-right text-[10px] font-semibold text-black">
-                        {stage.pct}%
-                      </span>
-                    </div>
-
-                  </div>
-
-                  <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-                    <div
-                      className="h-full rounded-full transition-all"
-                      style={{
-                        width: `${stage.pct}%`,
-                        backgroundColor: stage.color,
-                      }}
-                    />
-                  </div>
-
-                </div>
-              ))}
-
-            </div>
-
-            <div className="mt-7 flex items-center justify-between border-t border-slate-100 pt-4">
-
-              <span className="text-xs font-medium text-black">
-                Conversion Rate
-              </span>
-
-              <span className="text-sm font-bold text-black">
-                41.8% Avg
-              </span>
-
-            </div>
-
-          </div>
+          <button
+            onClick={refetch}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900"
+            title="Refresh"
+          >
+            <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
+          </button>
         </div>
       </div>
 
-      <div className="mb-6 grid grid-cols-1 gap-5 xl:grid-cols-[1.65fr_1fr]">
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-            <div>
-              <h2 className="text-[12px] font-bold uppercase tracking-[0.08em] text-black">
-                Manufacturing & Logistics
-              </h2>
-
-              <p className="mt-1 text-xs text-black">
-                Recent Orders
-              </p>
-            </div>
-
-            <button className="text-xs font-semibold text-black transition hover:text-black">
-              View all orders
-            </button>
-
-          </div>
-
-          <div className="hidden overflow-x-auto md:block">
-            <table className="w-full border-collapse">
-              <thead>
-                <tr className="border-b border-slate-100 bg-slate-50/70">
-
-                  {[
-                    "ORDER ID",
-                    "CUSTOMER",
-                    "PRODUCT / SPEC",
-                    "AMOUNT",
-                    "STATUS",
-                    "DATE",
-                  ].map((heading) => (
-                    <th
-                      key={heading}
-                      className="px-5 py-3 text-left text-[9px] font-bold uppercase tracking-[0.08em] text-black"
-                    >
-                      {heading}
-                    </th>
-                  ))}
-
-                </tr>
-              </thead>
-
-              <tbody>
-                {recentOrders.map((order) => (
-                  <tr
-                    key={order.id}
-                    className="border-b border-slate-100 last:border-0 transition hover:bg-slate-50/70"
-                  >
-
-                    <td className="px-5 py-3.5">
-                      <span className="font-mono text-xs font-semibold text-[#0f172a]">
-                        {order.id}
-                      </span>
-                    </td>
-
-                    <td className="px-5 py-3.5">
-                      <span className="text-xs font-semibold text-black">
-                        {order.customer}
-                      </span>
-                    </td>
-
-                    <td className="px-5 py-3.5 text-xs text-black">
-                      {order.product}
-                    </td>
-
-                    <td className="px-5 py-3.5">
-                      <span className="text-xs font-bold text-black">
-                        {order.amount}
-                      </span>
-                    </td>
-
-                    <td className="px-5 py-3.5">
-                      <OrderStatus status={order.status} />
-                    </td>
-
-                    <td className="whitespace-nowrap px-5 py-3.5 text-xs text-black">
-                      {order.date}
-                    </td>
-
-                  </tr>
-                ))}
-              </tbody>
-
-            </table>
-          </div>
-
-          <div className="divide-y divide-slate-100 md:hidden">
-
-            {recentOrders.map((order) => (
-              <div
-                key={order.id}
-                className="p-4"
-              >
-
-                <div className="flex items-start justify-between gap-3">
-
-                  <div>
-                    <p className="font-mono text-xs font-semibold text-[#0f172a]">
-                      {order.id}
-                    </p>
-
-                    <p className="mt-1 text-sm font-semibold text-black">
-                      {order.customer}
-                    </p>
-
-                    <p className="mt-1 text-xs text-black">
-                      {order.product}
-                    </p>
-                  </div>
-
-                  <OrderStatus status={order.status} />
-
-                </div>
-
-                <div className="mt-3 flex items-center justify-between">
-
-                  <span className="text-xs text-black">
-                    {order.date}
-                  </span>
-
-                  <span className="text-sm font-bold text-black">
-                    {order.amount}
-                  </span>
-
-                </div>
-
-              </div>
-            ))}
-
-          </div>
-
-          <div className="flex flex-col gap-2 border-t border-slate-100 px-5 py-3.5 sm:flex-row sm:items-center sm:justify-between">
-
-            <span className="text-[11px] text-black">
-              Showing 4 high-priority orders flagged for dispatch acceleration
-            </span>
-
-            <span className="text-[11px] text-black">
-              Total Batch Weight:{" "}
-              <strong className="font-semibold text-black">
-                2,840 Kg
-              </strong>
-            </span>
-
-          </div>
+      {error && (
+        <div className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
+          {error}
         </div>
+      )}
 
-        <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-
-          <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-
-            <div>
-              <h2 className="text-[12px] font-bold uppercase tracking-[0.08em] text-black">
-                Client Schedule Plan
-              </h2>
-
-              <p className="mt-1 text-xs text-black">
-                Today’s Follow-ups
-              </p>
-            </div>
-
-            <button className="text-xs font-semibold text-black transition hover:text-black">
-              View all
-            </button>
-
-          </div>
-
-          <div className="divide-y divide-slate-100">
-
-            {todayFollowUps.map((fu) => (
-              <div
-                key={fu.name}
-                className="flex items-center justify-between gap-3 px-5 py-4 transition hover:bg-slate-50/60"
-              >
-
-                <div className="flex min-w-0 items-center gap-3">
-
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[10px] font-bold text-black">
-                    {fu.name
-                      .split(" ")
-                      .map((n) => n[0])
-                      .join("")
-                      .slice(0, 2)}
-                  </div>
-
-                  <div className="min-w-0">
-
-                    <div className="flex items-center gap-2">
-
-                      <p className="truncate text-xs font-semibold text-black">
-                        {fu.name}
-                      </p>
-
-                      <PriorityBadge priority={fu.priority} />
-
-                    </div>
-
-                    <p className="mt-0.5 truncate text-[10px] text-black">
-                      {fu.company}
-                    </p>
-
-                  </div>
-
-                </div>
-
-                <div className="flex shrink-0 flex-col items-end gap-1.5">
-
-                  <span className="text-[10px] font-semibold text-black">
-                    {fu.time}
-                  </span>
-
-                  <button className="inline-flex h-7 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[10px] font-semibold text-black transition hover:border-slate-300 hover:bg-slate-50 hover:text-black">
-
-                    {fu.action === "Call" && <Phone size={11} />}
-                    {fu.action === "Email" && <FileText size={11} />}
-                    {fu.action === "Meeting" && <Calendar size={11} />}
-                    {fu.action === "Payment" && <CreditCard size={11} />}
-
-                    {fu.action}
-
-                  </button>
-
-                </div>
-
-              </div>
-            ))}
-
-          </div>
-
-          <div className="border-t border-slate-100 px-5 py-3.5">
-
-            <button className="text-xs font-semibold text-black transition hover:text-black">
-              View all 14 upcoming tasks →
-            </button>
-
-          </div>
-
-        </div>
+      {/* ZONE 1 */}
+      <div className="mb-6">
+        <ControlStrip
+          loading={loading}
+          cash={derived.cash}
+          orderBook={derived.orderBook}
+          pipeline={derived.pipeline}
+          stockHealth={derived.stockHealth}
+          revenueSeries={derived.revenueSeries}
+        />
       </div>
 
-      <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-[#0f172a] shadow-sm">
-        <div className="pointer-events-none absolute -right-16 -top-24 h-64 w-64 rounded-full border border-white/[0.05]" />
-        <div className="pointer-events-none absolute -right-8 -top-16 h-48 w-48 rounded-full border border-white/[0.04]" />
-        <div className="relative flex flex-col gap-5 px-5 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-start gap-4">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.06]">
-              <Factory size={18} className="text-slate-300" />
-            </div>
-
-            <div>
-              <p className="text-xs font-semibold text-white">
-                Mill Production & Stock Readiness
-              </p>
-
-              <p className="mt-1 text-[11px] leading-5 text-black">
-                Current Line-2 running at 91.4% efficiency · Next maintenance
-                cycle in 72 hours
-              </p>
-            </div>
-
-          </div>
-
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[10px] font-medium text-black">
-
-            <span>
-              Galvanized Coils:{" "}
-              <strong className="text-slate-200">
-                48.2 MT
-              </strong>
-            </span>
-
-            <span className="hidden text-black sm:block">
-              •
-            </span>
-
-            <span>
-              Stocked / Consumable:{" "}
-              <strong className="text-slate-200">
-                183 MT
-              </strong>
-            </span>
-
-          </div>
-
-        </div>
+      {/* ZONES 2 + 3 */}
+      <div className="mb-6 grid grid-cols-1 gap-5 xl:grid-cols-[1fr_1.65fr]">
+        <ActionQueue
+          loading={loading}
+          lowStock={data.lowStock}
+          criticalStock={data.criticalStock}
+          deadStock={data.deadStock}
+          delayedOrders={derived.delayedOrders}
+          unpaidOrders={derived.unpaidOrders}
+          stuckEnquiries={derived.stuckEnquiries}
+          overdueFollowups={derived.overdueFollowups}
+          todayFollowups={derived.todayFollowups}
+          readyForDispatch={derived.readyForDispatch}
+        />
+        <FinancialSnapshot loading={loading} accounting={data.accounting} />
       </div>
 
+            {/* ZONE 6 — LOW STOCK ALERT */}
+      <div className="mb-6">
+        <LowStockPanel
+          loading={loading}
+          lowStock={data.lowStock}
+          criticalStock={data.criticalStock}
+        />
+      </div>
+
+      {/* ZONES 4 + 5 */}
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+        <PipelineVelocity
+          loading={loading}
+          quotations={data.quotations}
+          enquiries={data.enquiries}
+          orders={data.orders}
+        />
+        <ActivityStream
+          loading={loading}
+          orders={data.orders}
+          payments={data.payments}
+          quotations={data.quotations}
+          enquiries={data.enquiries}
+        />
+      </div>
     </div>
   );
 }
-
-function OrderStatus({ status }) {
-  const styles = {
-    Confirmed:
-      "border-emerald-200 bg-emerald-50 text-emerald-700",
-    Processing:
-      "border-amber-200 bg-amber-50 text-amber-700",
-    Dispatched:
-      "border-blue-200 bg-blue-50 text-blue-700",
-    Delivered:
-      "border-emerald-200 bg-emerald-50 text-emerald-700",
-  };
-
-  return (
-    <span
-      className={`inline-flex items-center rounded-full border px-2 py-1 text-[9px] font-semibold ${
-        styles[status] ||
-        "border-slate-200 bg-slate-50 text-black"
-      }`}
-    >
-      {status}
-    </span>
-  );
-}
-
-function PriorityBadge({ priority }) {
-  const isHigh = priority === "High";
-
-  return (
-    <span
-      className={`rounded-full px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide ${
-        isHigh
-          ? "bg-red-50 text-red-600"
-          : "bg-amber-50 text-amber-600"
-      }`}
-    >
-      {priority}
-    </span>
-  );
-}
-
-export default Dashboard;

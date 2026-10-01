@@ -5,7 +5,8 @@ const followUpSchema = new mongoose.Schema(
     contact: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Contact",
-      required: true,
+      required: [true, "Contact is required"],
+      index: true,
     },
 
     enquiry: {
@@ -16,35 +17,47 @@ const followUpSchema = new mongoose.Schema(
 
     type: {
       type: String,
-      enum: ["Call", "Email", "Meeting", "WhatsApp", "Other"],
+      enum: {
+        values: ["Call", "Email", "Meeting", "WhatsApp", "Other"],
+        message: "{VALUE} is not a valid follow-up type",
+      },
       default: "Call",
     },
 
     subject: {
       type: String,
-      required: true,
+      required: [true, "Subject is required"],
       trim: true,
+      maxlength: [200, "Subject too long"],
     },
 
     notes: {
       type: String,
       trim: true,
+      maxlength: [2000, "Notes too long"],
+      default: "",
     },
 
     scheduledAt: {
       type: Date,
-      required: true,
+      required: [true, "Scheduled date is required"],
     },
 
     status: {
       type: String,
-      enum: ["Pending", "Completed", "Cancelled"],
+      enum: {
+        values: ["Pending", "Completed", "Cancelled"],
+        message: "{VALUE} is not a valid status",
+      },
       default: "Pending",
     },
 
     priority: {
       type: String,
-      enum: ["Low", "Medium", "High"],
+      enum: {
+        values: ["Low", "Medium", "High"],
+        message: "{VALUE} is not a valid priority",
+      },
       default: "Medium",
     },
 
@@ -57,5 +70,8 @@ const followUpSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+followUpSchema.index({ scheduledAt: 1 });
+followUpSchema.index({ status: 1, scheduledAt: 1 });
 
 module.exports = mongoose.model("FollowUp", followUpSchema);

@@ -7,28 +7,44 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: [true, "Name is required"],
       trim: true,
+      maxlength: [100, "Name too long"],
     },
+
     email: {
       type: String,
       required: [true, "Email is required"],
       unique: true,
       lowercase: true,
       trim: true,
+      maxlength: [200, "Email too long"],
+      match: [/^\S+@\S+\.\S+$/, "Please provide a valid email"],
     },
+
     password: {
       type: String,
       required: [true, "Password is required"],
-      minlength: 6,
+      minlength: [8, "Password must be at least 8 characters"],
+      maxlength: [128, "Password too long"],
       select: false,
     },
+
     role: {
       type: String,
-      enum: ["Admin", "Sales Manager", "Sales Executive", "Viewer"],
+      enum: {
+        values: ["Admin", "Sales Manager", "Sales Executive", "Viewer"],
+        message: "{VALUE} is not a valid role",
+      },
       default: "Sales Executive",
     },
+
     isActive: {
       type: Boolean,
       default: true,
+    },
+
+    lastLogin: {
+      type: Date,
+      default: null,
     },
   },
   {
@@ -43,7 +59,6 @@ userSchema.pre("save", async function () {
   this.password = await bcrypt.hash(this.password, salt);
 });
 
-// Compare password method
 userSchema.methods.comparePassword = async function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
 };

@@ -3,50 +3,48 @@ const Payment = require('../models/Payment');
 const Order = require('../models/Order');
 const { getNextSequence } = require('../models/Counter');
 
-const applyToOrder = async ({ orderId, amount, direction, session }) => {
-  const delta = direction === 'apply' ? amount : -amount;
+const MAX_LIMIT = 200;
+const MAX_AMOUNT = 10000000000; // 10,000,000,000
 
-  const filter = { _id: orderId, isActive: true };
-  if (direction === 'apply') {
-    filter.$expr = {
-      $lte: [{ $add: ['$amountPaid', amount] }, { $add: ['$grandTotal', 0.01] }],
-    };
-  }
+const VALID_MODES = [
+  'Bank Transfer',
+  'UPI',
+  'Cheque',
+  'Cash',
+  'NEFT',
+  'RTGS',
+  'Other',
+];
+const VALID_STATUSES = ['Pending', 'Completed', 'Failed', 'Bounced', 'Cancelled'];
+const NEEDS_TXN_ID = ['UPI', 'NEFT', 'RTGS', 'Bank Transfer'];
 
-  const pipeline = [
-    {
-      $set: {
-        amountPaid: {
-          $max: [0, { $add: [{ $ifNull: ['$amountPaid', 0] }, delta] }],
-        },
-      },
-    },
-    {
-      $set: {
-        paymentStatus: {
-          $switch: {
-            branches: [
-              { case: { $gte: ['$amountPaid', '$grandTotal'] }, then: 'Paid' },
-              { case: { $gt: ['$amountPaid', 0] }, then: 'Partial' },
-            ],
-            default: 'Pending',
-          },
-        },
-      },
-    },
-  ];
+/* ---------- helpers ---------- */
+const isValidId = (v) => mongoose.isValidObjectId(v);
 
-  return Order.findOneAndUpdate(filter, pipeline, { new: true, session });
+const safeString = (v, max = 500) => {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== 'string') return undefined;
+  const t = v.trim();
+  return t ? t.slice(0, max) : '';
 };
 
-const generatePaymentNumber = async (session) => {
-  const year = new Date().getFullYear();
-  const seq = await getNextSequence(`payment-${year}`, session);
-  return `PAY-${year}-${String(seq).padStart(4, '0')}`;
+const escapeRegex = (str) =>
+  String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const parseDate = (v) => {
+  if (!v) return null;
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? null : d;
+};
+
+const endOfDay = (d) => {
+  const x = new Date(d);
+  x.setHours(23, 59, 59, 999);
+  return x;
 };
 
 const handleError = (res, error, fallbackMessage) => {
-  console.error(fallbackMessage, error);
+  console.error(`[${fallbackMessage}]`, error);
 
   if (error.name === 'ValidationError') {
     const messages = Object.values(error.errors).map((e) => e.message);
@@ -57,19 +55,102 @@ const handleError = (res, error, fallbackMessage) => {
   }
 
   if (error.code === 11000) {
+    const field = Object.keys(error.keyValue || {})[0] || 'field';
+    const friendly =
+      field === 'transactionId'
+        ? 'Transaction ID already exists'
+        : 'Duplicate payment number, please retry';
     return res.status(409).json({
       success: false,
-      message: 'Duplicate payment number, please retry',
+      message: friendly,
+      field,
     });
   }
 
+  // Don't leak error.message to the client
   return res.status(500).json({
     success: false,
     message: fallbackMessage,
-    error: error.message,
   });
 };
 
+/*
+|--------------------------------------------------------------------------
+| applyToOrder  (unchanged — already atomic and safe)
+|--------------------------------------------------------------------------
+*/
+const applyToOrder = async ({ orderId, amount, direction, session }) => {
+  const delta = direction === 'apply' ? amount : -amount;
+
+  const filter = {
+    _id: orderId,
+    isActive: true,
+  };
+
+  if (direction === 'apply') {
+    filter.$expr = {
+      $lte: [
+        { $add: [{ $ifNull: ['$amountPaid', 0] }, amount] },
+        { $add: ['$grandTotal', 0.01] },
+      ],
+    };
+  }
+
+  const pipeline = [
+    {
+      $set: {
+        amountPaid: {
+          $max: [
+            0,
+            { $add: [{ $ifNull: ['$amountPaid', 0] }, delta] },
+          ],
+        },
+      },
+    },
+    {
+      $set: {
+        paymentStatus: {
+          $switch: {
+            branches: [
+              {
+                case: { $gte: ['$amountPaid', '$grandTotal'] },
+                then: 'Paid',
+              },
+              {
+                case: { $gt: ['$amountPaid', 0] },
+                then: 'Partial',
+              },
+            ],
+            default: 'Pending',
+          },
+        },
+      },
+    },
+  ];
+
+  return Order.findOneAndUpdate(filter, pipeline, {
+    new: true,
+    session,
+    updatePipeline: true,
+  });
+};
+
+/*
+|--------------------------------------------------------------------------
+| Payment number
+|--------------------------------------------------------------------------
+*/
+const generatePaymentNumber = async (session) => {
+  const year = new Date().getFullYear();
+  const seq = await getNextSequence(`payment-${year}`, session);
+  return `PAY-${year}-${String(seq).padStart(4, '0')}`;
+};
+
+/*
+|--------------------------------------------------------------------------
+| GET ALL PAYMENTS
+|--------------------------------------------------------------------------
+*/
 const getAllPayments = async (req, res) => {
   try {
     const {
@@ -86,35 +167,92 @@ const getAllPayments = async (req, res) => {
 
     const query = { isActive: true };
 
-    if (order) query.order = order;
-    if (contact) query.contact = contact;
-    if (status) query.status = status;
-    if (paymentMode) query.paymentMode = paymentMode;
+    if (order) {
+      if (!isValidId(order)) {
+        return res
+          .status(400)
+          .json({ success: false, message: 'Invalid order ID' });
+      }
+      query.order = order;
+    }
+
+    if (contact) {
+      if (!isValidId(contact)) {
+        return res
+          .status(400)
+          .json({ success: false, message: 'Invalid contact ID' });
+      }
+      query.contact = contact;
+    }
+
+    if (status) {
+      if (!VALID_STATUSES.includes(status)) {
+        return res
+          .status(400)
+          .json({ success: false, message: 'Invalid status filter' });
+      }
+      query.status = status;
+    }
+
+    if (paymentMode) {
+      if (!VALID_MODES.includes(paymentMode)) {
+        return res
+          .status(400)
+          .json({ success: false, message: 'Invalid paymentMode filter' });
+      }
+      query.paymentMode = paymentMode;
+    }
 
     if (fromDate || toDate) {
       query.paymentDate = {};
-      if (fromDate) query.paymentDate.$gte = new Date(fromDate);
-      if (toDate) query.paymentDate.$lte = new Date(toDate);
+
+      if (fromDate) {
+        const d = parseDate(fromDate);
+        if (!d) {
+          return res
+            .status(400)
+            .json({ success: false, message: 'Invalid fromDate' });
+        }
+        query.paymentDate.$gte = d;
+      }
+
+      if (toDate) {
+        const d = parseDate(toDate);
+        if (!d) {
+          return res
+            .status(400)
+            .json({ success: false, message: 'Invalid toDate' });
+        }
+        query.paymentDate.$lte = endOfDay(d); // 👈 end-of-day, not midnight
+      }
     }
 
-    if (search) {
+    if (search && typeof search === 'string' && search.trim()) {
+      const safe = escapeRegex(search.trim().slice(0, 100));
       query.$or = [
-        { paymentNumber: { $regex: search, $options: 'i' } },
-        { transactionId: { $regex: search, $options: 'i' } },
-        { chequeNumber: { $regex: search, $options: 'i' } },
-        { notes: { $regex: search, $options: 'i' } },
+        { paymentNumber: { $regex: safe, $options: 'i' } },
+        { transactionId: { $regex: safe, $options: 'i' } },
+        { chequeNumber: { $regex: safe, $options: 'i' } },
+        { paidFrom: { $regex: safe, $options: 'i' } },
+        { notes: { $regex: safe, $options: 'i' } },
       ];
     }
 
-    const skip = (Number(page) - 1) * Number(limit);
+    const pageNumber = Math.max(Number(page) || 1, 1);
+    const limitNumber = Math.min(Math.max(Number(limit) || 20, 1), MAX_LIMIT);
+    const skip = (pageNumber - 1) * limitNumber;
 
     const [payments, total] = await Promise.all([
       Payment.find(query)
-        .populate('order', 'orderNumber grandTotal status paymentStatus')
+        .populate(
+          'order',
+          'orderNumber grandTotal amountPaid status paymentStatus'
+        )
         .populate('contact', 'name company phone')
         .sort({ paymentDate: -1 })
         .skip(skip)
-        .limit(Number(limit)),
+        .limit(limitNumber),
+
       Payment.countDocuments(query),
     ]);
 
@@ -122,8 +260,8 @@ const getAllPayments = async (req, res) => {
       success: true,
       count: payments.length,
       total,
-      page: Number(page),
-      pages: Math.ceil(total / Number(limit)),
+      page: pageNumber,
+      pages: Math.max(Math.ceil(total / limitNumber), 1),
       data: payments,
     });
   } catch (error) {
@@ -131,28 +269,40 @@ const getAllPayments = async (req, res) => {
   }
 };
 
+/*
+|--------------------------------------------------------------------------
+| GET PAYMENT BY ID
+|--------------------------------------------------------------------------
+*/
 const getPaymentById = async (req, res) => {
   try {
+    if (!isValidId(req.params.id)) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'Invalid payment ID' });
+    }
+
     const payment = await Payment.findById(req.params.id)
       .populate('order', 'orderNumber grandTotal status paymentStatus amountPaid')
       .populate('contact', 'name company phone email');
 
     if (!payment || !payment.isActive) {
-      return res.status(404).json({
-        success: false,
-        message: 'Payment not found',
-      });
+      return res
+        .status(404)
+        .json({ success: false, message: 'Payment not found' });
     }
 
-    res.status(200).json({
-      success: true,
-      data: payment,
-    });
+    res.status(200).json({ success: true, data: payment });
   } catch (error) {
     handleError(res, error, 'Server error while fetching payment');
   }
 };
 
+/*
+|--------------------------------------------------------------------------
+| CREATE PAYMENT
+|--------------------------------------------------------------------------
+*/
 const createPayment = async (req, res) => {
   const session = await mongoose.startSession();
 
@@ -163,6 +313,7 @@ const createPayment = async (req, res) => {
       currency,
       paymentDate,
       paymentMode,
+      paidFrom,
       transactionId,
       chequeNumber,
       bankName,
@@ -171,36 +322,107 @@ const createPayment = async (req, res) => {
       attachmentUrl,
     } = req.body;
 
-    if (!orderId) {
-      return res.status(400).json({ success: false, message: 'Order is required' });
-    }
-    if (!(amount > 0)) {
-      return res.status(400).json({ success: false, message: 'Amount must be greater than 0' });
+    /* ---------- validation ---------- */
+    if (!orderId || !isValidId(orderId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'Valid order ID is required' });
     }
 
+    const numericAmount = Number(amount);
+    if (
+      !Number.isFinite(numericAmount) ||
+      numericAmount <= 0 ||
+      numericAmount > MAX_AMOUNT
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: `Amount must be a positive number up to ${MAX_AMOUNT.toLocaleString('en-IN')}`,
+      });
+    }
+
+    if (!paymentMode || !VALID_MODES.includes(paymentMode)) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'Invalid payment mode' });
+    }
+
+    if (!VALID_STATUSES.includes(status)) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'Invalid status' });
+    }
+
+    // conditional fields (mirror the model, fail fast with clean messages)
+    if (paymentMode === 'Cheque') {
+      if (!safeString(chequeNumber, 50)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Cheque number is required',
+        });
+      }
+      if (!safeString(bankName, 150)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Bank name is required',
+        });
+      }
+    }
+    if (NEEDS_TXN_ID.includes(paymentMode) && !safeString(transactionId, 100)) {
+      return res.status(400).json({
+        success: false,
+        message: `Transaction ID is required for ${paymentMode}`,
+      });
+    }
+
+    // 👈 The bug fix — explicit date parsing
+    let cleanPaymentDate = new Date();
+    if (paymentDate !== undefined && paymentDate !== null && paymentDate !== '') {
+      const parsed = parseDate(paymentDate);
+      if (!parsed) {
+        return res
+          .status(400)
+          .json({ success: false, message: 'Invalid payment date' });
+      }
+      cleanPaymentDate = parsed;
+    }
+
+    const cleanCurrency = safeString(currency, 3);
+    const finalCurrency = cleanCurrency
+      ? cleanCurrency.toUpperCase()
+      : 'INR';
+
+    /* ---------- find order ---------- */
     const order = await Order.findById(orderId);
     if (!order || !order.isActive) {
-      return res.status(404).json({ success: false, message: 'Order not found' });
+      return res
+        .status(404)
+        .json({ success: false, message: 'Order not found' });
+    }
+
+    if (!order.contact) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'Order has no linked contact' });
     }
 
     let createdPayment;
 
     await session.withTransaction(async () => {
-      // Only a Completed payment ever touches the order's balance.
-      // Pending / Failed / Bounced / Cancelled payments are recorded
-      // for audit purposes but must not affect amountPaid.
+      /* Only Completed payments affect the Order */
       if (status === 'Completed') {
         const updatedOrder = await applyToOrder({
           orderId,
-          amount,
+          amount: numericAmount,
           direction: 'apply',
           session,
         });
 
         if (!updatedOrder) {
-          const remaining = order.grandTotal - (order.amountPaid || 0);
+          const remaining =
+            Number(order.grandTotal || 0) - Number(order.amountPaid || 0);
           const err = new Error(
-            `Payment amount (${amount}) exceeds remaining balance (${remaining.toFixed(2)})`
+            `Payment amount (${numericAmount}) exceeds remaining balance (${remaining.toFixed(2)})`
           );
           err.status = 400;
           throw err;
@@ -215,16 +437,17 @@ const createPayment = async (req, res) => {
             paymentNumber,
             order: orderId,
             contact: order.contact,
-            amount,
-            currency,
-            paymentDate: paymentDate || Date.now(),
+            amount: numericAmount,
+            currency: finalCurrency,
+            paymentDate: cleanPaymentDate,
             paymentMode,
-            transactionId,
-            chequeNumber,
-            bankName,
+            paidFrom: safeString(paidFrom, 150) || undefined,
+            transactionId: safeString(transactionId, 100) || undefined,
+            chequeNumber: safeString(chequeNumber, 50) || undefined,
+            bankName: safeString(bankName, 150) || undefined,
             status,
-            notes,
-            attachmentUrl,
+            notes: safeString(notes, 2000) || undefined,
+            attachmentUrl: safeString(attachmentUrl, 500) || undefined,
             appliedToOrder: status === 'Completed',
             createdBy: req.user?._id,
           },
@@ -246,38 +469,95 @@ const createPayment = async (req, res) => {
     });
   } catch (error) {
     if (error.status === 400) {
-      return res.status(400).json({ success: false, message: error.message });
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
     }
     handleError(res, error, 'Server error while creating payment');
   } finally {
-    session.endSession();
+    await session.endSession();
   }
 };
 
+/*
+|--------------------------------------------------------------------------
+| UPDATE PAYMENT
+|--------------------------------------------------------------------------
+*/
 const updatePayment = async (req, res) => {
   const session = await mongoose.startSession();
 
   try {
-    const existing = await Payment.findById(req.params.id);
-    if (!existing || !existing.isActive) {
-      return res.status(404).json({ success: false, message: 'Payment not found' });
+    if (!isValidId(req.params.id)) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'Invalid payment ID' });
     }
 
-    // Amount, order, and contact are deliberately NOT editable here.
-    // A payment correction should be a reversal (status -> Cancelled/Bounced)
-    // plus a fresh payment, never a silent mutation of a settled amount.
-    const allowed = [
-      'paymentMode',
-      'transactionId',
-      'chequeNumber',
-      'bankName',
-      'notes',
-      'status',
-      'paymentDate',
-      'attachmentUrl',
-      'isReconciled',
-      'reconciledDate',
-    ];
+    const existing = await Payment.findById(req.params.id);
+    if (!existing || !existing.isActive) {
+      return res
+        .status(404)
+        .json({ success: false, message: 'Payment not found' });
+    }
+
+    /* ---------- validate incoming fields ---------- */
+    const {
+      paymentMode,
+      paidFrom,
+      transactionId,
+      chequeNumber,
+      bankName,
+      notes,
+      status,
+      paymentDate,
+      attachmentUrl,
+      isReconciled,
+      reconciledDate,
+    } = req.body;
+
+    if (paymentMode !== undefined && !VALID_MODES.includes(paymentMode)) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'Invalid payment mode' });
+    }
+
+    if (status !== undefined && !VALID_STATUSES.includes(status)) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'Invalid status' });
+    }
+
+    let cleanPaymentDate;
+    if (paymentDate !== undefined) {
+      if (paymentDate === null || paymentDate === '') {
+        cleanPaymentDate = undefined; // keep existing
+      } else {
+        const parsed = parseDate(paymentDate);
+        if (!parsed) {
+          return res
+            .status(400)
+            .json({ success: false, message: 'Invalid payment date' });
+        }
+        cleanPaymentDate = parsed;
+      }
+    }
+
+    let cleanReconciledDate;
+    if (reconciledDate !== undefined) {
+      if (reconciledDate === null || reconciledDate === '') {
+        cleanReconciledDate = null;
+      } else {
+        const parsed = parseDate(reconciledDate);
+        if (!parsed) {
+          return res
+            .status(400)
+            .json({ success: false, message: 'Invalid reconciled date' });
+        }
+        cleanReconciledDate = parsed;
+      }
+    }
 
     let updatedPayment;
 
@@ -286,17 +566,44 @@ const updatePayment = async (req, res) => {
 
       const wasApplied = payment.appliedToOrder;
 
-      allowed.forEach((field) => {
-        if (req.body[field] !== undefined) {
-          payment[field] = req.body[field];
+      // Whitelisted updates with sanitization
+      if (paymentMode !== undefined) payment.paymentMode = paymentMode;
+      if (paidFrom !== undefined) {
+        payment.paidFrom = safeString(paidFrom, 150) || undefined;
+      }
+      if (transactionId !== undefined) {
+        payment.transactionId = safeString(transactionId, 100) || undefined;
+      }
+      if (chequeNumber !== undefined) {
+        payment.chequeNumber = safeString(chequeNumber, 50) || undefined;
+      }
+      if (bankName !== undefined) {
+        payment.bankName = safeString(bankName, 150) || undefined;
+      }
+      if (notes !== undefined) {
+        payment.notes = safeString(notes, 2000) || undefined;
+      }
+      if (status !== undefined) payment.status = status;
+      if (cleanPaymentDate !== undefined) payment.paymentDate = cleanPaymentDate;
+      if (attachmentUrl !== undefined) {
+        payment.attachmentUrl = safeString(attachmentUrl, 500) || undefined;
+      }
+      if (isReconciled !== undefined) {
+        payment.isReconciled = Boolean(isReconciled);
+        // Auto-fill reconciledDate when first reconciled
+        if (isReconciled && !payment.reconciledDate && cleanReconciledDate === undefined) {
+          payment.reconciledDate = new Date();
         }
-      });
+      }
+      if (cleanReconciledDate !== undefined) {
+        payment.reconciledDate = cleanReconciledDate;
+      }
+
       payment.updatedBy = req.user?._id;
 
       const isCompletedNow = payment.status === 'Completed';
 
-      // Only touch the order if the "applied" state is actually changing —
-      // e.g. Completed -> Bounced (reverse), or Pending -> Completed (apply).
+      /* Only touch the order if the applied state changed */
       if (wasApplied !== isCompletedNow) {
         if (isCompletedNow) {
           const updatedOrder = await applyToOrder({
@@ -305,9 +612,10 @@ const updatePayment = async (req, res) => {
             direction: 'apply',
             session,
           });
+
           if (!updatedOrder) {
             const err = new Error(
-              'Marking this payment Completed would exceed the order\'s remaining balance'
+              "Marking this payment Completed would exceed the order's remaining balance"
             );
             err.status = 400;
             throw err;
@@ -320,6 +628,7 @@ const updatePayment = async (req, res) => {
             session,
           });
         }
+
         payment.appliedToOrder = isCompletedNow;
       }
 
@@ -338,29 +647,42 @@ const updatePayment = async (req, res) => {
     });
   } catch (error) {
     if (error.status === 400) {
-      return res.status(400).json({ success: false, message: error.message });
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
     }
     handleError(res, error, 'Server error while updating payment');
   } finally {
-    session.endSession();
+    await session.endSession();
   }
 };
 
+/*
+|--------------------------------------------------------------------------
+| DELETE PAYMENT  (soft)
+|--------------------------------------------------------------------------
+*/
 const deletePayment = async (req, res) => {
   const session = await mongoose.startSession();
 
   try {
+    if (!isValidId(req.params.id)) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'Invalid payment ID' });
+    }
+
     const existing = await Payment.findById(req.params.id);
     if (!existing || !existing.isActive) {
-      return res.status(404).json({ success: false, message: 'Payment not found' });
+      return res
+        .status(404)
+        .json({ success: false, message: 'Payment not found' });
     }
 
     await session.withTransaction(async () => {
       const payment = await Payment.findById(req.params.id).session(session);
 
-      // Only reverse the order balance if this payment had actually been
-      // applied to it (status was Completed). Reversing a Pending/Failed
-      // payment's amount would incorrectly credit the order.
       if (payment.appliedToOrder) {
         await applyToOrder({
           orderId: payment.order,
@@ -373,6 +695,7 @@ const deletePayment = async (req, res) => {
 
       payment.isActive = false;
       payment.updatedBy = req.user?._id;
+
       await payment.save({ session, validateModifiedOnly: true });
     });
 
@@ -383,23 +706,54 @@ const deletePayment = async (req, res) => {
   } catch (error) {
     handleError(res, error, 'Server error while deleting payment');
   } finally {
-    session.endSession();
+    await session.endSession();
   }
 };
 
+/*
+|--------------------------------------------------------------------------
+| GET ALL PAYMENTS FOR ONE ORDER
+|--------------------------------------------------------------------------
+*/
 const getPaymentsByOrder = async (req, res) => {
   try {
+    if (!isValidId(req.params.orderId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'Invalid order ID' });
+    }
+
     const [payments, order] = await Promise.all([
       Payment.find({ order: req.params.orderId, isActive: true })
-        .populate('contact', 'name company')
-        .sort({ paymentDate: -1 }),
-      Order.findById(req.params.orderId).select('orderNumber grandTotal amountPaid paymentStatus'),
+        .populate('contact', 'name company phone email')
+        .populate('order', 'orderNumber grandTotal amountPaid paymentStatus')
+        .sort({ paymentDate: -1, createdAt: -1 }),
+
+      Order.findById(req.params.orderId).select(
+        'orderNumber grandTotal amountPaid paymentStatus contact'
+      ),
     ]);
+
+    if (!order) {
+      return res
+        .status(404)
+        .json({ success: false, message: 'Order not found' });
+    }
+
+    const orderTotal = Number(order.grandTotal || 0);
+    const amountPaid = Number(order.amountPaid || 0);
+    const remainingAmount = Math.max(0, orderTotal - amountPaid);
 
     res.status(200).json({
       success: true,
       count: payments.length,
       order,
+      summary: {
+        orderTotal,
+        totalPaid: amountPaid,
+        remainingAmount,
+        paymentStatus: order.paymentStatus,
+      },
       data: payments,
     });
   } catch (error) {
@@ -407,11 +761,11 @@ const getPaymentsByOrder = async (req, res) => {
   }
 };
 
-/**
- * Aggregate summary for dashboard cards: total collected, total pending,
- * today's collections, and a breakdown by mode/status. Avoids making the
- * frontend paginate through every payment just to show totals.
- */
+/*
+|--------------------------------------------------------------------------
+| PAYMENT SUMMARY
+|--------------------------------------------------------------------------
+*/
 const getPaymentSummary = async (req, res) => {
   try {
     const startOfToday = new Date();
@@ -420,8 +774,15 @@ const getPaymentSummary = async (req, res) => {
     const [totals, todayTotals, byStatus] = await Promise.all([
       Payment.aggregate([
         { $match: { isActive: true, status: 'Completed' } },
-        { $group: { _id: null, totalCollected: { $sum: '$amount' }, count: { $sum: 1 } } },
+        {
+          $group: {
+            _id: null,
+            totalCollected: { $sum: '$amount' },
+            count: { $sum: 1 },
+          },
+        },
       ]),
+
       Payment.aggregate([
         {
           $match: {
@@ -430,11 +791,24 @@ const getPaymentSummary = async (req, res) => {
             paymentDate: { $gte: startOfToday },
           },
         },
-        { $group: { _id: null, totalToday: { $sum: '$amount' }, count: { $sum: 1 } } },
+        {
+          $group: {
+            _id: null,
+            totalToday: { $sum: '$amount' },
+            count: { $sum: 1 },
+          },
+        },
       ]),
+
       Payment.aggregate([
         { $match: { isActive: true } },
-        { $group: { _id: '$status', total: { $sum: '$amount' }, count: { $sum: 1 } } },
+        {
+          $group: {
+            _id: '$status',
+            total: { $sum: '$amount' },
+            count: { $sum: 1 },
+          },
+        },
       ]),
     ]);
 

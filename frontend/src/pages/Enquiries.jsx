@@ -25,6 +25,8 @@ import {
   CircleDollarSign,
   Trash2,
   RefreshCw,
+  Eye,
+  Save,
 } from "lucide-react";
 
 import {
@@ -62,6 +64,67 @@ const PRODUCT_OPTIONS = [
   "Binding Wire",
   "Welded Wire Mesh",
 ];
+
+const UNIT_OPTIONS = ["kg", "MT", "Bundle", "Coil", "Roll", "Nos"];
+
+const GST_RATE = 0.09; // CGST and SGST, 9% each = 18% total
+
+function createEmptyQuoteItem() {
+  return {
+    id: `item-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    description: "",
+    gauge: "",
+    qty: "",
+    unit: "kg",
+    rate: "",
+    discountPct: "0",
+  };
+}
+
+const ONES = [
+  "", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
+  "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen",
+];
+const TENS = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+
+function twoDigitWords(n) {
+  if (n < 20) return ONES[n];
+  return TENS[Math.floor(n / 10)] + (n % 10 ? " " + ONES[n % 10] : "");
+}
+
+function threeDigitWords(n) {
+  if (n < 100) return twoDigitWords(n);
+  return ONES[Math.floor(n / 100)] + " Hundred" + (n % 100 ? " " + twoDigitWords(n % 100) : "");
+}
+
+// Indian numbering system (Crore / Lakh / Thousand)
+function numberToIndianWords(num) {
+  if (num === 0) return "Zero";
+
+  let n = Math.floor(num);
+  let words = "";
+
+  const crore = Math.floor(n / 10000000);
+  n %= 10000000;
+  const lakh = Math.floor(n / 100000);
+  n %= 100000;
+  const thousand = Math.floor(n / 1000);
+  n %= 1000;
+  const hundred = n;
+
+  if (crore) words += threeDigitWords(crore) + " Crore ";
+  if (lakh) words += threeDigitWords(lakh) + " Lakh ";
+  if (thousand) words += threeDigitWords(thousand) + " Thousand ";
+  if (hundred) words += threeDigitWords(hundred);
+
+  return words.trim();
+}
+
+function amountInWords(value) {
+  const rounded = Math.round(value || 0);
+  if (rounded === 0) return "Zero Rupees Only";
+  return `${numberToIndianWords(rounded)} Rupees Only`;
+}
 
 const STATUS_STYLES = {
   New: "border-blue-200 bg-blue-50 text-blue-700",
@@ -228,6 +291,23 @@ function Enquiries() {
 
   const [newEnquiry, setNewEnquiry] = useState(EMPTY_ENQUIRY);
   const [noteText, setNoteText] = useState("");
+
+  // Quotation builder
+  const [showQuoteModal, setShowQuoteModal] = useState(false);
+  const [quoteMode, setQuoteMode] = useState("edit"); // "edit" | "preview"
+  const [quoteStatus, setQuoteStatus] = useState("Draft");
+  const [quoteDate, setQuoteDate] = useState("");
+  const [quoteValidTill, setQuoteValidTill] = useState("");
+  const [quoteGstin, setQuoteGstin] = useState("");
+  const [quoteAddress, setQuoteAddress] = useState("");
+  const [quoteItems, setQuoteItems] = useState([createEmptyQuoteItem()]);
+  const [quoteTerms, setQuoteTerms] = useState({
+    payment: "50% advance, balance before dispatch",
+    delivery: "7–10 working days from confirmation",
+    freight: "Extra as per actuals",
+    validity: "15 days from quote date",
+    notes: "",
+  });
 
   const loadEnquiries = async () => {
     try {
@@ -523,6 +603,105 @@ function Enquiries() {
 
   const closeDetailModal = () => {
     setSelectedId(null);
+  };
+
+  /* ---------------------------------------------------------
+   * QUOTATION BUILDER
+   * --------------------------------------------------------- */
+
+  const quoteNumber = selectedEnquiry ? `QT-${selectedEnquiry.id}` : "QT-DRAFT";
+
+  const quoteComputed = useMemo(() => {
+    const rows = quoteItems.map((item) => {
+      const qty = Number(item.qty) || 0;
+      const rate = Number(item.rate) || 0;
+      const discountPct = Number(item.discountPct) || 0;
+
+      const lineBase = qty * rate;
+      const lineDiscount = lineBase * (discountPct / 100);
+      const lineTotal = lineBase - lineDiscount;
+
+      return { ...item, lineBase, lineDiscount, lineTotal };
+    });
+
+    const subtotal = rows.reduce((sum, row) => sum + row.lineBase, 0);
+    const discountTotal = rows.reduce((sum, row) => sum + row.lineDiscount, 0);
+    const taxable = subtotal - discountTotal;
+    const cgst = taxable * GST_RATE;
+    const sgst = taxable * GST_RATE;
+    const rawTotal = taxable + cgst + sgst;
+    const grandTotal = Math.round(rawTotal);
+    const roundOff = grandTotal - rawTotal;
+
+    return { rows, subtotal, discountTotal, taxable, cgst, sgst, roundOff, grandTotal };
+  }, [quoteItems]);
+
+  const openQuoteModal = () => {
+    if (!selectedEnquiry) return;
+
+    const today = new Date();
+    const validTill = new Date();
+    validTill.setDate(validTill.getDate() + 15);
+
+    setQuoteStatus("Draft");
+    setQuoteMode("edit");
+    setQuoteDate(today.toISOString().split("T")[0]);
+    setQuoteValidTill(validTill.toISOString().split("T")[0]);
+    setQuoteGstin("");
+    setQuoteAddress(
+      selectedEnquiry.location !== "—" ? selectedEnquiry.location : ""
+    );
+    setQuoteItems([
+      {
+        ...createEmptyQuoteItem(),
+        description:
+          selectedEnquiry.product !== "—" ? selectedEnquiry.product : "",
+      },
+    ]);
+    setQuoteTerms({
+      payment: "50% advance, balance before dispatch",
+      delivery: "7–10 working days from confirmation",
+      freight: "Extra as per actuals",
+      validity: "15 days from quote date",
+      notes: "",
+    });
+    setShowQuoteModal(true);
+  };
+
+  const closeQuoteModal = () => setShowQuoteModal(false);
+
+  const updateQuoteItem = (id, field, value) => {
+    setQuoteItems((current) =>
+      current.map((item) => (item.id === id ? { ...item, [field]: value } : item))
+    );
+  };
+
+  const addQuoteItem = () => {
+    setQuoteItems((current) => [...current, createEmptyQuoteItem()]);
+  };
+
+  const removeQuoteItem = (id) => {
+    setQuoteItems((current) =>
+      current.length > 1 ? current.filter((item) => item.id !== id) : current
+    );
+  };
+
+  const handleSaveQuoteDraft = () => {
+    // TODO: wire this up to a real "create quotation" endpoint once one
+    // exists on the backend — for now this keeps the quote local as a draft.
+    setQuoteStatus("Draft");
+    alert("Quotation saved as draft (connect this to your quotations API).");
+  };
+
+  const handleSendQuote = () => {
+    if (!quoteItems.some((item) => item.description.trim() && Number(item.qty) > 0)) {
+      alert("Add at least one item with a quantity before sending.");
+      return;
+    }
+
+    // TODO: wire this up to your real "send quotation" endpoint / email flow.
+    setQuoteStatus("Sent");
+    alert("Quotation marked as sent (connect this to your send/email API).");
   };
 
   return (
@@ -1197,6 +1376,7 @@ function Enquiries() {
             <div className="flex items-center gap-2 border-t border-slate-200 bg-slate-50/70 px-6 py-4">
               <button
                 type="button"
+                onClick={openQuoteModal}
                 className="inline-flex h-9 flex-1 items-center justify-center gap-2 rounded-lg bg-[#002244] px-3 text-xs font-semibold text-white transition hover:bg-[#00345f]"
               >
                 <Send size={14} />
@@ -1588,6 +1768,537 @@ function Enquiries() {
           </div>
         </div>
       )}
+
+      {showQuoteModal && selectedEnquiry && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4"
+          onClick={closeQuoteModal}
+        >
+          <div
+            className="flex max-h-[95vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* HEADER */}
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-6 py-4">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-base font-bold text-slate-900">New Quotation</h2>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                      quoteStatus === "Sent"
+                        ? "bg-emerald-50 text-emerald-700"
+                        : "bg-slate-100 text-slate-500"
+                    }`}
+                  >
+                    {quoteStatus}
+                  </span>
+                </div>
+
+                <p className="mt-1 truncate font-mono text-xs text-slate-400">
+                  {quoteNumber} · Linked to {selectedEnquiry.id} · {selectedEnquiry.customer}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setQuoteMode((m) => (m === "edit" ? "preview" : "edit"))}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-600 transition hover:border-slate-400 hover:text-slate-900"
+                >
+                  <Eye size={14} />
+                  {quoteMode === "edit" ? "Preview" : "Edit"}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSaveQuoteDraft}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-600 transition hover:border-slate-400 hover:text-slate-900"
+                >
+                  <Save size={14} />
+                  Save draft
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSendQuote}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-md bg-[#002244] px-3.5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#00345f]"
+                >
+                  <Send size={14} />
+                  Send
+                </button>
+
+                <button
+                  type="button"
+                  onClick={closeQuoteModal}
+                  className="flex h-9 w-9 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                  aria-label="Close quotation"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+
+            {/* BODY */}
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+              {quoteMode === "edit" ? (
+                <div className="space-y-6">
+                  {/* CUSTOMER + QUOTE META */}
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div className="rounded-lg border border-slate-200 p-4">
+                      <h3 className="text-xs font-semibold text-slate-500">Bill to</h3>
+
+                      <div className="mt-2.5 flex items-center gap-3">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#002244] text-xs font-bold text-white">
+                          {getInitials(selectedEnquiry.customer)}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold text-slate-800">
+                            {selectedEnquiry.customer}
+                          </div>
+                          <div className="truncate text-xs text-slate-400">
+                            {selectedEnquiry.company}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <FormField label="GSTIN">
+                          <input
+                            className="form-input"
+                            value={quoteGstin}
+                            onChange={(e) => setQuoteGstin(e.target.value)}
+                            placeholder="22AAAAA0000A1Z5"
+                          />
+                        </FormField>
+
+                        <FormField label="Address">
+                          <input
+                            className="form-input"
+                            value={quoteAddress}
+                            onChange={(e) => setQuoteAddress(e.target.value)}
+                            placeholder="City, State"
+                          />
+                        </FormField>
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border border-slate-200 p-4">
+                      <h3 className="text-xs font-semibold text-slate-500">Quote details</h3>
+
+                      <div className="mt-2.5 flex items-center justify-between text-xs text-slate-500">
+                        <span>Quote number</span>
+                        <span className="font-mono font-semibold text-slate-700">
+                          {quoteNumber}
+                        </span>
+                      </div>
+
+                      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <FormField label="Quote date" required>
+                          <input
+                            type="date"
+                            className="form-input"
+                            value={quoteDate}
+                            onChange={(e) => setQuoteDate(e.target.value)}
+                          />
+                        </FormField>
+
+                        <FormField label="Valid till" required>
+                          <input
+                            type="date"
+                            className="form-input"
+                            value={quoteValidTill}
+                            onChange={(e) => setQuoteValidTill(e.target.value)}
+                          />
+                        </FormField>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ITEMS */}
+                  <div>
+                    <div className="mb-2 flex items-center justify-between">
+                      <h3 className="text-xs font-semibold text-slate-500">Items</h3>
+                    </div>
+
+                    <div className="overflow-hidden overflow-x-auto rounded-lg border border-slate-200">
+                      <table className="w-full min-w-[760px] table-fixed border-collapse text-left">
+                        <colgroup>
+                          <col />
+                          <col className="w-20" />
+                          <col className="w-16" />
+                          <col className="w-24" />
+                          <col className="w-28" />
+                          <col className="w-20" />
+                          <col className="w-32" />
+                          <col className="w-10" />
+                        </colgroup>
+                        <thead>
+                          <tr className="border-b border-slate-200 bg-slate-50/60">
+                            <th className="px-3 py-2.5 text-xs font-medium text-slate-500">
+                              Description
+                            </th>
+                            <th className="px-2 py-2.5 text-xs font-medium text-slate-500">
+                              Gauge
+                            </th>
+                            <th className="px-2 py-2.5 text-xs font-medium text-slate-500">
+                              Qty
+                            </th>
+                            <th className="px-2 py-2.5 text-xs font-medium text-slate-500">
+                              Unit
+                            </th>
+                            <th className="px-2 py-2.5 text-right text-xs font-medium text-slate-500">
+                              Rate
+                            </th>
+                            <th className="px-2 py-2.5 text-right text-xs font-medium text-slate-500">
+                              Disc %
+                            </th>
+                            <th className="px-3 py-2.5 text-right text-xs font-medium text-slate-500">
+                              Total
+                            </th>
+                            <th className="px-2 py-2.5"></th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {quoteComputed.rows.map((row) => (
+                            <tr key={row.id}>
+                              <td className="px-3 py-2">
+                                <input
+                                  className="form-input"
+                                  value={row.description}
+                                  onChange={(e) =>
+                                    updateQuoteItem(row.id, "description", e.target.value)
+                                  }
+                                  placeholder="GI Wire, Barbed Wire..."
+                                />
+                              </td>
+                              <td className="px-2 py-2">
+                                <input
+                                  className="form-input"
+                                  value={row.gauge}
+                                  onChange={(e) =>
+                                    updateQuoteItem(row.id, "gauge", e.target.value)
+                                  }
+                                  placeholder="12"
+                                />
+                              </td>
+                              <td className="px-2 py-2">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  className="form-input"
+                                  value={row.qty}
+                                  onChange={(e) =>
+                                    updateQuoteItem(row.id, "qty", e.target.value)
+                                  }
+                                  placeholder="0"
+                                />
+                              </td>
+                              <td className="px-2 py-2">
+                                <select
+                                  className="form-input"
+                                  value={row.unit}
+                                  onChange={(e) =>
+                                    updateQuoteItem(row.id, "unit", e.target.value)
+                                  }
+                                >
+                                  {UNIT_OPTIONS.map((unit) => (
+                                    <option key={unit} value={unit}>
+                                      {unit}
+                                    </option>
+                                  ))}
+                                </select>
+                              </td>
+                              <td className="px-2 py-2">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  className="form-input text-right"
+                                  value={row.rate}
+                                  onChange={(e) =>
+                                    updateQuoteItem(row.id, "rate", e.target.value)
+                                  }
+                                  placeholder="0"
+                                />
+                              </td>
+                              <td className="px-2 py-2">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="100"
+                                  className="form-input text-right"
+                                  value={row.discountPct}
+                                  onChange={(e) =>
+                                    updateQuoteItem(row.id, "discountPct", e.target.value)
+                                  }
+                                  placeholder="0"
+                                />
+                              </td>
+                              <td className="px-3 py-2 text-right text-sm font-semibold tabular-nums text-slate-800">
+                                {formatCurrency(row.lineTotal)}
+                              </td>
+                              <td className="px-2 py-2 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => removeQuoteItem(row.id)}
+                                  disabled={quoteItems.length === 1}
+                                  className="flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-30"
+                                  title="Remove item"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={addQuoteItem}
+                      className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-[#315b89] hover:underline"
+                    >
+                      <Plus size={13} />
+                      Add item
+                    </button>
+                  </div>
+
+                  {/* TOTALS */}
+                  <div className="flex justify-end">
+                    <div className="w-full max-w-sm space-y-1.5 rounded-lg border border-slate-200 p-4">
+                      <TotalRow label="Subtotal" value={formatCurrency(quoteComputed.subtotal)} />
+                      <TotalRow
+                        label="Discount"
+                        value={`- ${formatCurrency(quoteComputed.discountTotal)}`}
+                      />
+                      <TotalRow label="Taxable" value={formatCurrency(quoteComputed.taxable)} />
+                      <TotalRow label="CGST 9%" value={formatCurrency(quoteComputed.cgst)} />
+                      <TotalRow label="SGST 9%" value={formatCurrency(quoteComputed.sgst)} />
+                      <TotalRow
+                        label="Round off"
+                        value={formatCurrency(quoteComputed.roundOff)}
+                      />
+
+                      <div className="my-1.5 border-t border-slate-200" />
+
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-semibold text-slate-800">Grand total</span>
+                        <span className="text-base font-bold tabular-nums text-slate-900">
+                          {formatCurrency(quoteComputed.grandTotal)}
+                        </span>
+                      </div>
+
+                      <p className="pt-1 text-right text-[11px] italic text-slate-400">
+                        {amountInWords(quoteComputed.grandTotal)}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* TERMS */}
+                  <DetailSection title="Terms & conditions">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <FormField label="Payment">
+                        <input
+                          className="form-input"
+                          value={quoteTerms.payment}
+                          onChange={(e) =>
+                            setQuoteTerms({ ...quoteTerms, payment: e.target.value })
+                          }
+                        />
+                      </FormField>
+
+                      <FormField label="Delivery">
+                        <input
+                          className="form-input"
+                          value={quoteTerms.delivery}
+                          onChange={(e) =>
+                            setQuoteTerms({ ...quoteTerms, delivery: e.target.value })
+                          }
+                        />
+                      </FormField>
+
+                      <FormField label="Freight">
+                        <input
+                          className="form-input"
+                          value={quoteTerms.freight}
+                          onChange={(e) =>
+                            setQuoteTerms({ ...quoteTerms, freight: e.target.value })
+                          }
+                        />
+                      </FormField>
+
+                      <FormField label="Validity">
+                        <input
+                          className="form-input"
+                          value={quoteTerms.validity}
+                          onChange={(e) =>
+                            setQuoteTerms({ ...quoteTerms, validity: e.target.value })
+                          }
+                        />
+                      </FormField>
+                    </div>
+
+                    <div className="mt-3">
+                      <FormField label="Notes">
+                        <textarea
+                          className="form-input min-h-[70px] resize-y py-2.5"
+                          value={quoteTerms.notes}
+                          onChange={(e) =>
+                            setQuoteTerms({ ...quoteTerms, notes: e.target.value })
+                          }
+                          placeholder="Any additional notes for the customer..."
+                        />
+                      </FormField>
+                    </div>
+                  </DetailSection>
+                </div>
+              ) : (
+                <QuotePreview
+                  quoteNumber={quoteNumber}
+                  quoteDate={quoteDate}
+                  quoteValidTill={quoteValidTill}
+                  quoteGstin={quoteGstin}
+                  quoteAddress={quoteAddress}
+                  enquiry={selectedEnquiry}
+                  computed={quoteComputed}
+                  terms={quoteTerms}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TotalRow({ label, value }) {
+  return (
+    <div className="flex items-center justify-between text-xs text-slate-500">
+      <span>{label}</span>
+      <span className="tabular-nums text-slate-700">{value}</span>
+    </div>
+  );
+}
+
+function QuotePreview({
+  quoteNumber,
+  quoteDate,
+  quoteValidTill,
+  quoteGstin,
+  quoteAddress,
+  enquiry,
+  computed,
+  terms,
+}) {
+  return (
+    <div className="mx-auto max-w-2xl rounded-lg border border-slate-200 bg-white p-8 text-sm">
+      <div className="flex items-start justify-between border-b border-slate-200 pb-4">
+        <div>
+          <h2 className="text-lg font-bold tracking-tight text-slate-900">Quotation</h2>
+          <p className="mt-1 font-mono text-xs text-slate-400">{quoteNumber}</p>
+        </div>
+        <div className="text-right text-xs text-slate-500">
+          <div>Date: {formatDate(quoteDate)}</div>
+          <div>Valid till: {formatDate(quoteValidTill)}</div>
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-4">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+            Bill to
+          </p>
+          <p className="mt-1 font-semibold text-slate-800">{enquiry.customer}</p>
+          <p className="text-xs text-slate-500">{enquiry.company}</p>
+          {quoteAddress && <p className="text-xs text-slate-500">{quoteAddress}</p>}
+          {quoteGstin && <p className="mt-1 text-xs text-slate-500">GSTIN: {quoteGstin}</p>}
+        </div>
+        <div className="text-right">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+            Reference
+          </p>
+          <p className="mt-1 text-xs text-slate-500">Enquiry {enquiry.id}</p>
+          <p className="text-xs text-slate-500">{enquiry.project}</p>
+        </div>
+      </div>
+
+      <table className="mt-6 w-full border-collapse text-xs">
+        <thead>
+          <tr className="border-b border-slate-300 text-slate-500">
+            <th className="py-2 text-left font-medium">Description</th>
+            <th className="py-2 text-right font-medium">Qty</th>
+            <th className="py-2 text-right font-medium">Rate</th>
+            <th className="py-2 text-right font-medium">Disc</th>
+            <th className="py-2 text-right font-medium">Total</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {computed.rows.map((row) => (
+            <tr key={row.id}>
+              <td className="py-2 text-slate-700">
+                {row.description || "—"}
+                {row.gauge && <span className="text-slate-400"> · Gauge {row.gauge}</span>}
+              </td>
+              <td className="py-2 text-right tabular-nums text-slate-600">
+                {row.qty || 0} {row.unit}
+              </td>
+              <td className="py-2 text-right tabular-nums text-slate-600">
+                {formatCurrency(row.rate)}
+              </td>
+              <td className="py-2 text-right tabular-nums text-slate-600">
+                {row.discountPct || 0}%
+              </td>
+              <td className="py-2 text-right tabular-nums font-medium text-slate-800">
+                {formatCurrency(row.lineTotal)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <div className="mt-4 flex justify-end">
+        <div className="w-56 space-y-1 text-xs">
+          <TotalRow label="Subtotal" value={formatCurrency(computed.subtotal)} />
+          <TotalRow label="Discount" value={`- ${formatCurrency(computed.discountTotal)}`} />
+          <TotalRow label="CGST 9%" value={formatCurrency(computed.cgst)} />
+          <TotalRow label="SGST 9%" value={formatCurrency(computed.sgst)} />
+          <TotalRow label="Round off" value={formatCurrency(computed.roundOff)} />
+          <div className="my-1 border-t border-slate-300" />
+          <div className="flex items-center justify-between text-sm font-bold text-slate-900">
+            <span>Grand total</span>
+            <span className="tabular-nums">{formatCurrency(computed.grandTotal)}</span>
+          </div>
+        </div>
+      </div>
+
+      <p className="mt-1 text-right text-[11px] italic text-slate-400">
+        {amountInWords(computed.grandTotal)}
+      </p>
+
+      <div className="mt-6 border-t border-slate-200 pt-4 text-[11px] leading-5 text-slate-500">
+        <p>
+          <strong className="text-slate-600">Payment:</strong> {terms.payment || "—"}
+        </p>
+        <p>
+          <strong className="text-slate-600">Delivery:</strong> {terms.delivery || "—"}
+        </p>
+        <p>
+          <strong className="text-slate-600">Freight:</strong> {terms.freight || "—"}
+        </p>
+        <p>
+          <strong className="text-slate-600">Validity:</strong> {terms.validity || "—"}
+        </p>
+        {terms.notes && (
+          <p className="mt-2">
+            <strong className="text-slate-600">Notes:</strong> {terms.notes}
+          </p>
+        )}
+      </div>
+
+      <p className="mt-6 text-center text-[11px] text-slate-400">
+        Thank you for the opportunity to quote.
+      </p>
     </div>
   );
 }

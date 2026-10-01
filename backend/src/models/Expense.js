@@ -4,13 +4,16 @@ const expenseSchema = new mongoose.Schema(
   {
     type: {
       type: String,
-      enum: [
-        "Employee",
-        "Factory People",
-        "Factory Expense",
-        "Miscellaneous",
-      ],
-      required: true,
+      enum: {
+        values: [
+          "Employee",
+          "Factory People",
+          "Factory Expense",
+          "Miscellaneous",
+        ],
+        message: "{VALUE} is not a valid expense type",
+      },
+      required: [true, "Expense type is required"],
     },
 
     date: {
@@ -21,19 +24,26 @@ const expenseSchema = new mongoose.Schema(
 
     amount: {
       type: Number,
-      required: true,
-      min: 0,
+      required: [true, "Amount is required"],
+      min: [0, "Amount cannot be negative"],
+      max: [100000000, "Amount is too large"], // 10 Cr cap
     },
 
     paymentStatus: {
       type: String,
-      enum: ["Pending", "Paid"],
+      enum: {
+        values: ["Pending", "Paid"],
+        message: "{VALUE} is not a valid payment status",
+      },
       default: "Pending",
     },
 
     paymentMethod: {
       type: String,
-      enum: ["Cash", "UPI", null],
+      enum: {
+        values: ["Cash", "UPI", null],
+        message: "{VALUE} is not a valid payment method",
+      },
       default: null,
     },
 
@@ -45,51 +55,56 @@ const expenseSchema = new mongoose.Schema(
     transactionId: {
       type: String,
       trim: true,
+      maxlength: [100, "Transaction ID too long"],
       default: null,
     },
 
-    // Employee / Factory People
     person: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Person",
       default: null,
     },
 
-    // Factory Expense
     expenseType: {
       type: String,
       trim: true,
+      maxlength: [100, "Expense type too long"],
     },
 
     vendor: {
       type: String,
       trim: true,
+      maxlength: [150, "Vendor name too long"],
     },
 
     invoiceNumber: {
       type: String,
       trim: true,
+      maxlength: [50, "Invoice number too long"],
     },
 
-    // Miscellaneous
     expenseName: {
       type: String,
       trim: true,
+      maxlength: [150, "Expense name too long"],
     },
 
     expenseCategory: {
       type: String,
       trim: true,
+      maxlength: [100, "Category too long"],
     },
 
     description: {
       type: String,
       trim: true,
+      maxlength: [1000, "Description too long"],
     },
 
     notes: {
       type: String,
       trim: true,
+      maxlength: [1000, "Notes too long"],
     },
   },
   {

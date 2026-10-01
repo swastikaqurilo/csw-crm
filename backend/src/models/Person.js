@@ -4,49 +4,60 @@ const personSchema = new mongoose.Schema(
   {
     name: {
       type: String,
-      required: true,
+      required: [true, "Name is required"],
       trim: true,
+      maxlength: [150, "Name too long"],
     },
 
     phone: {
       type: String,
       trim: true,
+      maxlength: [20, "Phone too long"],
+      match: [/^[0-9+\-\s()]*$/, "Phone contains invalid characters"],
+      default: "",
     },
 
     type: {
       type: String,
-      enum: ["Employee", "Factory People"],
-      required: true,
+      enum: {
+        values: ["Employee", "Factory People"],
+        message: "{VALUE} is not a valid type",
+      },
+      required: [true, "Type is required"],
     },
 
     role: {
       type: String,
       trim: true,
+      maxlength: [100, "Role too long"],
+      default: "",
     },
 
     joiningDate: {
       type: Date,
-      required: true,
+      required: [true, "Joining date is required"],
     },
 
-    // Used only for regular employees
     salary: {
       type: Number,
-      min: 0,
+      min: [0, "Salary cannot be negative"],
+      max: [1000000000, "Salary too large"],
       default: null,
     },
 
-    // Used only for factory people
-    // This is the amount paid per working day
     dailyWage: {
       type: Number,
-      min: 0,
+      min: [0, "Daily wage cannot be negative"],
+      max: [10000000, "Daily wage too large"],
       default: null,
     },
 
     status: {
       type: String,
-      enum: ["Active", "Inactive"],
+      enum: {
+        values: ["Active", "Inactive"],
+        message: "{VALUE} is not a valid status",
+      },
       default: "Active",
     },
   },

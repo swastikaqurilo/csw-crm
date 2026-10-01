@@ -23,11 +23,17 @@ export const createFollowup = (data) => api.post('/follow-ups', data);
 export const updateFollowup = (id, data) => api.put(`/follow-ups/${id}`, data);
 export const deleteFollowup = (id) => api.delete(`/follow-ups/${id}`);
 
-export const getProducts = (params) => api.get('/products', { params });
-export const getProductById = (id) => api.get(`/products/${id}`);
-export const createProduct = (data) => api.post('/products', data);
-export const updateProduct = (id, data) => api.put(`/products/${id}`, data);
-export const deleteProduct = (id) => api.delete(`/products/${id}`);
+
+export const getProductStock = () => api.get("/products/stock");
+export const updateProductStockReserved = (id, body) => api.patch(`/products/stock/${id}/reserved`, body);
+export const adjustProductStock = (id, body) => api.patch(`/products/stock/${id}/adjust`, body);
+export const recordProductScrap = (id, body) => api.patch(`/products/stock/${id}/scrap`, body);
+
+export const getProductProductions = (params) => api.get("/products", { params });
+export const createProductProduction = (data) => api.post("/products", data);
+export const updateProductProduction = (id, data) => api.patch(`/products/${id}`, data);
+export const deleteProductProduction = (id) => api.delete(`/products/${id}`);
+export const getRecentProductionRates = () => api.get("/products/recent-rates");
 
 export const getInventory = (params) => api.get('/inventory', { params });
 export const getInventoryById = (id) => api.get(`/inventory/${id}`);
@@ -35,14 +41,41 @@ export const createInventory = (data) => api.post('/inventory', data);
 export const updateInventory = (id, data) => api.put(`/inventory/${id}`, data);
 export const adjustStock = (id, data) => api.post(`/inventory/${id}/adjust`, data);
 export const deleteInventory = (id) => api.delete(`/inventory/${id}`);
-export const getLowStock = () => api.get('/inventory/low-stock');
+export const getInventoryFamilies = (params) =>
+  api.get('/inventory/families', { params });
+
+/* ---------- RAW MATERIAL MODULE ---------- */
+
+export const getRawStock = (params) => api.get("/raw-material/stock", { params });
+export const getRawStockById = (id) => api.get(`/raw-material/stock/${id}`);
+export const createRawStock = (data) => api.post("/raw-material/stock", data);
+export const updateRawStock = (id, data) => api.patch(`/raw-material/stock/${id}`, data);
+export const adjustRawStock = (id, data) => api.post(`/raw-material/stock/${id}/adjust`, data);
+export const getRawStockMovements = (id) => api.get(`/raw-material/stock/${id}/movements`);
+export const seedDefaultRawStock = () => api.get("/raw-material/stock/seed-defaults");
+
+export const getRawPurchases = (params) => api.get("/raw-material/purchases", { params });
+export const getRawPurchaseById = (id) => api.get(`/raw-material/purchases/${id}`);
+export const createRawPurchase = (data) => api.post("/raw-material/purchases", data);
+export const updateRawPurchase = (id, data) => api.patch(`/raw-material/purchases/${id}`, data);
+export const receiveRawPurchase = (id) => api.post(`/raw-material/purchases/${id}/receive`);
+export const cancelRawPurchase = (id) => api.post(`/raw-material/purchases/${id}/cancel`);
+export const deleteRawPurchase = (id) => api.delete(`/raw-material/purchases/${id}`);
+
+export const getLowStock = (params) => api.get('/inventory/low-stock', { params });
+export const getCriticalStock = (params) => api.get('/inventory/critical-stock', { params });
+export const getDeadStock = (params) => api.get('/inventory/dead-stock', { params });
+export const getInventorySummary = () => api.get('/inventory/summary');
 
 export const getOrders = (params) => api.get('/order', { params });
 export const getOrderById = (id) => api.get(`/order/${id}`);
 export const createOrder = (data) => api.post('/order', data);
 export const updateOrder = (id, data) => api.put(`/order/${id}`, data);
-export const updateOrderStatus = (id, status) =>
-  api.patch(`/order/${id}/status`, { status });
+export const updateOrderStatus = (id, payload) =>
+  api.patch(
+    `/order/${id}/status`,
+    typeof payload === "string" ? { status: payload } : payload
+  );
 export const deleteOrder = (id) => api.delete(`/order/${id}`);
 
 export const getPayments = (params) => api.get('/payment', { params });
@@ -103,3 +136,28 @@ export const markExpenseAsPaid = (id, data) =>
 
 export const deleteExpense = (id) =>
   api.delete(`/expense/${id}`);
+
+// Accounting (derived from Payments + Expenses + Orders)
+export const getAccountingDashboard = (params) =>
+  api.get('/accounting/dashboard', { params });
+
+// Quotations
+export const getQuotations = (params) => api.get("/quotations", { params });
+export const getQuotationsByEnquiry = (enquiryId) =>
+  api.get(`/quotations/enquiry/${enquiryId}`);
+export const getQuotationById = (id) => api.get(`/quotations/${id}`);
+
+export const createQuotation = (payload) => api.post("/quotations", payload);
+export const updateQuotation = (id, payload) => api.put(`/quotations/${id}`, payload);
+
+export const sendQuotation = (id) => api.patch(`/quotations/${id}/send`);
+export const updateQuotationStatus = (id, status) =>
+  api.patch(`/quotations/${id}/status`, { status });
+
+export const deleteQuotation = (id) => api.delete(`/quotations/${id}`);
+
+export const generateInvoice = (orderId) =>
+  api.post(`/order/${orderId}/invoice`);
+
+export const getOrderInvoice = (orderId) =>
+  api.get(`/order/${orderId}/invoice`);

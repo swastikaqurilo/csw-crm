@@ -1,5 +1,4 @@
-const express = require('express');
-const router = express.Router();
+const express = require("express");
 
 const {
   getAllOrders,
@@ -8,17 +7,28 @@ const {
   updateOrder,
   updateOrderStatus,
   deleteOrder,
-} = require('../controllers/orderController');
+  generateInvoice,
+  getInvoice,
+} = require("../controllers/orderController");
 
-router.route('/')
-  .get(getAllOrders)
-  .post(createOrder);
+const router = express.Router();
 
-router.route('/:id')
-  .get(getOrderById)
-  .put(updateOrder)
-  .delete(deleteOrder);
+router.get("/", getAllOrders);
 
-router.patch('/:id/status', updateOrderStatus);
+router.post("/", createOrder);
+
+router.put("/:id", updateOrder);
+
+router.patch("/:id/status", updateOrderStatus);
+
+router.delete("/:id", deleteOrder);
+
+/*
+ * Invoice routes
+ */
+router.post("/:id/invoice", generateInvoice);
+router.get("/:id/invoice", getInvoice);
+
+router.get("/:id", getOrderById);
 
 module.exports = router;

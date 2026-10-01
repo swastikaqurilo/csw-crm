@@ -1,6 +1,25 @@
+const mongoose = require("mongoose");
 const Expense = require("../models/Expense");
 const Person = require("../models/Person");
 
+/* ---------- helpers ---------- */
+const ALLOWED_TYPES = [
+  "Employee",
+  "Factory People",
+  "Factory Expense",
+  "Miscellaneous",
+];
+
+const isValidId = (v) => mongoose.isValidObjectId(v);
+
+const safeString = (v, max = 1000) => {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "string") return undefined;
+  const t = v.trim();
+  return t ? t.slice(0, max) : "";
+};
+
+/* ================= CREATE ================= */
 const createExpense = async (req, res) => {
   try {
     const {
@@ -20,7 +39,23 @@ const createExpense = async (req, res) => {
       notes,
     } = req.body;
 
-    // Employee / Factory People must have a person
+    // 1. Type check (whitelist)
+    if (!ALLOWED_TYPES.includes(type)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid expense type",
+      });
+    }
+
+    // 2. Person ObjectId check
+    if (person && !isValidId(person)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid person ID",
+      });
+    }
+
+    // 3. Conditional required fields
     if (
       (type === "Employee" || type === "Factory People") &&
       !person
@@ -31,28 +66,24 @@ const createExpense = async (req, res) => {
       });
     }
 
-    // Factory Expense fields
-    if (type === "Factory Expense" && !expenseType) {
+    if (type === "Factory Expense" && !expenseType?.trim()) {
       return res.status(400).json({
         success: false,
         message: "Expense type is required for factory expenses",
       });
     }
 
-    // Miscellaneous fields
-    if (type === "Miscellaneous" && !expenseName) {
+    if (type === "Miscellaneous" && !expenseName?.trim()) {
       return res.status(400).json({
         success: false,
         message: "Expense name is required for miscellaneous expenses",
       });
     }
 
-    // Validate person
+    // 4. Validate person
     let selectedPerson = null;
-
     if (person) {
       selectedPerson = await Person.findById(person);
-
       if (!selectedPerson) {
         return res.status(404).json({
           success: false,
@@ -60,11 +91,7 @@ const createExpense = async (req, res) => {
         });
       }
 
-      // Make sure the selected person's type matches the expense type
-      if (
-        type === "Employee" &&
-        selectedPerson.type !== "Employee"
-      ) {
+      if (type === "Employee" && selectedPerson.type !== "Employee") {
         return res.status(400).json({
           success: false,
           message: "Selected person is not an employee",
@@ -82,77 +109,80 @@ const createExpense = async (req, res) => {
       }
     }
 
-    // For Factory People, use their daily wage
-    let finalAmount = amount;
+    // 5. Amount logic
+    let finalAmount = Number(amount);
 
     if (type === "Factory People") {
-      finalAmount = selectedPerson.dailyWage;
-
-      if (
-        finalAmount === null ||
-        finalAmount === undefined
-      ) {
+      finalAmount = Number(selectedPerson.dailyWage);
+      if (!finalAmount && finalAmount !== 0) {
         return res.status(400).json({
           success: false,
           message: "Daily wage is not set for this person",
         });
       }
+    } else if (type === "Factory Expense" || type === "Miscellaneous") {
+      if (typeof finalAmount !== "number" || !Number.isFinite(finalAmount)) {
+        return res.status(400).json({
+          success: false,
+          message: "Valid amount is required",
+        });
+      }
+      if (finalAmount < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Amount cannot be negative",
+        });
+      }
     }
 
-    // UPI requires transaction ID
-    if (
-      paymentStatus === "Paid" &&
-      paymentMethod === "UPI" &&
-      !transactionId
-    ) {
+    // 6. Payment method + UPI rule
+    const status = paymentStatus === "Paid" ? "Paid" : "Pending";
+    const method = status === "Paid" ? paymentMethod : null;
+
+    if (status === "Paid" && !["Cash", "UPI"].includes(method)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid payment method",
+      });
+    }
+
+    if (status === "Paid" && method === "UPI" && !transactionId?.trim()) {
       return res.status(400).json({
         success: false,
         message: "Transaction ID is required for UPI payments",
       });
     }
 
-    const expense = await Expense.create({
+    // 7. Explicit whitelist — nothing from req.body goes in raw
+    const payload = {
       type,
-      date,
+      date: date ? new Date(date) : new Date(),
       amount: finalAmount,
-      paymentStatus: paymentStatus || "Pending",
-      paymentMethod:
-        paymentStatus === "Paid" ? paymentMethod : null,
-      paidAt:
-        paymentStatus === "Paid"
-          ? new Date()
-          : null,
+      paymentStatus: status,
+      paymentMethod: method,
+      paidAt: status === "Paid" ? new Date() : null,
       transactionId:
-        paymentStatus === "Paid"
-          ? transactionId
+        status === "Paid" && method === "UPI"
+          ? safeString(transactionId, 100)
           : null,
       person:
         type === "Employee" || type === "Factory People"
           ? person
           : null,
       expenseType:
-        type === "Factory Expense"
-          ? expenseType
-          : null,
-      vendor:
-        type === "Factory Expense"
-          ? vendor
-          : null,
+        type === "Factory Expense" ? safeString(expenseType, 100) : null,
+      vendor: type === "Factory Expense" ? safeString(vendor, 150) : null,
       invoiceNumber:
-        type === "Factory Expense"
-          ? invoiceNumber
-          : null,
+        type === "Factory Expense" ? safeString(invoiceNumber, 50) : null,
       expenseName:
-        type === "Miscellaneous"
-          ? expenseName
-          : null,
+        type === "Miscellaneous" ? safeString(expenseName, 150) : null,
       expenseCategory:
-        type === "Miscellaneous"
-          ? expenseCategory
-          : null,
-      description,
-      notes,
-    });
+        type === "Miscellaneous" ? safeString(expenseCategory, 100) : null,
+      description: safeString(description, 1000),
+      notes: safeString(notes, 1000),
+    };
+
+    const expense = await Expense.create(payload);
 
     const populatedExpense = await Expense.findById(
       expense._id
@@ -164,58 +194,78 @@ const createExpense = async (req, res) => {
       data: populatedExpense,
     });
   } catch (error) {
+    console.error("[createExpense]", error);
     res.status(500).json({
       success: false,
       message: "Failed to create expense",
-      error: error.message,
     });
   }
 };
 
+/* ================= LIST ================= */
 const getExpenses = async (req, res) => {
   try {
-    const {
-      type,
-      paymentStatus,
-      person,
-      fromDate,
-      toDate,
-    } = req.query;
+    const { type, paymentStatus, person, fromDate, toDate } = req.query;
 
     const filter = {};
 
     if (type) {
+      if (!ALLOWED_TYPES.includes(type)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid type filter",
+        });
+      }
       filter.type = type;
     }
 
     if (paymentStatus) {
+      if (!["Pending", "Paid"].includes(paymentStatus)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid paymentStatus filter",
+        });
+      }
       filter.paymentStatus = paymentStatus;
     }
 
     if (person) {
+      if (!isValidId(person)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid person ID",
+        });
+      }
       filter.person = person;
     }
 
     if (fromDate || toDate) {
       filter.date = {};
-
       if (fromDate) {
-        filter.date.$gte = new Date(fromDate);
+        const d = new Date(fromDate);
+        if (isNaN(d.getTime())) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid fromDate",
+          });
+        }
+        filter.date.$gte = d;
       }
-
       if (toDate) {
-        const endDate = new Date(toDate);
-        endDate.setHours(23, 59, 59, 999);
-
-        filter.date.$lte = endDate;
+        const d = new Date(toDate);
+        if (isNaN(d.getTime())) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid toDate",
+          });
+        }
+        d.setHours(23, 59, 59, 999);
+        filter.date.$lte = d;
       }
     }
 
     const expenses = await Expense.find(filter)
-      .populate(
-        "person",
-        "name phone type role dailyWage salary"
-      )
+      .populate("person", "name phone type role dailyWage salary")
       .sort({ date: -1, createdAt: -1 });
 
     res.status(200).json({
@@ -224,19 +274,25 @@ const getExpenses = async (req, res) => {
       data: expenses,
     });
   } catch (error) {
+    console.error("[getExpenses]", error);
     res.status(500).json({
       success: false,
       message: "Failed to fetch expenses",
-      error: error.message,
     });
   }
 };
 
+/* ================= GET ONE ================= */
 const getExpense = async (req, res) => {
   try {
-    const expense = await Expense.findById(
-      req.params.id
-    ).populate(
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid expense ID",
+      });
+    }
+
+    const expense = await Expense.findById(req.params.id).populate(
       "person",
       "name phone type role dailyWage salary"
     );
@@ -248,25 +304,27 @@ const getExpense = async (req, res) => {
       });
     }
 
-    res.status(200).json({
-      success: true,
-      data: expense,
-    });
+    res.status(200).json({ success: true, data: expense });
   } catch (error) {
+    console.error("[getExpense]", error);
     res.status(500).json({
       success: false,
       message: "Failed to fetch expense",
-      error: error.message,
     });
   }
 };
 
+/* ================= UPDATE ================= */
 const updateExpense = async (req, res) => {
   try {
-    const expense = await Expense.findById(
-      req.params.id
-    );
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid expense ID",
+      });
+    }
 
+    const expense = await Expense.findById(req.params.id);
     if (!expense) {
       return res.status(404).json({
         success: false,
@@ -274,7 +332,7 @@ const updateExpense = async (req, res) => {
       });
     }
 
-    // Don't allow changing a paid expense casually
+    // Guard: don't revert a Paid expense
     if (
       expense.paymentStatus === "Paid" &&
       req.body.paymentStatus === "Pending"
@@ -285,13 +343,48 @@ const updateExpense = async (req, res) => {
       });
     }
 
-    Object.assign(expense, req.body);
+    // Whitelist editable fields only
+    const editable = [
+      "date",
+      "amount",
+      "expenseType",
+      "vendor",
+      "invoiceNumber",
+      "expenseName",
+      "expenseCategory",
+      "description",
+      "notes",
+    ];
 
-    await expense.save();
+    for (const key of editable) {
+      if (req.body[key] !== undefined) {
+        if (key === "amount") {
+          const n = Number(req.body.amount);
+          if (!Number.isFinite(n) || n < 0) {
+            return res.status(400).json({
+              success: false,
+              message: "Invalid amount",
+            });
+          }
+          expense.amount = n;
+        } else if (key === "date") {
+          const d = new Date(req.body.date);
+          if (isNaN(d.getTime())) {
+            return res.status(400).json({
+              success: false,
+              message: "Invalid date",
+            });
+          }
+          expense.date = d;
+        } else {
+          expense[key] = safeString(req.body[key], 1000);
+        }
+      }
+    }
 
-    const updatedExpense = await Expense.findById(
-      expense._id
-    ).populate(
+    await expense.save(); // 👈 runs schema validators
+
+    const updatedExpense = await Expense.findById(expense._id).populate(
       "person",
       "name phone type role dailyWage salary"
     );
@@ -302,16 +395,24 @@ const updateExpense = async (req, res) => {
       data: updatedExpense,
     });
   } catch (error) {
+    console.error("[updateExpense]", error);
     res.status(500).json({
       success: false,
       message: "Failed to update expense",
-      error: error.message,
     });
   }
 };
 
+/* ================= MARK PAID ================= */
 const markExpenseAsPaid = async (req, res) => {
   try {
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid expense ID",
+      });
+    }
+
     const { paymentMethod, transactionId, paidAt } = req.body;
 
     if (!paymentMethod) {
@@ -320,37 +421,26 @@ const markExpenseAsPaid = async (req, res) => {
         message: "Payment method is required",
       });
     }
-
-    if (
-      !["Cash", "UPI"].includes(paymentMethod)
-    ) {
+    if (!["Cash", "UPI"].includes(paymentMethod)) {
       return res.status(400).json({
         success: false,
         message: "Invalid payment method",
       });
     }
-
-    if (
-      paymentMethod === "UPI" &&
-      !transactionId
-    ) {
+    if (paymentMethod === "UPI" && !transactionId?.trim()) {
       return res.status(400).json({
         success: false,
         message: "Transaction ID is required for UPI payments",
       });
     }
 
-    const expense = await Expense.findById(
-      req.params.id
-    );
-
+    const expense = await Expense.findById(req.params.id);
     if (!expense) {
       return res.status(404).json({
         success: false,
         message: "Expense not found",
       });
     }
-
     if (expense.paymentStatus === "Paid") {
       return res.status(400).json({
         success: false,
@@ -361,18 +451,12 @@ const markExpenseAsPaid = async (req, res) => {
     expense.paymentStatus = "Paid";
     expense.paymentMethod = paymentMethod;
     expense.transactionId =
-      paymentMethod === "UPI"
-        ? transactionId
-        : null;
-    expense.paidAt = paidAt
-      ? new Date(paidAt)
-      : new Date();
+      paymentMethod === "UPI" ? safeString(transactionId, 100) : null;
+    expense.paidAt = paidAt ? new Date(paidAt) : new Date();
 
     await expense.save();
 
-    const updatedExpense = await Expense.findById(
-      expense._id
-    ).populate(
+    const updatedExpense = await Expense.findById(expense._id).populate(
       "person",
       "name phone type role dailyWage salary"
     );
@@ -383,20 +467,25 @@ const markExpenseAsPaid = async (req, res) => {
       data: updatedExpense,
     });
   } catch (error) {
+    console.error("[markExpenseAsPaid]", error);
     res.status(500).json({
       success: false,
       message: "Failed to mark expense as paid",
-      error: error.message,
     });
   }
 };
 
+/* ================= DELETE ================= */
 const deleteExpense = async (req, res) => {
   try {
-    const expense = await Expense.findById(
-      req.params.id
-    );
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid expense ID",
+      });
+    }
 
+    const expense = await Expense.findById(req.params.id);
     if (!expense) {
       return res.status(404).json({
         success: false,
@@ -411,17 +500,17 @@ const deleteExpense = async (req, res) => {
       });
     }
 
-    await Expense.findByIdAndDelete(req.params.id);
+    await expense.deleteOne();
 
     res.status(200).json({
       success: true,
       message: "Expense deleted successfully",
     });
   } catch (error) {
+    console.error("[deleteExpense]", error);
     res.status(500).json({
       success: false,
       message: "Failed to delete expense",
-      error: error.message,
     });
   }
 };

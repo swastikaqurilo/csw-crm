@@ -1,17 +1,15 @@
 import axios from 'axios';
 
 const api = axios.create({
-  // Use production URL when deployed, localhost for local dev
   baseURL: import.meta.env.PROD
     ? 'https://csw-crm-backend.vercel.app/api'
-    : 'http://localhost:5000/api',
+    : '/api',
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 10000,
+  timeout: 30000,
 });
 
-// Attach JWT token on every request
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('token');

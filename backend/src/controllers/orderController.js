@@ -1,388 +1,1108 @@
-const Order = require('../models/Order');
-const Inventory = require('../models/Inventory');
-const Product = require('../models/Product');
-const Contact = require('../models/Contacts');
+const mongoose = require("mongoose");
+const Order = require("../models/Order");
+const ProductStock = require("../models/ProductStock");
+const Contact = require("../models/Contacts");
+const Invoice = require("../models/Invoice");
+const { getNextSequence } = require("../models/Counter");
 
-const generateOrderNumber = async () => {
-  const year = new Date().getFullYear();
-  const prefix = `ORD-${year}-`;
+const MAX_LIMIT = 200;
+const MAX_ITEMS = 100;
+const MAX_QTY = 1_000_000;
+const MAX_RATE = 100_000_000;
+const MAX_AMOUNT = 1e12;
+const MAX_MOVEMENT_LOG = 200;
 
-  const lastOrder = await Order.findOne({
-    orderNumber: { $regex: `^${prefix}` },
-  })
-    .sort({ orderNumber: -1 })
-    .select('orderNumber');
+const REEL_SIZES = ["2kg", "5kg", "8kg", "10kg"];
 
-  let nextNumber = 1;
-  if (lastOrder) {
-    const lastNum = parseInt(lastOrder.orderNumber.split('-')[2], 10);
-    nextNumber = lastNum + 1;
-  }
+const VALID_STATUSES = [
+  "Draft",
+  "Confirmed",
+  "In Production",
+  "Ready for Dispatch",
+  "Dispatched",
+  "Delivered",
+  "Cancelled",
+];
 
-  return `${prefix}${String(nextNumber).padStart(4, '0')}`;
+const VALID_PAYMENT_STATUSES = ["Pending", "Partial", "Paid", "Overdue"];
+
+/* ---------- helpers ---------- */
+const isValidId = (v) => mongoose.isValidObjectId(v);
+
+const safeString = (v, max = 500) => {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "string") return undefined;
+  const t = v.trim();
+  return t ? t.slice(0, max) : "";
 };
 
+const escapeRegex = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const parseDate = (v) => {
+  if (!v) return null;
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? null : d;
+};
+
+const endOfDay = (d) => {
+  const x = new Date(d);
+  x.setHours(23, 59, 59, 999);
+  return x;
+};
+
+const handleError = (res, error, fallbackMessage) => {
+  console.error(`[${fallbackMessage}]`, error);
+
+  if (error.name === "ValidationError") {
+    const messages = Object.values(error.errors).map((e) => e.message);
+    return res.status(400).json({ success: false, message: messages.join("; ") });
+  }
+  if (error.name === "CastError") {
+    return res.status(400).json({ success: false, message: `Invalid value for ${error.path}` });
+  }
+  if (error.code === 11000) {
+    return res.status(409).json({ success: false, message: "Duplicate record, please retry" });
+  }
+  if (error.status) {
+    return res.status(error.status).json({ success: false, message: error.message });
+  }
+  return res.status(500).json({ success: false, message: fallbackMessage });
+};
+
+/* ======================================================
+   NUMBER GENERATORS
+====================================================== */
+const generateOrderNumber = async (session = null) => {
+  const year = new Date().getFullYear();
+  const seq = await getNextSequence(`order-${year}`, session);
+  return `ORD-${year}-${String(seq).padStart(4, "0")}`;
+};
+
+const generateInvoiceNumber = async (session = null) => {
+  const year = new Date().getFullYear();
+  const seq = await getNextSequence(`invoice-${year}`, session);
+  return `INV-${year}-${String(seq).padStart(4, "0")}`;
+};
+
+/* ======================================================
+   AMOUNT IN WORDS
+====================================================== */
+const numberToWords = (number) => {
+  const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
+    "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
+    "Seventeen", "Eighteen", "Nineteen"];
+  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+
+  const convertBelowThousand = (num) => {
+    let result = "";
+    if (num >= 100) { result += `${ones[Math.floor(num / 100)]} Hundred `; num %= 100; }
+    if (num >= 20) { result += `${tens[Math.floor(num / 10)]} `; num %= 10; }
+    if (num > 0) { result += `${ones[num]} `; }
+    return result.trim();
+  };
+
+  if (!Number.isFinite(number)) return "";
+  const value = Math.floor(number);
+  if (value === 0) return "Zero";
+
+  let num = value;
+  let result = "";
+  const crore = Math.floor(num / 10000000); num %= 10000000;
+  const lakh = Math.floor(num / 100000); num %= 100000;
+  const thousand = Math.floor(num / 1000); num %= 1000;
+
+  if (crore) result += `${convertBelowThousand(crore)} Crore `;
+  if (lakh) result += `${convertBelowThousand(lakh)} Lakh `;
+  if (thousand) result += `${convertBelowThousand(thousand)} Thousand `;
+  if (num) result += `${convertBelowThousand(num)} `;
+  return result.trim();
+};
+
+const amountInWords = (amount) => {
+  const rounded = Math.round(Number(amount || 0));
+  return `Rupees ${numberToWords(rounded)} Only`;
+};
+
+/* ======================================================
+   STOCK MOVEMENT — ProductStock (reel sizes)
+
+   Flow:
+     Draft → Confirmed     : deduct stock (with reserved gate)
+     * → Dispatched        : no stock change (already deducted)
+     * → Cancelled         : if Deducted, restore quantity
+
+   `reservedQty` is a manual admin field set from the
+   Products page. It is never touched by order creation.
+   When Confirmed exceeds free qty, the API returns a 409
+   RESERVED_CONFLICT. Retry with allowReserved:true to
+   consume the reserved portion and reduce reservedQty.
+
+   Atomic pipeline updates preserve qty + movementLog
+   integrity in one op. On partial failure, already-applied
+   items are rolled back.
+====================================================== */
+
+const resolveStockId = (item) =>
+  item.productStock?._id || item.productStock || null;
+
+/**
+ * Deduct order stock when an order is confirmed.
+ * If free qty is insufficient but total qty is enough,
+ * throws a 409 RESERVED_CONFLICT unless allowReserved is true.
+ * On allowReserved, reduces reservedQty by the overlap.
+ * Rolls back applied items on failure.
+ */
+const deductOrderStock = async (order, user, allowReserved = false) => {
+  const completed = []; // { stockId, qty, usedFromReserved }
+
+  try {
+    for (const item of order.items) {
+      const stockId = resolveStockId(item);
+      const qty = Number(item.quantity);
+      const size = item.size;
+
+      if (!stockId) {
+        throw { status: 400, message: `Item ${size} has no stock reference.` };
+      }
+
+      const stock = await ProductStock.findOne({ _id: stockId, isActive: true });
+      if (!stock) {
+        throw { status: 404, message: `No active stock found for ${size} reel.` };
+      }
+
+      const before = Number(stock.quantity || 0);
+      const reservedBefore = Number(stock.reservedQty || 0);
+      const freeBefore = Math.max(before - reservedBefore, 0);
+
+      if (qty > before) {
+        throw {
+          status: 400,
+          message: `Insufficient ${size} stock. Available: ${before} ${stock.unit}, required: ${qty}.`,
+        };
+      }
+
+      const usedFromReserved = Math.max(qty - freeBefore, 0);
+
+      if (usedFromReserved > 0 && !allowReserved) {
+        throw {
+          status: 409,
+          code: "RESERVED_CONFLICT",
+          message: `This order needs ${usedFromReserved} ${stock.unit} from reserved ${size} stock. Continue?`,
+          data: {
+            material: "product",
+            size,
+            name: stock.name,
+            unit: stock.unit,
+            totalQty: before,
+            reservedQty: reservedBefore,
+            freeQty: freeBefore,
+            requested: qty,
+            usedFromReserved,
+          },
+        };
+      }
+
+      const reservedAfter =
+        usedFromReserved > 0
+          ? Math.max(reservedBefore - usedFromReserved, 0)
+          : reservedBefore;
+
+      const after = before - qty;
+
+      await ProductStock.findByIdAndUpdate(
+        stockId,
+        [
+          {
+            $set: {
+              quantity: after,
+              reservedQty: reservedAfter,
+              lastIssuedAt: "$$NOW",
+              movementLog: {
+                $slice: [
+                  {
+                    $concatArrays: [
+                      { $ifNull: ["$movementLog", []] },
+                      [
+                        {
+                          type: "out",
+                          quantity: qty,
+                          unitAtTime: stock.unit,
+                          beforeQty: before,
+                          afterQty: after,
+                          reason:
+                            usedFromReserved > 0
+                              ? `Order ${order.orderNumber} confirmed (used ${usedFromReserved} from reserved)`
+                              : `Order ${order.orderNumber} confirmed`,
+                          notes: null,
+                          refType: "Dispatch",
+                          refId: order._id,
+                          refLabel: order.orderNumber,
+                          by: user?._id || null,
+                          at: "$$NOW",
+                        },
+                      ],
+                    ],
+                  },
+                  -MAX_MOVEMENT_LOG,
+                ],
+              },
+            },
+          },
+        ],
+        { updatePipeline: true }
+      );
+
+      completed.push({ stockId, qty, usedFromReserved });
+    }
+  } catch (err) {
+    // Roll back completed items: restore qty and any reserved we took.
+    for (const c of completed) {
+      try {
+        await ProductStock.findByIdAndUpdate(
+          c.stockId,
+          [
+            {
+              $set: {
+                quantity: { $add: ["$quantity", c.qty] },
+                reservedQty: {
+                  $add: [{ $ifNull: ["$reservedQty", 0] }, c.usedFromReserved],
+                },
+                movementLog: {
+                  $slice: [
+                    {
+                      $concatArrays: [
+                        { $ifNull: ["$movementLog", []] },
+                        [
+                          {
+                            type: "in",
+                            quantity: c.qty,
+                            unitAtTime: "$unit",
+                            beforeQty: "$quantity",
+                            afterQty: { $add: ["$quantity", c.qty] },
+                            reason: `Rollback: order ${order.orderNumber} confirmation failed`,
+                            notes: null,
+                            refType: "Manual",
+                            refId: order._id,
+                            refLabel: order.orderNumber,
+                            by: user?._id || null,
+                            at: "$$NOW",
+                          },
+                        ],
+                      ],
+                    },
+                    -MAX_MOVEMENT_LOG,
+                  ],
+                },
+              },
+            },
+          ],
+          { updatePipeline: true }
+        );
+      } catch (rbErr) {
+        console.error(`[deductOrderStock] Rollback failed for ${c.stockId}:`, rbErr);
+      }
+    }
+    throw err;
+  }
+};
+
+/** Restore previously-deducted stock (Cancelled from a Deducted order). */
+const restoreOrderStock = async (order, user) => {
+  for (const item of order.items) {
+    const stockId = resolveStockId(item);
+    const qty = Number(item.quantity);
+    if (!stockId) continue;
+
+    await ProductStock.findByIdAndUpdate(
+      stockId,
+      [
+        {
+          $set: {
+            quantity: { $add: ["$quantity", qty] },
+            lastReceivedAt: "$$NOW",
+            movementLog: {
+              $slice: [
+                {
+                  $concatArrays: [
+                    { $ifNull: ["$movementLog", []] },
+                    [
+                      {
+                        type: "in",
+                        quantity: qty,
+                        unitAtTime: "$unit",
+                        beforeQty: "$quantity",
+                        afterQty: { $add: ["$quantity", qty] },
+                        reason: `Order cancelled (${order.orderNumber})`,
+                        notes: null,
+                        refType: "Manual",
+                        refId: order._id,
+                        refLabel: order.orderNumber,
+                        by: user?._id || null,
+                        at: "$$NOW",
+                      },
+                    ],
+                  ],
+                },
+                -MAX_MOVEMENT_LOG,
+              ],
+            },
+          },
+        },
+      ],
+      { updatePipeline: true }
+    );
+  }
+};
+
+/* ======================================================
+   BUILD ORDER ITEMS FROM REQUEST
+====================================================== */
+const buildItems = async (rawItems) => {
+  if (!Array.isArray(rawItems) || rawItems.length === 0) {
+    throw { status: 400, message: "Order must have at least one item" };
+  }
+  if (rawItems.length > MAX_ITEMS) {
+    throw { status: 400, message: `Order cannot contain more than ${MAX_ITEMS} items` };
+  }
+
+  let subTotal = 0;
+  const processed = [];
+
+  for (const raw of rawItems) {
+    const size = String(raw.size || "").trim();
+    if (!REEL_SIZES.includes(size)) {
+      throw { status: 400, message: `Invalid reel size: ${size}` };
+    }
+
+    // Find ProductStock by size
+    const stock = await ProductStock.findOne({ size, isActive: true });
+    if (!stock) {
+      throw { status: 400, message: `Product stock for ${size} not found` };
+    }
+
+    const qty = Number(raw.quantity);
+    const rate = Number(raw.rate ?? 0);
+    const lineDiscount = Number(raw.discount ?? 0);
+
+    if (!Number.isFinite(qty) || qty <= 0 || qty > MAX_QTY) {
+      throw { status: 400, message: `Quantity for ${size} must be between 0.01 and ${MAX_QTY}` };
+    }
+    if (!Number.isFinite(rate) || rate < 0 || rate > MAX_RATE) {
+      throw { status: 400, message: `Rate for ${size} must be between 0 and ${MAX_RATE}` };
+    }
+    if (!Number.isFinite(lineDiscount) || lineDiscount < 0 || lineDiscount > MAX_AMOUNT) {
+      throw { status: 400, message: `Discount for ${size} must be a valid number` };
+    }
+
+    const amount = Math.max(0, qty * rate - lineDiscount);
+
+    processed.push({
+      productStock: stock._id,
+      productName: stock.name,
+      size,
+      quantity: qty,
+      unit: "Reel",
+      rate,
+      discount: lineDiscount,
+      amount,
+    });
+    subTotal += amount;
+  }
+  return { items: processed, subTotal };
+};
+
+/* ======================================================
+   GET ALL ORDERS
+====================================================== */
 const getAllOrders = async (req, res) => {
   try {
-    const {
-      page = 1,
-      limit = 20,
-      status,
-      paymentStatus,
-      contact,
-      search,
-      fromDate,
-      toDate,
-    } = req.query;
+    const { page = 1, limit = 20, status, paymentStatus, contact, search, fromDate, toDate } = req.query;
+
+    const pageNumber = Math.max(Number(page) || 1, 1);
+    const limitNumber = Math.min(Math.max(Number(limit) || 20, 1), MAX_LIMIT);
 
     const query = { isActive: true };
 
-    if (status) query.status = status;
-    if (paymentStatus) query.paymentStatus = paymentStatus;
-    if (contact) query.contact = contact;
-
-    if (fromDate || toDate) {
-      query.orderDate = {};
-      if (fromDate) query.orderDate.$gte = new Date(fromDate);
-      if (toDate) query.orderDate.$lte = new Date(toDate);
+    if (status && status !== "All") {
+      if (!VALID_STATUSES.includes(status)) {
+        return res.status(400).json({ success: false, message: "Invalid status filter" });
+      }
+      query.status = status;
     }
-
-    if (search) {
+    if (paymentStatus && paymentStatus !== "All") {
+      if (!VALID_PAYMENT_STATUSES.includes(paymentStatus)) {
+        return res.status(400).json({ success: false, message: "Invalid paymentStatus filter" });
+      }
+      query.paymentStatus = paymentStatus;
+    }
+    if (contact) {
+      if (!isValidId(contact)) {
+        return res.status(400).json({ success: false, message: "Invalid contact ID" });
+      }
+      query.contact = contact;
+    }
+    if (search && typeof search === "string" && search.trim()) {
+      const safe = escapeRegex(search.trim().slice(0, 100));
       query.$or = [
-        { orderNumber: { $regex: search, $options: 'i' } },
-        { notes: { $regex: search, $options: 'i' } },
+        { orderNumber: { $regex: safe, $options: "i" } },
+        { customerName: { $regex: safe, $options: "i" } },
+        { customerPhone: { $regex: safe, $options: "i" } },
+        { notes: { $regex: safe, $options: "i" } },
       ];
     }
+    if (fromDate || toDate) {
+      query.orderDate = {};
+      if (fromDate) {
+        const d = parseDate(fromDate);
+        if (!d) return res.status(400).json({ success: false, message: "Invalid fromDate" });
+        query.orderDate.$gte = d;
+      }
+      if (toDate) {
+        const d = parseDate(toDate);
+        if (!d) return res.status(400).json({ success: false, message: "Invalid toDate" });
+        query.orderDate.$lte = endOfDay(d);
+      }
+    }
 
-    const skip = (Number(page) - 1) * Number(limit);
+    const skip = (pageNumber - 1) * limitNumber;
 
     const [orders, total] = await Promise.all([
       Order.find(query)
-        .populate('contact', 'name company phone email')
-        .populate('enquiry', 'enquiryNumber subject')
-        .populate('items.product', 'name code diameter grade')
-        .sort({ createdAt: -1 })
+        .populate("contact", "name company phone email address gstin state stateCode")
+        .populate("enquiry", "enquiryNumber customerName company subject")
+        .sort({ orderDate: -1, createdAt: -1 })
         .skip(skip)
-        .limit(Number(limit)),
+        .limit(limitNumber),
       Order.countDocuments(query),
     ]);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       count: orders.length,
       total,
-      page: Number(page),
-      pages: Math.ceil(total / Number(limit)),
+      page: pageNumber,
+      limit: limitNumber,
+      pages: Math.max(Math.ceil(total / limitNumber), 1),
       data: orders,
     });
   } catch (error) {
-    console.error('Get orders error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error while fetching orders',
-      error: error.message,
-    });
+    handleError(res, error, "Server error while fetching orders");
   }
 };
 
+/* ======================================================
+   GET ORDER BY ID
+====================================================== */
 const getOrderById = async (req, res) => {
   try {
-    const order = await Order.findById(req.params.id)
-      .populate('contact', 'name company phone email address')
-      .populate('enquiry', 'enquiryNumber subject')
-      .populate('items.product', 'name code diameter grade unit sellingPrice');
-
-    if (!order || !order.isActive) {
-      return res.status(404).json({
-        success: false,
-        message: 'Order not found',
-      });
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid order ID" });
     }
 
-    res.status(200).json({
-      success: true,
-      data: order,
-    });
+    const order = await Order.findById(req.params.id)
+      .populate("contact", "name company role phone email address gstin state stateCode")
+      .populate("enquiry", "enquiryNumber customerName company phone email project location timeline");
+
+    if (!order || !order.isActive) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+    return res.status(200).json({ success: true, data: order });
   } catch (error) {
-    console.error('Get order error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-      error: error.message,
-    });
+    handleError(res, error, "Server error while fetching order");
   }
 };
 
+/* ======================================================
+   CREATE ORDER
+====================================================== */
 const createOrder = async (req, res) => {
   try {
     const {
-      enquiry,
-      contact,
-      items,
-      discount = 0,
-      taxPercent = 18,
-      expectedDeliveryDate,
-      shippingAddress,
-      billingAddress,
-      notes,
-      status = 'Draft',
+      enquiry, contact, customerName, customerPhone,
+      items, discount = 0, taxPercent = 18,
+      expectedDeliveryDate, shippingAddress, billingAddress,
+      notes, status = "Draft",
+      allowReserved = false,
     } = req.body;
 
-    const contactExists = await Contact.findById(contact);
-    if (!contactExists) {
-      return res.status(404).json({
-        success: false,
-        message: 'Contact not found',
-      });
+    if (!contact || !isValidId(contact)) {
+      return res.status(400).json({ success: false, message: "Valid contact ID is required" });
+    }
+    const contactDoc = await Contact.findById(contact);
+    if (!contactDoc) {
+      return res.status(404).json({ success: false, message: "Contact not found" });
     }
 
-    if (!items || items.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Order must have at least one item',
-      });
-    }
-
-    let subTotal = 0;
-    const processedItems = [];
-
-    for (const item of items) {
-      const product = await Product.findById(item.product);
-      if (!product) {
-        return res.status(404).json({
-          success: false,
-          message: `Product not found: ${item.product}`,
-        });
+    let cleanEnquiry = null;
+    if (enquiry) {
+      if (!isValidId(enquiry)) {
+        return res.status(400).json({ success: false, message: "Invalid enquiry ID" });
       }
-
-      const rate = item.rate !== undefined ? item.rate : product.sellingPrice || 0;
-      const qty = item.quantity;
-      const lineDiscount = item.discount || 0;
-      const amount = qty * rate - lineDiscount;
-
-      processedItems.push({
-        product: item.product,
-        quantity: qty,
-        unit: item.unit || product.unit || 'kg',
-        rate,
-        discount: lineDiscount,
-        amount,
-      });
-
-      subTotal += amount;
+      cleanEnquiry = enquiry;
     }
 
-    const taxAmount = ((subTotal - discount) * taxPercent) / 100;
-    const grandTotal = subTotal - discount + taxAmount;
+    const orderDiscount = Number(discount || 0);
+    if (!Number.isFinite(orderDiscount) || orderDiscount < 0 || orderDiscount > MAX_AMOUNT) {
+      return res.status(400).json({ success: false, message: "Invalid discount" });
+    }
 
-    const orderNumber = await generateOrderNumber();
+    const numericTaxPercent = Number(taxPercent);
+    if (!Number.isFinite(numericTaxPercent) || numericTaxPercent < 0 || numericTaxPercent > 100) {
+      return res.status(400).json({ success: false, message: "Tax percent must be between 0 and 100" });
+    }
 
-    const order = await Order.create({
-      orderNumber,
-      enquiry,
+    if (!VALID_STATUSES.includes(status)) {
+      return res.status(400).json({ success: false, message: "Invalid status" });
+    }
+
+    let cleanExpectedDelivery;
+    if (expectedDeliveryDate) {
+      const d = parseDate(expectedDeliveryDate);
+      if (!d) return res.status(400).json({ success: false, message: "Invalid expected delivery date" });
+      cleanExpectedDelivery = d;
+    }
+
+    const { items: processedItems, subTotal } = await buildItems(items);
+
+    const taxableAmount = Math.max(0, subTotal - orderDiscount);
+    const taxAmount = (taxableAmount * numericTaxPercent) / 100;
+    const grandTotal = taxableAmount + taxAmount;
+
+    const orderPayload = {
+      enquiry: cleanEnquiry,
       contact,
+      customerName:
+        safeString(customerName, 150) ||
+        (contactDoc.company ? `${contactDoc.company} — ${contactDoc.name}` : contactDoc.name),
+      customerPhone: safeString(customerPhone, 30) || contactDoc.phone || "",
       items: processedItems,
       subTotal,
-      discount,
-      taxPercent,
+      discount: orderDiscount,
+      taxPercent: numericTaxPercent,
       taxAmount,
       grandTotal,
       status,
-      expectedDeliveryDate,
-      shippingAddress,
-      billingAddress,
-      notes,
-    });
+      expectedDeliveryDate: cleanExpectedDelivery || null,
+      shippingAddress: safeString(shippingAddress, 500) || "",
+      billingAddress: safeString(billingAddress, 500) || "",
+      notes: safeString(notes, 2000) || "",
+      stockStatus: "Pending",
+      createdBy: req.user?._id || null,
+    };
+
+    let order = null;
+    for (let attempt = 0; attempt < 3 && !order; attempt++) {
+      try {
+        const orderNumber = await generateOrderNumber();
+        order = await Order.create({ ...orderPayload, orderNumber });
+      } catch (err) {
+        if (err.code === 11000 && attempt < 2) continue;
+        throw err;
+      }
+    }
+
+    // If created directly as Confirmed, deduct stock immediately
+    // (with reserved-conflict gate).
+    if (order.status === "Confirmed") {
+      try {
+        await deductOrderStock(order, req.user, !!allowReserved);
+        order.stockStatus = "Deducted";
+        order.stockDeductedAt = new Date();
+        await order.save();
+      } catch (err) {
+        // Order was created but deduction failed — fall back to Draft.
+        order.status = "Draft";
+        order.stockStatus = "Pending";
+        await order.save();
+
+        if (err.code === "RESERVED_CONFLICT") {
+          return res.status(409).json({
+            success: false,
+            code: "RESERVED_CONFLICT",
+            message: err.message,
+            data: err.data,
+            order, // Draft, so the client can retry
+          });
+        }
+
+        return res.status(err.status || 400).json({
+          success: false,
+          message: err.message || "Stock deduction failed — order saved as Draft.",
+          data: order,
+        });
+      }
+    }
 
     const populated = await Order.findById(order._id)
-      .populate('contact', 'name company phone')
-      .populate('items.product', 'name code diameter grade');
+      .populate("contact", "name company role phone email address gstin state stateCode")
+      .populate("enquiry", "enquiryNumber customerName company subject");
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
-      message: 'Order created successfully',
+      message: "Order created successfully",
       data: populated,
     });
   } catch (error) {
-    console.error('Create order error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error while creating order',
-      error: error.message,
-    });
+    handleError(res, error, "Server error while creating order");
   }
 };
 
+/* ======================================================
+   UPDATE ORDER (Draft only for items)
+====================================================== */
 const updateOrder = async (req, res) => {
   try {
-    const order = await Order.findById(req.params.id);
-
-    if (!order || !order.isActive) {
-      return res.status(404).json({
-        success: false,
-        message: 'Order not found',
-      });
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid order ID" });
     }
 
-    if (order.status !== 'Draft' && req.body.items) {
+    const order = await Order.findById(req.params.id);
+    if (!order || !order.isActive) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    if (order.status !== "Draft" && req.body.items) {
       return res.status(400).json({
         success: false,
-        message: 'Cannot edit items after order is confirmed. Create a new order or cancel this one.',
+        message: "Cannot edit items after order is confirmed. Create a new order or cancel this one.",
       });
     }
 
-    const allowed = [
-      'expectedDeliveryDate',
-      'shippingAddress',
-      'billingAddress',
-      'notes',
-      'discount',
-      'taxPercent',
-    ];
-
-    allowed.forEach((field) => {
-      if (req.body[field] !== undefined) {
-        order[field] = req.body[field];
+    if (req.body.expectedDeliveryDate !== undefined) {
+      if (req.body.expectedDeliveryDate === null || req.body.expectedDeliveryDate === "") {
+        order.expectedDeliveryDate = null;
+      } else {
+        const d = parseDate(req.body.expectedDeliveryDate);
+        if (!d) return res.status(400).json({ success: false, message: "Invalid expected delivery date" });
+        order.expectedDeliveryDate = d;
       }
-    });
-
-    if (req.body.discount !== undefined || req.body.taxPercent !== undefined) {
-      order.taxAmount = ((order.subTotal - order.discount) * order.taxPercent) / 100;
-      order.grandTotal = order.subTotal - order.discount + order.taxAmount;
     }
 
+    if (req.body.shippingAddress !== undefined) {
+      order.shippingAddress = safeString(req.body.shippingAddress, 500) || "";
+    }
+    if (req.body.billingAddress !== undefined) {
+      order.billingAddress = safeString(req.body.billingAddress, 500) || "";
+    }
+    if (req.body.notes !== undefined) {
+      order.notes = safeString(req.body.notes, 2000) || "";
+    }
+    if (req.body.customerName !== undefined) {
+      order.customerName = safeString(req.body.customerName, 150) || "";
+    }
+    if (req.body.customerPhone !== undefined) {
+      order.customerPhone = safeString(req.body.customerPhone, 30) || "";
+    }
+
+    let totalsChanged = false;
+
+    // Full items replacement (Draft only, guarded above)
+    if (req.body.items !== undefined) {
+      const { items: processedItems, subTotal } = await buildItems(req.body.items);
+      order.items = processedItems;
+      order.subTotal = subTotal;
+      totalsChanged = true;
+    }
+
+    if (req.body.discount !== undefined) {
+      const d = Number(req.body.discount);
+      if (!Number.isFinite(d) || d < 0 || d > MAX_AMOUNT) {
+        return res.status(400).json({ success: false, message: "Invalid discount" });
+      }
+      order.discount = d;
+      totalsChanged = true;
+    }
+
+    if (req.body.taxPercent !== undefined) {
+      const t = Number(req.body.taxPercent);
+      if (!Number.isFinite(t) || t < 0 || t > 100) {
+        return res.status(400).json({ success: false, message: "Tax percent must be between 0 and 100" });
+      }
+      order.taxPercent = t;
+      totalsChanged = true;
+    }
+
+    if (totalsChanged) {
+      const taxableAmount = Math.max(0, Number(order.subTotal || 0) - Number(order.discount || 0));
+      order.taxAmount = (taxableAmount * Number(order.taxPercent || 0)) / 100;
+      order.grandTotal = taxableAmount + order.taxAmount;
+    }
+
+    order.updatedBy = req.user?._id || null;
     await order.save();
 
     const populated = await Order.findById(order._id)
-      .populate('contact', 'name company')
-      .populate('items.product', 'name code');
+      .populate("contact", "name company role phone email address gstin state stateCode")
+      .populate("enquiry", "enquiryNumber customerName company subject");
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: 'Order updated successfully',
+      message: "Order updated successfully",
       data: populated,
     });
   } catch (error) {
-    console.error('Update order error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-      error: error.message,
-    });
+    handleError(res, error, "Server error while updating order");
   }
 };
 
+/* ======================================================
+   UPDATE ORDER STATUS
+
+   Stock effects:
+     Draft → Confirmed     : deduct (with reserved-conflict gate)
+     * → Cancelled         : if Deducted, restore quantity
+
+   `reservedQty` is never touched by order operations — it
+   is a manual admin field on ProductStock. When Confirmed
+   exceeds free qty, returns 409 RESERVED_CONFLICT unless
+   allowReserved is passed.
+====================================================== */
 const updateOrderStatus = async (req, res) => {
   try {
-    const { status } = req.body;
-    const validStatuses = [
-      'Draft',
-      'Confirmed',
-      'In Production',
-      'Ready for Dispatch',
-      'Dispatched',
-      'Delivered',
-      'Cancelled',
-    ];
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid order ID" });
+    }
 
-    if (!validStatuses.includes(status)) {
+    const { status, allowReserved = false } = req.body;
+    if (!VALID_STATUSES.includes(status)) {
+      return res.status(400).json({ success: false, message: "Invalid order status" });
+    }
+
+    const order = await Order.findById(req.params.id);
+    if (!order || !order.isActive) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    const fromStatus = order.status;
+
+    if (fromStatus === status) {
+      const populated = await Order.findById(order._id)
+        .populate("contact", "name company role phone email address gstin state stateCode")
+        .populate("enquiry", "enquiryNumber customerName company subject");
+      return res.status(200).json({
+        success: true,
+        message: `Order is already in status ${status}`,
+        data: populated,
+      });
+    }
+
+    if (fromStatus === "Delivered" && status !== "Delivered") {
+      return res.status(400).json({ success: false, message: "Cannot change status of a Delivered order." });
+    }
+
+    if (status === "Cancelled" && ["Dispatched", "Delivered"].includes(fromStatus)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid status',
+        message: `Cannot cancel an order that is already ${fromStatus}.`,
       });
     }
 
-    const order = await Order.findById(req.params.id).populate('items.product');
+    /* ---- stock transitions ---- */
+    const currentStockStatus = order.stockStatus || "Pending";
 
-    if (!order || !order.isActive) {
-      return res.status(404).json({
-        success: false,
-        message: 'Order not found',
-      });
-    }
-    if (status === 'Confirmed' && order.status === 'Draft') {
-      for (const item of order.items) {
-        const inventory = await Inventory.findOne({
-          product: item.product._id,
-          isActive: true,
-        });
+    const shouldDeduct = status === "Confirmed" && currentStockStatus === "Pending";
+    const shouldRestore =
+      status === "Cancelled" && currentStockStatus === "Deducted";
 
-        if (!inventory) {
-          return res.status(400).json({
+    if (shouldDeduct) {
+      try {
+        await deductOrderStock(order, req.user, !!allowReserved);
+      } catch (err) {
+        if (err.code === "RESERVED_CONFLICT") {
+          return res.status(409).json({
             success: false,
-            message: `No inventory found for product: ${item.product.name}`,
+            code: "RESERVED_CONFLICT",
+            message: err.message,
+            data: err.data,
           });
         }
-
-        if (inventory.quantity < item.quantity) {
-          return res.status(400).json({
-            success: false,
-            message: `Insufficient stock for ${item.product.name}. Available: ${inventory.quantity}`,
-          });
-        }
-
-        inventory.quantity -= item.quantity;
-        await inventory.save();
+        throw err;
       }
+      order.stockStatus = "Deducted";
+      order.stockDeductedAt = new Date();
     }
 
-    if (status === 'Dispatched') {
-      order.dispatchedDate = new Date();
+    if (shouldRestore) {
+      await restoreOrderStock(order, req.user);
+      order.stockStatus = "Restored";
+      order.stockRestoredAt = new Date();
     }
-    if (status === 'Delivered') {
-      order.deliveredDate = new Date();
-    }
+
+    if (status === "Dispatched" && !order.dispatchedDate) order.dispatchedDate = new Date();
+    if (status === "Delivered" && !order.deliveredDate) order.deliveredDate = new Date();
+    if (status === "Cancelled" && !order.cancelledDate) order.cancelledDate = new Date();
 
     order.status = status;
+    order.updatedBy = req.user?._id || null;
     await order.save();
 
-    res.status(200).json({
+    const populated = await Order.findById(order._id)
+      .populate("contact", "name company role phone email address gstin state stateCode")
+      .populate("enquiry", "enquiryNumber customerName company subject");
+
+    return res.status(200).json({
       success: true,
       message: `Order status updated to ${status}`,
-      data: order,
+      data: populated,
     });
   } catch (error) {
-    console.error('Update status error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error while updating status',
-      error: error.message,
-    });
+    if (error.status === 400) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+    if (error.status === 404) {
+      return res.status(404).json({ success: false, message: error.message });
+    }
+    handleError(res, error, "Server error while updating status");
   }
 };
 
+/* ======================================================
+   UPDATE PAYMENT
+====================================================== */
+const updatePayment = async (req, res) => {
+  try {
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid order ID" });
+    }
+    const order = await Order.findById(req.params.id);
+    if (!order || !order.isActive) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    const { paymentStatus, amountPaid } = req.body;
+
+    if (paymentStatus !== undefined) {
+      if (!VALID_PAYMENT_STATUSES.includes(paymentStatus)) {
+        return res.status(400).json({ success: false, message: "Invalid payment status" });
+      }
+      order.paymentStatus = paymentStatus;
+    }
+
+    if (amountPaid !== undefined) {
+      const n = Number(amountPaid);
+      if (!Number.isFinite(n) || n < 0 || n > MAX_AMOUNT) {
+        return res.status(400).json({ success: false, message: "Invalid amount paid" });
+      }
+      order.amountPaid = n;
+    }
+
+    order.updatedBy = req.user?._id || null;
+    await order.save();
+
+    const populated = await Order.findById(order._id)
+      .populate("contact", "name company role phone email address gstin state stateCode");
+
+    return res.status(200).json({ success: true, message: "Payment updated", data: populated });
+  } catch (error) {
+    handleError(res, error, "Server error while updating payment");
+  }
+};
+
+/* ======================================================
+   DELETE ORDER
+====================================================== */
 const deleteOrder = async (req, res) => {
   try {
-    const order = await Order.findById(req.params.id);
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid order ID" });
+    }
 
+    const order = await Order.findById(req.params.id);
     if (!order || !order.isActive) {
-      return res.status(404).json({
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    if (!["Draft", "Cancelled"].includes(order.status)) {
+      return res.status(400).json({
         success: false,
-        message: 'Order not found',
+        message: "Only Draft or Cancelled orders can be deleted",
       });
     }
 
-    if (!['Draft', 'Cancelled'].includes(order.status)) {
+    if (order.stockStatus === "Deducted") {
       return res.status(400).json({
         success: false,
-        message: 'Only Draft or Cancelled orders can be deleted',
+        message: "This order is still holding stock. Cancel the order first, then delete.",
       });
     }
 
     order.isActive = false;
+    order.updatedBy = req.user?._id || null;
     await order.save();
 
-    res.status(200).json({
+    return res.status(200).json({ success: true, message: "Order deleted successfully" });
+  } catch (error) {
+    handleError(res, error, "Server error");
+  }
+};
+
+/* ======================================================
+   GENERATE INVOICE
+====================================================== */
+const generateInvoice = async (req, res) => {
+  try {
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid order ID" });
+    }
+
+    const order = await Order.findById(req.params.id)
+      .populate("contact", "name company phone email address gstin state stateCode");
+
+    if (!order || !order.isActive) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    if (["Draft", "Cancelled"].includes(order.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot generate an invoice for a ${order.status} order.`,
+      });
+    }
+
+    const existingInvoice = await Invoice.findOne({ order: order._id }).populate("order");
+    if (existingInvoice) {
+      return res.status(200).json({
+        success: true,
+        message: "Invoice already exists for this order",
+        alreadyExists: true,
+        data: existingInvoice,
+      });
+    }
+
+    if (!order.items || order.items.length === 0) {
+      return res.status(400).json({ success: false, message: "Cannot generate invoice for an order without items" });
+    }
+    if (!order.contact) {
+      return res.status(400).json({ success: false, message: "Cannot generate invoice because customer information is missing" });
+    }
+
+    const subTotal = Number(order.subTotal || 0);
+    const discount = Number(order.discount || 0);
+    const taxableAmount = Math.max(0, subTotal - discount);
+    const taxPercent = Number(order.taxPercent || 0);
+
+    const taxType = "IGST";
+    const igstPercent = taxPercent;
+    const igstAmount = (taxableAmount * igstPercent) / 100;
+    const cgstPercent = 0, cgstAmount = 0;
+    const sgstPercent = 0, sgstAmount = 0;
+    const totalTax = igstAmount + cgstAmount + sgstAmount;
+    const grandTotal = taxableAmount + totalTax;
+
+    const invoiceItems = order.items.map((item) => ({
+      product: item.productStock || item.product,   // keep ref for history
+      description: item.productName || `Reel ${item.size}`,
+      hsnSac: "",
+      quantity: Number(item.quantity || 0),
+      rate: Number(item.rate || 0),
+      unit: item.unit || "Reel",
+      amount: Number(item.amount || 0),
+    }));
+
+    const contact = order.contact;
+
+    const buyer = {
+      name: contact.name || "",
+      company: contact.company || "",
+      address: order.billingAddress || contact.address || "",
+      gstin: contact.gstin || "",
+      state: contact.state || "",
+      stateCode: contact.stateCode || "",
+      phone: contact.phone || "",
+      email: contact.email || "",
+    };
+
+    const consignee = {
+      name: contact.name || "",
+      company: contact.company || "",
+      address: order.shippingAddress || contact.address || "",
+      gstin: contact.gstin || "",
+      state: contact.state || "",
+      stateCode: contact.stateCode || "",
+    };
+
+    let invoice = null;
+    for (let attempt = 0; attempt < 3 && !invoice; attempt++) {
+      const invoiceNumber = await generateInvoiceNumber();
+      try {
+        invoice = await Invoice.create({
+          invoiceNumber,
+          order: order._id,
+          invoiceDate: new Date(),
+          seller: { name: "", address: "", gstin: "", state: "", stateCode: "" },
+          buyer,
+          consignee,
+          items: invoiceItems,
+          subTotal,
+          discount,
+          taxableAmount,
+          taxType,
+          taxPercent,
+          igstPercent,
+          igstAmount,
+          cgstPercent,
+          cgstAmount,
+          sgstPercent,
+          sgstAmount,
+          totalTax,
+          grandTotal,
+          amountInWords: amountInWords(grandTotal),
+          taxAmountInWords: amountInWords(totalTax),
+          reference: order.orderNumber,
+        });
+      } catch (err) {
+        if (err.code === 11000 && attempt < 2) continue;
+        throw err;
+      }
+    }
+
+    const populatedInvoice = await Invoice.findById(invoice._id).populate("order");
+
+    return res.status(201).json({
       success: true,
-      message: 'Order deleted successfully',
+      message: "Invoice generated successfully",
+      alreadyExists: false,
+      data: populatedInvoice,
     });
   } catch (error) {
-    console.error('Delete order error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error',
-      error: error.message,
-    });
+    console.error("Generate invoice error:", error);
+
+    if (error.code === 11000) {
+      const existingInvoice = await Invoice.findOne({ order: req.params.id }).populate("order");
+      if (existingInvoice) {
+        return res.status(200).json({
+          success: true,
+          message: "Invoice already exists for this order",
+          alreadyExists: true,
+          data: existingInvoice,
+        });
+      }
+      return res.status(409).json({
+        success: false,
+        message: "Invoice number collision. Resync the counter (db.counters, _id: invoice-YYYY) and try again.",
+      });
+    }
+
+    handleError(res, error, "Failed to generate invoice");
+  }
+};
+
+/* ======================================================
+   GET INVOICE FOR ORDER
+====================================================== */
+const getInvoice = async (req, res) => {
+  try {
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid order ID" });
+    }
+
+    const invoice = await Invoice.findOne({ order: req.params.id }).populate("order");
+    if (!invoice) {
+      return res.status(404).json({ success: false, message: "Invoice not found for this order" });
+    }
+    return res.status(200).json({ success: true, data: invoice });
+  } catch (error) {
+    handleError(res, error, "Failed to fetch invoice");
   }
 };
 
@@ -392,5 +1112,8 @@ module.exports = {
   createOrder,
   updateOrder,
   updateOrderStatus,
+  updatePayment,
   deleteOrder,
+  generateInvoice,
+  getInvoice,
 };

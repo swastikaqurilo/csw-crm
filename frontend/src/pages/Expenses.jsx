@@ -17,6 +17,7 @@ import {
   Inbox,
 } from "lucide-react";
 import api from "../api/axios";
+import DateFilter, { isWithinRange } from "../components/DateFilter"; // 👈 ADDED
 
 const TABS = [
   {
@@ -108,6 +109,10 @@ export default function Expenses() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
 
+  // 👈 ADDED — shared date filter state (applies to every tab)
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+
   const [showModal, setShowModal] = useState(false);
   const [editingExpense, setEditingExpense] = useState(null);
 
@@ -174,6 +179,13 @@ export default function Expenses() {
       result = result.filter((expense) => expense.paymentStatus === statusFilter);
     }
 
+    // 👈 ADDED — date range filter
+    if (dateFrom || dateTo) {
+      result = result.filter((expense) =>
+        isWithinRange(expense.date, dateFrom, dateTo)
+      );
+    }
+
     if (search.trim()) {
       const query = search.toLowerCase();
       result = result.filter((expense) => {
@@ -190,7 +202,8 @@ export default function Expenses() {
     }
 
     return result;
-  }, [expenses, activeTab, statusFilter, search]);
+    // 👈 ADDED dateFrom, dateTo to deps
+  }, [expenses, activeTab, statusFilter, search, dateFrom, dateTo]);
 
   /* COUNTS PER TAB (for the tab bar badges) */
   const countsByTab = useMemo(() => {
@@ -553,6 +566,17 @@ export default function Expenses() {
             </button>
           ))}
         </div>
+
+        {/* 👈 ADDED — Date filter */}
+        <DateFilter
+          from={dateFrom}
+          to={dateTo}
+          accent={activeConfig?.accent || "#0B2545"}
+          onChange={({ from, to }) => {
+            setDateFrom(from);
+            setDateTo(to);
+          }}
+        />
       </div>
 
       {/* TABLE */}
