@@ -7,7 +7,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:5000',
+        // target: 'http://127.0.0.1:5000',
         target: 'https://4nq08695-5000.inc1.devtunnels.ms',   
         changeOrigin: true,
         secure: false,

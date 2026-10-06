@@ -5,8 +5,7 @@ const contactSchema = new Schema(
   {
     contactId: {
       type: String,
-      unique: true,
-      index: true,
+      unique: true,             // unique already creates an index — no need for index:true
       trim: true,
       maxlength: 50,
     },
@@ -20,39 +19,59 @@ const contactSchema = new Schema(
 
     company: {
       type: String,
-      required: [true, "Company is required"],
       trim: true,
       maxlength: [200, "Company name too long"],
+      default: "",
     },
 
     role: {
       type: String,
       trim: true,
-      maxlength: [100, "Role too long"],
+      lowercase: true,                       // "Customer" → "customer" automatically
+      enum: {
+        values: ["customer", "supplier", "partner", "other", ""],
+        message: "{VALUE} is not a valid role",
+      },
       default: "",
     },
 
     email: {
       type: String,
-      required: [true, "Email is required"],
       trim: true,
       lowercase: true,
       maxlength: [200, "Email too long"],
-      match: [/^\S+@\S+\.\S+$/, "Please provide a valid email"],
+      match: [/^\S+@\S+\.\S+$|^$/, "Please provide a valid email"],
+      default: "",
     },
 
     phone: {
       type: String,
       trim: true,
       maxlength: [20, "Phone too long"],
-      match: [/^[0-9+\-\s()]*$/, "Phone contains invalid characters"],
+      match: [/^[6-9]\d{9}$|^$/, "Enter a valid 10-digit Indian mobile number"],
       default: "",
     },
 
+    // Legacy single address — kept so old code keeps working
     address: {
       type: String,
       trim: true,
       maxlength: [500, "Address too long"],
+      default: "",
+    },
+
+    // ✅ NEW — split billing / shipping addresses
+    billingAddress: {
+      type: String,
+      trim: true,
+      maxlength: [500, "Billing address too long"],
+      default: "",
+    },
+
+    shippingAddress: {
+      type: String,
+      trim: true,
+      maxlength: [500, "Shipping address too long"],
       default: "",
     },
 
@@ -80,7 +99,7 @@ const contactSchema = new Schema(
     },
 
     enquiry: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: Schema.Types.ObjectId,
       ref: "Enquiry",
       default: null,
     },
@@ -105,36 +124,46 @@ const contactSchema = new Schema(
       },
       default: "active",
     },
+
+    shippingName:      { type: String, trim: true, maxlength: [150, "Name too long"], default: "" },
+    shippingCompany:   { type: String, trim: true, maxlength: [200, "Company name too long"], default: "" },
+    shippingGstin: {
+      type: String, trim: true, uppercase: true,
+      maxlength: [15, "GSTIN must be 15 characters"],
+      match: [/^[0-9A-Z]{15}$|^$/, "Invalid GSTIN format"],
+      default: "",
+    },
+    shippingState:     { type: String, trim: true, maxlength: [100, "State name too long"], default: "" },
+    shippingStateCode: { type: String, trim: true, maxlength: [5, "State code too long"], default: "" },
+
   },
+  
+  
   { timestamps: true }
 );
 
+/* ------------------------------------------------------------------
+   Auto-generate contactId:  CON-001, CON-002, … CON-999, CON-1000
+   Fixed so it keeps working past CON-999 (previous version sorted
+   ids as strings, so "CON-999" > "CON-1000" lexically → duplicates).
+------------------------------------------------------------------- */
 contactSchema.pre("save", async function () {
   if (this.contactId) return;
 
   const Contact = this.constructor;
 
-  const lastContact = await Contact.findOne(
-    {
-      contactId: /^CON-\d+$/,
-    },
-    { contactId: 1 }
-  ).sort({ contactId: -1 });
+  const existing = await Contact.find(
+    { contactId: /^CON-\d+$/ },
+    { contactId: 1, _id: 0 }
+  ).lean();
 
-  let nextNumber = 1;
-
-  if (lastContact?.contactId) {
-    const lastNumber = parseInt(
-      lastContact.contactId.replace("CON-", ""),
-      10
-    );
-
-    if (!Number.isNaN(lastNumber)) {
-      nextNumber = lastNumber + 1;
-    }
+  let maxNumber = 0;
+  for (const doc of existing) {
+    const n = parseInt(doc.contactId.slice(4), 10); // strip "CON-"
+    if (Number.isFinite(n) && n > maxNumber) maxNumber = n;
   }
 
-  this.contactId = `CON-${String(nextNumber).padStart(3, "0")}`;
+  this.contactId = `CON-${String(maxNumber + 1).padStart(3, "0")}`;
 });
 
 contactSchema.index({

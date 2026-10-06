@@ -15,9 +15,10 @@ import {
   CalendarDays,
   RefreshCw,
   Inbox,
+  UserPlus,
 } from "lucide-react";
 import api from "../api/axios";
-import DateFilter, { isWithinRange } from "../components/DateFilter"; // 👈 ADDED
+import DateFilter, { isWithinRange } from "../components/DateFilter";
 
 const TABS = [
   {
@@ -67,6 +68,20 @@ const EMPTY_FORM = {
   transactionId: "",
 };
 
+const EMPTY_PERSON_FORM = {
+  name: "",
+  type: "Employee",
+  role: "",
+  phone: "",
+  email: "",
+  salary: "",
+  dailyWage: "",
+  dateOfJoining: new Date().toISOString().split("T")[0],
+  address: "",
+  notes: "",
+  status: "Active",
+};
+
 function formatCurrency(value) {
   return `₹${Number(value || 0).toLocaleString("en-IN")}`;
 }
@@ -109,7 +124,6 @@ export default function Expenses() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
 
-  // 👈 ADDED — shared date filter state (applies to every tab)
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
@@ -120,11 +134,17 @@ export default function Expenses() {
 
   const activeConfig = TABS.find((tab) => tab.key === activeTab);
 
-    const [showPaymentModal, setShowPaymentModal] = useState(false);
-    const [paymentExpense, setPaymentExpense] = useState(null);
-    const [paymentMethod, setPaymentMethod] = useState("Cash");
-    const [paymentTransactionId, setPaymentTransactionId] = useState("");
-    const [paymentSaving, setPaymentSaving] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [paymentExpense, setPaymentExpense] = useState(null);
+  const [paymentMethod, setPaymentMethod] = useState("Cash");
+  const [paymentTransactionId, setPaymentTransactionId] = useState("");
+  const [paymentSaving, setPaymentSaving] = useState(false);
+
+  /* ---------- PERSON (EMPLOYEE / FACTORY PEOPLE) MODAL STATE ---------- */
+  const [showPersonModal, setShowPersonModal] = useState(false);
+  const [editingPerson, setEditingPerson] = useState(null);
+  const [personForm, setPersonForm] = useState(EMPTY_PERSON_FORM);
+  const [personSaving, setPersonSaving] = useState(false);
 
   /* FETCH EXPENSES */
   const fetchExpenses = async () => {
@@ -179,7 +199,6 @@ export default function Expenses() {
       result = result.filter((expense) => expense.paymentStatus === statusFilter);
     }
 
-    // 👈 ADDED — date range filter
     if (dateFrom || dateTo) {
       result = result.filter((expense) =>
         isWithinRange(expense.date, dateFrom, dateTo)
@@ -202,10 +221,8 @@ export default function Expenses() {
     }
 
     return result;
-    // 👈 ADDED dateFrom, dateTo to deps
   }, [expenses, activeTab, statusFilter, search, dateFrom, dateTo]);
 
-  /* COUNTS PER TAB (for the tab bar badges) */
   const countsByTab = useMemo(() => {
     return TABS.reduce((acc, tab) => {
       acc[tab.key] = expenses.filter((e) => e.type === tab.key).length;
@@ -213,7 +230,6 @@ export default function Expenses() {
     }, {});
   }, [expenses]);
 
-  /* STATS */
   const stats = useMemo(() => {
     const total = filteredExpenses.reduce((sum, e) => sum + Number(e.amount || 0), 0);
     const paid = filteredExpenses
@@ -262,6 +278,139 @@ export default function Expenses() {
     setShowModal(true);
   };
 
+  /* ---------- PERSON MODAL HANDLERS ---------- */
+  const updatePersonForm = (field, value) => {
+    setPersonForm((current) => ({ ...current, [field]: value }));
+  };
+
+  const openAddEmployeeModal = () => {
+    const personType =
+      activeTab === "Factory People" ? "Factory People" : "Employee";
+    setEditingPerson(null);
+    setPersonForm({
+      ...EMPTY_PERSON_FORM,
+      type: personType,
+      dateOfJoining: new Date().toISOString().split("T")[0],
+    });
+    setShowPersonModal(true);
+  };
+
+  const openEditPersonModal = (person) => {
+    setEditingPerson(person);
+    setPersonForm({
+      name: person.name || "",
+      type: person.type || "Employee",
+      role: person.role || "",
+      phone: person.phone || "",
+      email: person.email || "",
+      salary: person.salary ?? "",
+      dailyWage: person.dailyWage ?? "",
+      dateOfJoining: person.dateOfJoining
+        ? new Date(person.dateOfJoining).toISOString().split("T")[0]
+        : new Date().toISOString().split("T")[0],
+      address: person.address || "",
+      notes: person.notes || "",
+      status: person.status || "Active",
+    });
+    setShowPersonModal(true);
+  };
+
+  const validatePersonForm = () => {
+    if (!personForm.name.trim()) {
+      alert("Name is required.");
+      return false;
+    }
+    if (!personForm.type) {
+      alert("Person type is required.");
+      return false;
+    }
+    if (personForm.phone && personForm.phone.replace(/\D/g, "").length < 7) {
+      alert("Phone must have at least 7 digits.");
+      return false;
+    }
+    if (
+      personForm.type === "Employee" &&
+      personForm.salary !== "" &&
+      Number(personForm.salary) < 0
+    ) {
+      alert("Salary cannot be negative.");
+      return false;
+    }
+    if (
+      personForm.type === "Factory People" &&
+      personForm.dailyWage !== "" &&
+      Number(personForm.dailyWage) < 0
+    ) {
+      alert("Daily wage cannot be negative.");
+      return false;
+    }
+    return true;
+  };
+
+  const handlePersonSubmit = async (e) => {
+    e.preventDefault();
+    if (!validatePersonForm()) return;
+
+    try {
+      setPersonSaving(true);
+
+      const payload = {
+        name: personForm.name.trim(),
+        type: personForm.type,
+        role: personForm.role.trim() || undefined,
+        phone: personForm.phone.trim() || undefined,
+        email: personForm.email.trim() || undefined,
+        address: personForm.address.trim() || undefined,
+        notes: personForm.notes.trim() || undefined,
+        status: personForm.status || "Active",
+        joiningDate: personForm.dateOfJoining || new Date().toISOString().split("T")[0],
+      };
+
+      if (personForm.type === "Employee") {
+        payload.salary = Number(personForm.salary || 0);
+        payload.dailyWage = 0;
+      } else {
+        payload.dailyWage = Number(personForm.dailyWage || 0);
+        payload.salary = 0;
+      }
+
+      if (editingPerson) {
+        await api.put(`/people/${editingPerson._id}`, payload);
+      } else {
+        await api.post("/people", payload);
+      }
+
+      setShowPersonModal(false);
+      setEditingPerson(null);
+      setPersonForm(EMPTY_PERSON_FORM);
+      await fetchPeople();
+    } catch (err) {
+      console.error("Save person error:", err);
+      alert(
+        err?.response?.data?.message ||
+          `Failed to ${editingPerson ? "update" : "add"} ${personForm.type.toLowerCase()}.`
+      );
+    } finally {
+      setPersonSaving(false);
+    }
+  };
+
+  const handlePersonDelete = async (person) => {
+    const confirmed = window.confirm(
+      `Delete ${person.name}? Existing expense records will remain.`
+    );
+    if (!confirmed) return;
+
+    try {
+      await api.delete(`/people/${person._id}`);
+      await fetchPeople();
+    } catch (err) {
+      console.error("Delete person error:", err);
+      alert(err?.response?.data?.message || "Failed to delete person.");
+    }
+  };
+
+  /* EXPENSE VALIDATION + SUBMIT */
   const validateForm = () => {
     if (!form.date) {
       alert("Date is required.");
@@ -323,8 +472,11 @@ export default function Expenses() {
             : null,
       };
 
-      // Employee / Factory People amount is computed server-side from Person.
-      if (form.type === "Factory Expense" || form.type === "Miscellaneous") {
+      if (form.type === "Employee") {
+        payload.amount = Number(selectedPerson?.salary || 0);
+      } else if (form.type === "Factory People") {
+        payload.amount = Number(selectedPerson?.dailyWage || 0);
+      } else {
         payload.amount = Number(form.amount || 0);
       }
 
@@ -350,45 +502,42 @@ export default function Expenses() {
     setPaymentMethod("Cash");
     setPaymentTransactionId("");
     setShowPaymentModal(true);
-    };
+  };
 
-    const handleMarkAsPaid = async (e) => {
+  const handleMarkAsPaid = async (e) => {
     e.preventDefault();
 
     if (!paymentExpense) return;
 
     if (paymentMethod === "UPI" && !paymentTransactionId.trim()) {
-        alert("UPI transaction ID is required.");
-        return;
+      alert("UPI transaction ID is required.");
+      return;
     }
 
     try {
-        setPaymentSaving(true);
+      setPaymentSaving(true);
 
-        await api.patch(`/expense/${paymentExpense._id}/pay`, {
+      await api.patch(`/expense/${paymentExpense._id}/pay`, {
         paymentMethod,
         transactionId:
-            paymentMethod === "UPI"
-            ? paymentTransactionId.trim()
-            : null,
-        });
+          paymentMethod === "UPI" ? paymentTransactionId.trim() : null,
+      });
 
-        setShowPaymentModal(false);
-        setPaymentExpense(null);
-        setPaymentMethod("Cash");
-        setPaymentTransactionId("");
+      setShowPaymentModal(false);
+      setPaymentExpense(null);
+      setPaymentMethod("Cash");
+      setPaymentTransactionId("");
 
-        await fetchExpenses();
+      await fetchExpenses();
     } catch (err) {
-        console.error("Mark expense paid error:", err);
-        alert(
-        err?.response?.data?.message ||
-            "Failed to mark expense as paid."
-        );
+      console.error("Mark expense paid error:", err);
+      alert(
+        err?.response?.data?.message || "Failed to mark expense as paid."
+      );
     } finally {
-        setPaymentSaving(false);
+      setPaymentSaving(false);
     }
-    };
+  };
 
   const handleDelete = async (expense) => {
     if (expense.paymentStatus === "Paid") {
@@ -416,6 +565,11 @@ export default function Expenses() {
       ? selectedPerson?.dailyWage || 0
       : Number(form.amount || 0);
 
+  const showAddEmployeeButton =
+    activeTab === "Employee" || activeTab === "Factory People";
+
+  const employeeLabel = activeTab === "Factory People" ? "Add worker" : "Add employee";
+
   return (
     <div className="w-full space-y-6 text-slate-900">
       {/* HEADER */}
@@ -430,7 +584,7 @@ export default function Expenses() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
           <button
             type="button"
             onClick={fetchExpenses}
@@ -439,6 +593,17 @@ export default function Expenses() {
             <RefreshCw size={14} />
             Refresh
           </button>
+
+          {showAddEmployeeButton && (
+            <button
+              type="button"
+              onClick={openAddEmployeeModal}
+              className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3.5 text-sm font-medium text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 hover:text-slate-900"
+            >
+              <UserPlus size={15} />
+              {employeeLabel}
+            </button>
+          )}
 
           <button
             type="button"
@@ -454,7 +619,6 @@ export default function Expenses() {
         </div>
       </div>
 
-      {/* ERROR */}
       {error && (
         <div className="flex items-center justify-between rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <span>{error}</span>
@@ -464,7 +628,6 @@ export default function Expenses() {
         </div>
       )}
 
-      {/* TABS — underline style, category-coded */}
       <div className="flex items-center gap-1 overflow-x-auto border-b border-slate-200">
         {TABS.map((tab) => {
           const Icon = tab.icon;
@@ -490,9 +653,7 @@ export default function Expenses() {
                   color: active ? tab.accent : "#94A3B8",
                   backgroundColor: active ? tab.accentSoft : "transparent",
                 }}
-              >
-                {/* {countsByTab[tab.key] ?? 0} */}
-              </span>
+              />
               {active && (
                 <span
                   className="absolute inset-x-0 -bottom-px h-0.5 rounded-full"
@@ -504,7 +665,6 @@ export default function Expenses() {
         })}
       </div>
 
-      {/* STATS */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Total"
@@ -531,7 +691,6 @@ export default function Expenses() {
         />
       </div>
 
-      {/* FILTERS */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative min-w-0 flex-1">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -567,7 +726,6 @@ export default function Expenses() {
           ))}
         </div>
 
-        {/* 👈 ADDED — Date filter */}
         <DateFilter
           from={dateFrom}
           to={dateTo}
@@ -582,7 +740,7 @@ export default function Expenses() {
       {/* TABLE */}
       <section className="overflow-hidden rounded-lg border border-slate-200">
         <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-5 py-3">
-          <h2 className="text-sm font-semibold text-slate-800">{activeTab}</h2>
+          <h2 className="text-sm font-semibold text-slate-800">{activeTab} expenses </h2>
           <p className="text-xs text-slate-500">
             {filteredExpenses.length} {filteredExpenses.length === 1 ? "entry" : "entries"}
           </p>
@@ -604,238 +762,325 @@ export default function Expenses() {
             </div>
           ) : (
             <table className="w-full min-w-[900px] table-fixed border-collapse text-left">
-            <colgroup>
-                {/* Date */}
+              <colgroup>
                 <col className="w-32" />
-
-                {/* Person / Expense */}
                 <col className="w-48" />
-
-                {/* Designation / Role / Vendor / Description */}
                 <col className="w-48" />
-
-                {/* Amount */}
                 <col className="w-36" />
-
-                {/* Payment */}
                 <col className="w-44" />
-
-                {/* Actions */}
                 <col className="w-32" />
-            </colgroup>
+              </colgroup>
 
-            <thead>
+              <thead>
                 <tr className="border-b border-slate-200 bg-slate-50/60">
-                <th className="px-6 py-3 text-xs font-medium text-slate-500">
-                    Date
-                </th>
+                  <th className="px-6 py-3 text-xs font-medium text-slate-500">Date</th>
 
-                {activeTab === "Employee" && (
+                  {activeTab === "Employee" && (
                     <>
-                    <th className="px-4 py-3 text-xs font-medium text-slate-500">
-                        Employee
-                    </th>
-                    <th className="px-4 py-3 text-xs font-medium text-slate-500">
-                        Designation
-                    </th>
+                      <th className="px-4 py-3 text-xs font-medium text-slate-500">Employee</th>
+                      <th className="px-4 py-3 text-xs font-medium text-slate-500">Designation</th>
                     </>
-                )}
+                  )}
 
-                {activeTab === "Factory People" && (
+                  {activeTab === "Factory People" && (
                     <>
-                    <th className="px-4 py-3 text-xs font-medium text-slate-500">
-                        Person
-                    </th>
-                    <th className="px-4 py-3 text-xs font-medium text-slate-500">
-                        Role
-                    </th>
+                      <th className="px-4 py-3 text-xs font-medium text-slate-500">Person</th>
+                      <th className="px-4 py-3 text-xs font-medium text-slate-500">Role</th>
                     </>
-                )}
+                  )}
 
-                {activeTab === "Factory Expense" && (
+                  {activeTab === "Factory Expense" && (
                     <>
-                    <th className="px-4 py-3 text-xs font-medium text-slate-500">
-                        Expense
-                    </th>
-                    <th className="px-4 py-3 text-xs font-medium text-slate-500">
-                        Vendor
-                    </th>
+                      <th className="px-4 py-3 text-xs font-medium text-slate-500">Expense</th>
+                      <th className="px-4 py-3 text-xs font-medium text-slate-500">Vendor</th>
                     </>
-                )}
+                  )}
 
-                {activeTab === "Miscellaneous" && (
+                  {activeTab === "Miscellaneous" && (
                     <>
-                    <th className="px-4 py-3 text-xs font-medium text-slate-500">
-                        Expense
-                    </th>
-                    <th className="px-4 py-3 text-xs font-medium text-slate-500">
-                        Description
-                    </th>
+                      <th className="px-4 py-3 text-xs font-medium text-slate-500">Expense</th>
+                      <th className="px-4 py-3 text-xs font-medium text-slate-500">Description</th>
                     </>
-                )}
+                  )}
 
-                <th className="px-4 py-3 text-right text-xs font-medium text-slate-500">
-                    Amount
-                </th>
-
-                <th className="px-4 py-3 text-xs font-medium text-slate-500">
-                    Payment
-                </th>
-
-                <th className="px-6 py-3 text-right text-xs font-medium text-slate-500">
-                    Actions
-                </th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-slate-500">Amount</th>
+                  <th className="px-4 py-3 text-xs font-medium text-slate-500">Payment</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500">Actions</th>
                 </tr>
-            </thead>
+              </thead>
 
-            <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-slate-100">
                 {filteredExpenses.map((expense) => (
-                <tr
+                  <tr
                     key={expense._id}
                     className="align-middle transition-colors hover:bg-slate-50/70"
-                >
+                  >
                     <td className="px-6 py-4 align-middle text-sm text-slate-500">
-                    {formatDate(expense.date)}
+                      {formatDate(expense.date)}
                     </td>
 
                     {activeTab === "Employee" && (
-                    <>
+                      <>
                         <td className="truncate px-4 py-4 align-middle">
-                        <div className="truncate text-sm font-medium text-slate-800">
+                          <div className="truncate text-sm font-medium text-slate-800">
                             {expense.person?.name || "—"}
-                        </div>
+                          </div>
                         </td>
 
                         <td className="truncate px-4 py-4 align-middle text-sm text-slate-500">
-                        {expense.person?.role || "—"}
+                          {expense.person?.role || "—"}
                         </td>
-                    </>
+                      </>
                     )}
 
                     {activeTab === "Factory People" && (
-                    <>
+                      <>
                         <td className="truncate px-4 py-4 align-middle">
-                        <div className="truncate text-sm font-medium text-slate-800">
+                          <div className="truncate text-sm font-medium text-slate-800">
                             {expense.person?.name || "—"}
-                        </div>
+                          </div>
                         </td>
 
                         <td className="truncate px-4 py-4 align-middle text-sm text-slate-500">
-                        {expense.person?.role || "—"}
+                          {expense.person?.role || "—"}
                         </td>
-                    </>
+                      </>
                     )}
 
                     {activeTab === "Factory Expense" && (
-                    <>
+                      <>
                         <td className="truncate px-4 py-4 align-middle">
-                        <div className="truncate text-sm font-medium text-slate-800">
+                          <div className="truncate text-sm font-medium text-slate-800">
                             {expense.expenseType || "—"}
-                        </div>
+                          </div>
 
-                        {expense.invoiceNumber && (
+                          {expense.invoiceNumber && (
                             <div className="truncate text-xs text-slate-400">
-                            Invoice {expense.invoiceNumber}
+                              Invoice {expense.invoiceNumber}
                             </div>
-                        )}
+                          )}
                         </td>
 
                         <td className="truncate px-4 py-4 align-middle text-sm text-slate-500">
-                        {expense.vendor || "—"}
+                          {expense.vendor || "—"}
                         </td>
-                    </>
+                      </>
                     )}
 
                     {activeTab === "Miscellaneous" && (
-                    <>
+                      <>
                         <td className="truncate px-4 py-4 align-middle">
-                        <div className="truncate text-sm font-medium text-slate-800">
+                          <div className="truncate text-sm font-medium text-slate-800">
                             {expense.expenseName || "—"}
-                        </div>
+                          </div>
 
-                        <div className="truncate text-xs text-slate-400">
+                          <div className="truncate text-xs text-slate-400">
                             {expense.expenseCategory || "—"}
-                        </div>
+                          </div>
                         </td>
 
                         <td className="max-w-[280px] truncate px-4 py-4 align-middle text-sm text-slate-500">
-                        {expense.description || "—"}
+                          {expense.description || "—"}
                         </td>
-                    </>
+                      </>
                     )}
 
                     <td className="px-4 py-4 align-middle text-right text-sm font-semibold tabular-nums text-slate-900">
-                    {formatCurrency(expense.amount)}
+                      {formatCurrency(expense.amount)}
                     </td>
 
                     <td className="px-4 py-4 align-middle">
-                    <div className="space-y-1">
+                      <div className="space-y-1">
                         <PaymentStatus status={expense.paymentStatus} />
 
                         {expense.paymentStatus === "Paid" && expense.paymentMethod && (
-                        <div className="flex items-center gap-1 text-[11px] text-slate-400">
+                          <div className="flex items-center gap-1 text-[11px] text-slate-400">
                             {expense.paymentMethod === "UPI" ? (
-                            <Smartphone size={11} />
+                              <Smartphone size={11} />
                             ) : (
-                            <Wallet size={11} />
+                              <Wallet size={11} />
                             )}
 
-                            <span className="truncate">
-                            {expense.paymentMethod}
-                            </span>
+                            <span className="truncate">{expense.paymentMethod}</span>
 
                             {expense.transactionId && (
-                            <span className="truncate text-slate-300">
+                              <span className="truncate text-slate-300">
                                 &nbsp;· {expense.transactionId}
-                            </span>
+                              </span>
                             )}
-                        </div>
+                          </div>
                         )}
-                    </div>
+                      </div>
                     </td>
 
                     <td className="px-6 py-4 align-middle">
-                    <div className="flex items-center justify-end gap-1">
+                      <div className="flex items-center justify-end gap-1">
                         {expense.paymentStatus === "Pending" && (
-                        <button
+                          <button
                             type="button"
                             onClick={() => openPaymentModal(expense)}
                             title="Record payment"
                             className="inline-flex h-7 items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 text-xs font-medium text-emerald-700 transition-all duration-150 hover:border-emerald-300 hover:bg-emerald-100 hover:text-emerald-800 active:scale-[0.98]"
-                        >
+                          >
                             <CheckCircle2 size={13} strokeWidth={2} />
                             <span>Pay</span>
-                        </button>
+                          </button>
                         )}
 
                         <button
-                        type="button"
-                        onClick={() => openEditModal(expense)}
-                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-                        title="Edit"
+                          type="button"
+                          onClick={() => openEditModal(expense)}
+                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                          title="Edit"
                         >
-                        <Pencil size={13} />
+                          <Pencil size={13} />
                         </button>
 
                         <button
-                        type="button"
-                        onClick={() => handleDelete(expense)}
-                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600"
-                        title="Delete"
+                          type="button"
+                          onClick={() => handleDelete(expense)}
+                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                          title="Delete"
                         >
-                        <Trash2 size={13} />
+                          <Trash2 size={13} />
                         </button>
-                    </div>
+                      </div>
                     </td>
-                </tr>
+                  </tr>
                 ))}
-            </tbody>
+              </tbody>
             </table>
           )}
         </div>
       </section>
 
-      {/* ADD / EDIT MODAL */}
+      {/* PEOPLE (EMPLOYEE / FACTORY PEOPLE) */}
+      {(activeTab === "Employee" || activeTab === "Factory People") && (
+        <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+          <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-5 py-3">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold text-slate-800">
+                {activeTab === "Factory People" ? "Factory workers" : "Employees"}
+              </h2>
+              <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                {(activeTab === "Factory People"
+                  ? factoryPeopleList
+                  : employeeList
+                ).length}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={openAddEmployeeModal}
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 transition hover:border-slate-400 hover:bg-slate-50"
+            >
+              <UserPlus size={13} />
+              {employeeLabel}
+            </button>
+          </div>
+
+          {(activeTab === "Factory People"
+            ? factoryPeopleList
+            : employeeList
+          ).length === 0 ? (
+            <div className="px-5 py-8 text-center">
+              <p className="text-sm font-medium text-slate-700">
+                No {activeTab === "Factory People" ? "workers" : "employees"} yet
+              </p>
+              <p className="mt-1 text-xs text-slate-400">
+                Click "{employeeLabel}" to add one.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[800px] border-collapse text-left">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50/60">
+                    <th className="px-5 py-3 text-xs font-medium text-slate-500">
+                      Name
+                    </th>
+                    <th className="px-4 py-3 text-xs font-medium text-slate-500">
+                      Role
+                    </th>
+                    <th className="px-4 py-3 text-xs font-medium text-slate-500">
+                      Phone
+                    </th>
+                    <th className="px-4 py-3 text-xs font-medium text-slate-500">
+                      Joined
+                    </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-slate-500">
+                      {activeTab === "Factory People" ? "Daily wage" : "Salary"}
+                    </th>
+                    <th className="px-5 py-3 text-right text-xs font-medium text-slate-500">
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {(activeTab === "Factory People"
+                    ? factoryPeopleList
+                    : employeeList
+                  ).map((person) => (
+                    <tr
+                      key={person._id}
+                      className="transition-colors hover:bg-slate-50/70"
+                    >
+                      <td className="px-5 py-3">
+                        <div className="text-sm font-medium text-slate-800">
+                          {person.name}
+                        </div>
+                        {person.email && (
+                          <div className="truncate text-xs text-slate-400">
+                            {person.email}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-slate-500">
+                        {person.role || "—"}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-slate-500">
+                        {person.phone || "—"}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-slate-500">
+                        {formatDate(person.joiningDate)}
+                      </td>
+                      <td className="px-4 py-3 text-right text-sm font-semibold tabular-nums text-slate-900">
+                        {formatCurrency(
+                          activeTab === "Factory People"
+                            ? person.dailyWage
+                            : person.salary
+                        )}
+                      </td>
+                      <td className="px-5 py-3">
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            onClick={() => openEditPersonModal(person)}
+                            className="flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                            title="Edit"
+                          >
+                            <Pencil size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handlePersonDelete(person)}
+                            className="flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                            title="Delete"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* ADD / EDIT EXPENSE MODAL */}
       {showModal && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4"
@@ -869,6 +1114,7 @@ export default function Expenses() {
                     value={form.date}
                     onChange={(e) => updateForm("date", e.target.value)}
                     className="form-input"
+                     required
                   />
                 </FormField>
 
@@ -1098,126 +1344,334 @@ export default function Expenses() {
         </div>
       )}
 
+      {/* PAYMENT MODAL */}
       {showPaymentModal && paymentExpense && (
         <div
-            className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4"
-            onClick={() => !paymentSaving && setShowPaymentModal(false)}
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4"
+          onClick={() => !paymentSaving && setShowPaymentModal(false)}
         >
-            <div
+          <div
             className="w-full max-w-md overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl"
             onClick={(e) => e.stopPropagation()}
-            >
-            {/* HEADER */}
+          >
             <div className="flex items-start justify-between border-b border-slate-200 px-6 py-4">
-                <div>
-                <h2 className="text-base font-semibold text-slate-900">
-                    Payment done
-                </h2>
+              <div>
+                <h2 className="text-base font-semibold text-slate-900">Payment done</h2>
                 <p className="mt-0.5 text-xs text-slate-500">
-                    Record this expense payment
+                  Record this expense payment
                 </p>
-                </div>
+              </div>
 
-                <button
+              <button
                 type="button"
-                onClick={() =>
-                    !paymentSaving && setShowPaymentModal(false)
-                }
+                onClick={() => !paymentSaving && setShowPaymentModal(false)}
                 className="flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                >
+              >
                 <X size={16} />
-                </button>
+              </button>
             </div>
 
-            {/* DETAILS */}
             <form onSubmit={handleMarkAsPaid}>
-                <div className="space-y-4 px-6 py-5">
-
+              <div className="space-y-4 px-6 py-5">
                 <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-xs text-slate-500">
-                    Expense
-                    </p>
+                  <p className="text-xs text-slate-500">Expense</p>
 
-                    <p className="mt-1 text-sm font-semibold text-slate-900">
+                  <p className="mt-1 text-sm font-semibold text-slate-900">
                     {paymentExpense.person?.name ||
-                        paymentExpense.expenseType ||
-                        paymentExpense.expenseName ||
-                        "Expense"}
-                    </p>
+                      paymentExpense.expenseType ||
+                      paymentExpense.expenseName ||
+                      "Expense"}
+                  </p>
 
-                    <p className="mt-1 text-lg font-semibold text-slate-900">
+                  <p className="mt-1 text-lg font-semibold text-slate-900">
                     {formatCurrency(paymentExpense.amount)}
-                    </p>
+                  </p>
                 </div>
 
                 <FormField label="Payment method" required>
-                    <select
+                  <select
                     value={paymentMethod}
                     onChange={(e) => {
-                        setPaymentMethod(e.target.value);
-                        if (e.target.value === "Cash") {
+                      setPaymentMethod(e.target.value);
+                      if (e.target.value === "Cash") {
                         setPaymentTransactionId("");
-                        }
+                      }
                     }}
                     className="form-input"
-                    >
+                  >
                     <option value="Cash">Cash</option>
                     <option value="UPI">UPI</option>
-                    </select>
+                  </select>
                 </FormField>
 
                 {paymentMethod === "UPI" && (
-                    <FormField label="UPI transaction ID" required>
+                  <FormField label="UPI transaction ID" required>
                     <input
-                        type="text"
-                        value={paymentTransactionId}
-                        onChange={(e) =>
-                        setPaymentTransactionId(e.target.value)
-                        }
-                        placeholder="Enter transaction ID"
-                        className="form-input"
+                      type="text"
+                      value={paymentTransactionId}
+                      onChange={(e) => setPaymentTransactionId(e.target.value)}
+                      placeholder="Enter transaction ID"
+                      className="form-input"
                     />
-                    </FormField>
+                  </FormField>
                 )}
 
                 <div className="rounded-md bg-emerald-50 px-3 py-2.5 text-xs text-emerald-700">
-                    Once you confirm, this expense will be marked as{" "}
-                    <strong>Paid</strong> in the database.
+                  Once you confirm, this expense will be marked as{" "}
+                  <strong>Paid</strong> in the database.
                 </div>
-                </div>
+              </div>
 
-                {/* FOOTER */}
-                <div className="flex items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-6 py-4">
+              <div className="flex items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-6 py-4">
                 <button
-                    type="button"
-                    disabled={paymentSaving}
-                    onClick={() => setShowPaymentModal(false)}
-                    className="h-9 rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                  type="button"
+                  disabled={paymentSaving}
+                  onClick={() => setShowPaymentModal(false)}
+                  className="h-9 rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-600 hover:bg-slate-50"
                 >
-                    Cancel
+                  Cancel
                 </button>
 
                 <button
-                    type="submit"
-                    disabled={paymentSaving}
-                    className="inline-flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-4 text-sm font-medium text-white transition hover:bg-emerald-700 disabled:opacity-50"
+                  type="submit"
+                  disabled={paymentSaving}
+                  className="inline-flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-4 text-sm font-medium text-white transition hover:bg-emerald-700 disabled:opacity-50"
                 >
-                    {paymentSaving && (
-                    <RefreshCw
-                        size={13}
-                        className="animate-spin"
-                    />
-                    )}
-
-                    <CheckCircle2 size={14} />
-
-                    Confirm payment
+                  {paymentSaving && <RefreshCw size={13} className="animate-spin" />}
+                  <CheckCircle2 size={14} />
+                  Confirm payment
                 </button>
-                </div>
+              </div>
             </form>
-            </div>
+          </div>
         </div>
-        )}
+      )}
+
+      {/* 👇 NEW — ADD / EDIT PERSON (EMPLOYEE / FACTORY PEOPLE) MODAL */}
+      {showPersonModal && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4"
+          onClick={() => !personSaving && setShowPersonModal(false)}
+        >
+          <div
+            className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between border-b border-slate-200 px-6 py-4">
+              <div className="flex items-center gap-3">
+                <div
+                  className="flex h-9 w-9 items-center justify-center rounded-lg"
+                  style={{
+                    backgroundColor: personForm.type === "Factory People" ? "#FFFBEB" : "#EFF6FF",
+                    color: personForm.type === "Factory People" ? "#B45309" : "#2563EB",
+                  }}
+                >
+                  {personForm.type === "Factory People" ? (
+                    <Factory size={16} />
+                  ) : (
+                    <Users size={16} />
+                  )}
+                </div>
+                <div>
+                  <h2 className="text-base font-semibold text-slate-900">
+                    {editingPerson
+                      ? `Edit ${personForm.type.toLowerCase()}`
+                      : personForm.type === "Factory People"
+                      ? "Add factory worker"
+                      : "Add employee"}
+                  </h2>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    {personForm.type === "Factory People"
+                      ? "Daily wage worker — will be paid per day"
+                      : "Salaried employee — paid monthly"}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => !personSaving && setShowPersonModal(false)}
+                className="flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handlePersonSubmit} className="overflow-y-auto">
+              <div className="grid grid-cols-1 gap-4 px-6 py-5 md:grid-cols-2">
+                <FormField label="Full name" required>
+                  <input
+                    type="text"
+                    value={personForm.name}
+                    onChange={(e) => updatePersonForm("name", e.target.value)}
+                    placeholder="Enter full name"
+                    className="form-input"
+                    autoFocus
+                  />
+                </FormField>
+
+                <FormField label="Type" required>
+                  <select
+                    value={personForm.type}
+                    onChange={(e) => updatePersonForm("type", e.target.value)}
+                    className="form-input"
+                    disabled={Boolean(editingPerson)}
+                  >
+                    <option value="Employee">Employee (Monthly)</option>
+                    <option value="Factory People">Factory People (Daily wage)</option>
+                  </select>
+                </FormField>
+
+                <FormField label="Role / Designation">
+                  <input
+                    type="text"
+                    value={personForm.role}
+                    onChange={(e) => updatePersonForm("role", e.target.value)}
+                    placeholder={
+                      personForm.type === "Factory People"
+                        ? "Helper, Operator, Packer"
+                        : "Manager, Accountant, Sales"
+                    }
+                    className="form-input"
+                  />
+                </FormField>
+
+                <FormField label="Date of joining">
+                  <input
+                    type="date"
+                    value={personForm.dateOfJoining}
+                    onChange={(e) => updatePersonForm("dateOfJoining", e.target.value)}
+                    className="form-input"
+                  />
+                </FormField>
+
+                {personForm.type === "Employee" ? (
+                  <FormField label="Monthly salary (₹)" required>
+                    <input
+                      type="number"
+                      min="0"
+                      value={personForm.salary}
+                      onChange={(e) => updatePersonForm("salary", e.target.value)}
+                      placeholder="0"
+                      className="form-input"
+                    />
+                  </FormField>
+                ) : (
+                  <FormField label="Daily wage (₹)" required>
+                    <input
+                      type="number"
+                      min="0"
+                      value={personForm.dailyWage}
+                      onChange={(e) => updatePersonForm("dailyWage", e.target.value)}
+                      placeholder="0"
+                      className="form-input"
+                    />
+                  </FormField>
+                )}
+
+                <FormField label="Status">
+                  <select
+                    value={personForm.status}
+                    onChange={(e) => updatePersonForm("status", e.target.value)}
+                    className="form-input"
+                  >
+                    <option value="Active">Active</option>
+                    <option value="Inactive">Inactive</option>
+                  </select>
+                </FormField>
+
+                <FormField label="Phone">
+                  <input
+                    type="tel"
+                    value={personForm.phone}
+                    onChange={(e) => updatePersonForm("phone", e.target.value)}
+                    placeholder="10-digit mobile"
+                    className="form-input"
+                  />
+                </FormField>
+
+                <FormField label="Email">
+                  <input
+                    type="email"
+                    value={personForm.email}
+                    onChange={(e) => updatePersonForm("email", e.target.value)}
+                    placeholder="name@example.com"
+                    className="form-input"
+                  />
+                </FormField>
+
+                <div className="md:col-span-2">
+                  <FormField label="Address">
+                    <textarea
+                      value={personForm.address}
+                      onChange={(e) => updatePersonForm("address", e.target.value)}
+                      rows={2}
+                      placeholder="Residential address"
+                      className="form-input min-h-[64px] resize-none"
+                    />
+                  </FormField>
+                </div>
+
+                <div className="md:col-span-2">
+                  <FormField label="Notes">
+                    <textarea
+                      value={personForm.notes}
+                      onChange={(e) => updatePersonForm("notes", e.target.value)}
+                      rows={2}
+                      placeholder="Internal notes (bank details, emergency contact, etc.)"
+                      className="form-input min-h-[64px] resize-none"
+                    />
+                  </FormField>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-2 border-t border-slate-200 bg-slate-50 px-6 py-4">
+                {editingPerson ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          `Delete ${editingPerson.name}? This cannot be undone.`
+                        )
+                      ) {
+                        handlePersonDelete(editingPerson);
+                        setShowPersonModal(false);
+                      }
+                    }}
+                    disabled={personSaving}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-3 text-sm font-medium text-red-600 transition hover:bg-red-100 disabled:opacity-50"
+                  >
+                    <Trash2 size={13} />
+                    Delete
+                  </button>
+                ) : (
+                  <span />
+                )}
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={personSaving}
+                    onClick={() => setShowPersonModal(false)}
+                    className="h-9 rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={personSaving}
+                    className="inline-flex h-9 items-center gap-2 rounded-md px-4 text-sm font-medium text-white disabled:opacity-50"
+                    style={{ backgroundColor: "#0B2545" }}
+                  >
+                    {personSaving && <RefreshCw size={13} className="animate-spin" />}
+                    {editingPerson ? "Save changes" : employeeLabel}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Shared input styling */}
       <style>{`
@@ -1246,7 +1700,7 @@ export default function Expenses() {
   );
 }
 
-/* STAT CARD — flat with a left accent bar instead of a boxed icon + shadow */
+/* STAT CARD */
 function StatCard({ label, value, icon: Icon, accent = "#0B2545" }) {
   return (
     <div className="relative overflow-hidden rounded-lg border border-slate-200 bg-white px-4 py-3.5">

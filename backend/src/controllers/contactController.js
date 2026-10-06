@@ -1,7 +1,6 @@
 const mongoose = require("mongoose");
 const Contact = require("../models/Contacts");
 
-/* ---------- helpers ---------- */
 const isValidId = (v) => mongoose.isValidObjectId(v);
 
 const safeString = (v, max = 500) => {
@@ -11,11 +10,16 @@ const safeString = (v, max = 500) => {
   return t ? t.slice(0, max) : "";
 };
 
-// Escape regex special chars → prevents ReDoS and injection in $regex
+const normalizePhone = (v) => {
+  let d = String(v || "").replace(/\D/g, "");
+  if (d.length > 10 && d.startsWith("91")) d = d.slice(2);
+  if (d.length > 10 && d.startsWith("0")) d = d.slice(1);
+  return d.slice(0, 10);
+};
+
 const escapeRegex = (str) =>
   String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/* ================= CREATE ================= */
 const createContact = async (req, res) => {
   try {
     const {
@@ -24,7 +28,9 @@ const createContact = async (req, res) => {
       role,
       email,
       phone,
-      address,
+      address,            
+      billingAddress,      
+      shippingAddress,     
       gstin,
       state,
       stateCode,
@@ -32,7 +38,6 @@ const createContact = async (req, res) => {
       status,
     } = req.body;
 
-    // Required fields
     const cleanName = safeString(name, 150);
     const cleanCompany = safeString(company, 200);
     const cleanEmail = safeString(email, 200);
@@ -47,7 +52,6 @@ const createContact = async (req, res) => {
       return res.status(400).json({ success: false, message: "Email is required" });
     }
 
-    // enquiry ID check
     let cleanEnquiry = null;
     if (enquiry) {
       if (!isValidId(enquiry)) {
@@ -56,15 +60,25 @@ const createContact = async (req, res) => {
       cleanEnquiry = enquiry;
     }
 
+    const cleanAddress = safeString(address, 500) || "";
+    const cleanBilling =
+      safeString(billingAddress, 500) || cleanAddress;
+    const cleanShipping =
+      safeString(shippingAddress, 500) || cleanAddress;
+
     // Explicit whitelist — nothing from req.body flows raw.
-    // Notice: `contactId` and `enquiries` are NOT in this list → client can't set them.
+    // `contactId` and `enquiries` are NOT in this list → client can't set them.
     const payload = {
       name: cleanName,
       company: cleanCompany,
       role: safeString(role, 100) || "",
       email: cleanEmail,
       phone: safeString(phone, 20) || "",
-      address: safeString(address, 500) || "",
+
+      address: cleanAddress,
+      billingAddress: cleanBilling,
+      shippingAddress: cleanShipping,
+
       gstin: safeString(gstin, 15) || "",
       state: safeString(state, 100) || "",
       stateCode: safeString(stateCode, 5) || "",
@@ -109,14 +123,12 @@ const createContact = async (req, res) => {
   }
 };
 
-/* ================= LIST ================= */
 const getContacts = async (req, res) => {
   try {
     const { q, company, page = 1, limit = 5, status } = req.query;
 
     const filter = {};
 
-    // Search — escape regex to avoid ReDoS / injection
     if (q && typeof q === "string" && q.trim()) {
       const safe = escapeRegex(q.trim().slice(0, 100));
       filter.$or = [
@@ -126,12 +138,10 @@ const getContacts = async (req, res) => {
       ];
     }
 
-    // Company filter
     if (company && company !== "All Companies") {
       filter.company = safeString(company, 200);
     }
 
-    // Status filter
     if (status) {
       if (!["active", "inactive"].includes(status)) {
         return res.status(400).json({ success: false, message: "Invalid status filter" });
@@ -139,7 +149,6 @@ const getContacts = async (req, res) => {
       filter.status = status;
     }
 
-    // Clamp pagination — prevent ?limit=999999 DoS
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.min(Math.max(parseInt(limit, 10) || 5, 1), 100);
 
@@ -172,7 +181,6 @@ const getContacts = async (req, res) => {
   }
 };
 
-/* ================= GET ONE ================= */
 const getContact = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -192,7 +200,6 @@ const getContact = async (req, res) => {
   }
 };
 
-/* ================= UPDATE ================= */
 const updateContact = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -211,6 +218,8 @@ const updateContact = async (req, res) => {
       email,
       phone,
       address,
+      billingAddress,
+      shippingAddress,
       gstin,
       state,
       stateCode,
@@ -218,7 +227,6 @@ const updateContact = async (req, res) => {
       status,
     } = req.body;
 
-    // Whitelist editable fields (NOT contactId, NOT enquiries count)
     if (name !== undefined) {
       const v = safeString(name, 150);
       if (!v) return res.status(400).json({ success: false, message: "Invalid name" });
@@ -236,7 +244,22 @@ const updateContact = async (req, res) => {
       contact.email = v;
     }
     if (phone !== undefined) contact.phone = safeString(phone, 20) || "";
-    if (address !== undefined) contact.address = safeString(address, 500) || "";
+
+    if (address !== undefined) {
+      const a = safeString(address, 500) || "";
+      contact.address = a;
+      if (billingAddress === undefined && shippingAddress === undefined) {
+        contact.billingAddress = a;
+        contact.shippingAddress = a;
+      }
+    }
+    if (billingAddress !== undefined) {
+      contact.billingAddress = safeString(billingAddress, 500) || "";
+    }
+    if (shippingAddress !== undefined) {
+      contact.shippingAddress = safeString(shippingAddress, 500) || "";
+    }
+
     if (gstin !== undefined) contact.gstin = safeString(gstin, 15) || "";
     if (state !== undefined) contact.state = safeString(state, 100) || "";
     if (stateCode !== undefined) contact.stateCode = safeString(stateCode, 5) || "";
@@ -294,7 +317,6 @@ const updateContact = async (req, res) => {
   }
 };
 
-/* ================= DELETE ================= */
 const deleteContact = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {

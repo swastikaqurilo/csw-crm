@@ -13,7 +13,7 @@ export const deleteEnquiry = (id) => api.delete(`/enquiries/${id}`);
 
 export const getContacts = (params) => api.get('/contacts', { params });
 export const getContactById = (id) => api.get(`/contacts/${id}`);
-export const createContact = (data) => api.post('/contacts', data);
+export const createContact = (data) => api.post("/contacts", data);
 export const updateContact = (id, data) => api.put(`/contacts/${id}`, data);
 export const deleteContact = (id) => api.delete(`/contacts/${id}`);
 
@@ -22,7 +22,6 @@ export const getFollowupById = (id) => api.get(`/follow-ups/${id}`);
 export const createFollowup = (data) => api.post('/follow-ups', data);
 export const updateFollowup = (id, data) => api.put(`/follow-ups/${id}`, data);
 export const deleteFollowup = (id) => api.delete(`/follow-ups/${id}`);
-
 
 export const getProductStock = () => api.get("/products/stock");
 export const updateProductStockReserved = (id, body) => api.patch(`/products/stock/${id}/reserved`, body);
@@ -161,3 +160,8 @@ export const generateInvoice = (orderId) =>
 
 export const getOrderInvoice = (orderId) =>
   api.get(`/order/${orderId}/invoice`);
+
+export const getSettings = () => api.get('/settings');
+export const updateSettings = (payload) => api.put('/settings', payload);
+
+export const getNotifications = () => api.get("/notifications");

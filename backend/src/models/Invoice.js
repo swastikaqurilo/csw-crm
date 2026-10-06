@@ -69,12 +69,19 @@ const invoiceSchema = new mongoose.Schema(
       required: true,
     },
 
+    // 🔽 NEW — auto-computed from Settings.invoice.defaultDueDays
+    dueDate: {
+      type: Date,
+      default: null,
+    },
+
     eWayBillNumber: {
       type: String,
       trim: true,
       default: "",
     },
 
+    /* ---------- SELLER (snapshot from Settings at invoice time) ---------- */
     seller: {
       name: {
         type: String,
@@ -98,6 +105,94 @@ const invoiceSchema = new mongoose.Schema(
 
       stateCode: {
         type: String,
+        default: "",
+      },
+
+      // 🔽 NEW — extra seller identity fields
+      pan: {
+        type: String,
+        trim: true,
+        uppercase: true,
+        default: "",
+      },
+
+      cin: {
+        type: String,
+        trim: true,
+        uppercase: true,
+        default: "",
+      },
+
+      msme: {
+        type: String,
+        trim: true,
+        default: "",
+      },
+
+      phone: {
+        type: String,
+        trim: true,
+        default: "",
+      },
+
+      email: {
+        type: String,
+        trim: true,
+        lowercase: true,
+        default: "",
+      },
+
+      logoUrl: {
+        type: String,
+        trim: true,
+        default: "",
+      },
+
+      signatureUrl: {
+        type: String,
+        trim: true,
+        default: "",
+      },
+    },
+
+    /* ---------- BANK DETAILS (snapshot from Settings) ---------- */
+    // 🔽 NEW — bank block prints on the invoice footer so the
+    // buyer knows where to remit payment.
+    bank: {
+      accountName: {
+        type: String,
+        trim: true,
+        default: "",
+      },
+
+      accountNumber: {
+        type: String,
+        trim: true,
+        default: "",
+      },
+
+      bankName: {
+        type: String,
+        trim: true,
+        default: "",
+      },
+
+      ifsc: {
+        type: String,
+        trim: true,
+        uppercase: true,
+        default: "",
+      },
+
+      branch: {
+        type: String,
+        trim: true,
+        default: "",
+      },
+
+      upiId: {
+        type: String,
+        trim: true,
         default: "",
       },
     },
@@ -242,6 +337,12 @@ const invoiceSchema = new mongoose.Schema(
       default: 0,
     },
 
+    // 🔽 NEW — round-off adjustment (+/-) applied to reach grandTotal
+    roundOff: {
+      type: Number,
+      default: 0,
+    },
+
     grandTotal: {
       type: Number,
       default: 0,
@@ -268,6 +369,21 @@ const invoiceSchema = new mongoose.Schema(
         "We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.",
     },
 
+    // 🔽 NEW — admin-configurable terms / footer snapshot from Settings
+    termsAndConditions: {
+      type: String,
+      trim: true,
+      maxlength: 3000,
+      default: "",
+    },
+
+    footerNote: {
+      type: String,
+      trim: true,
+      maxlength: 500,
+      default: "",
+    },
+
     authorisedSignatory: {
       type: String,
       default: "",
@@ -277,5 +393,8 @@ const invoiceSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+invoiceSchema.index({ invoiceDate: -1 });
+invoiceSchema.index({ "buyer.gstin": 1 });
 
 module.exports = mongoose.model("Invoice", invoiceSchema);

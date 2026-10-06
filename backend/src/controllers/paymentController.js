@@ -4,7 +4,7 @@ const Order = require('../models/Order');
 const { getNextSequence } = require('../models/Counter');
 
 const MAX_LIMIT = 200;
-const MAX_AMOUNT = 10000000000; // 10,000,000,000
+const MAX_AMOUNT = 10000000000;
 
 const VALID_MODES = [
   'Bank Transfer',
@@ -15,10 +15,9 @@ const VALID_MODES = [
   'RTGS',
   'Other',
 ];
-const VALID_STATUSES = ['Pending', 'Completed', 'Failed', 'Bounced', 'Cancelled'];
+const VALID_STATUSES = ['Pending', 'Completed', 'Cancelled'];
 const NEEDS_TXN_ID = ['UPI', 'NEFT', 'RTGS', 'Bank Transfer'];
 
-/* ---------- helpers ---------- */
 const isValidId = (v) => mongoose.isValidObjectId(v);
 
 const safeString = (v, max = 500) => {
@@ -67,18 +66,27 @@ const handleError = (res, error, fallbackMessage) => {
     });
   }
 
-  // Don't leak error.message to the client
   return res.status(500).json({
     success: false,
     message: fallbackMessage,
   });
 };
 
-/*
-|--------------------------------------------------------------------------
-| applyToOrder  (unchanged — already atomic and safe)
-|--------------------------------------------------------------------------
-*/
+const ORDER_SELECT =
+  'orderNumber grandTotal amountPaid status paymentStatus customerName customerPhone';
+
+const populatePayment = (query) =>
+  query
+    .populate({
+      path: 'order',
+      select: ORDER_SELECT,
+      populate: {
+        path: 'contact',
+        select: 'name company phone email address gstin state stateCode',
+      },
+    })
+    .populate('contact', 'name company phone email');
+
 const applyToOrder = async ({ orderId, amount, direction, session }) => {
   const delta = direction === 'apply' ? amount : -amount;
 
@@ -135,22 +143,12 @@ const applyToOrder = async ({ orderId, amount, direction, session }) => {
   });
 };
 
-/*
-|--------------------------------------------------------------------------
-| Payment number
-|--------------------------------------------------------------------------
-*/
 const generatePaymentNumber = async (session) => {
   const year = new Date().getFullYear();
   const seq = await getNextSequence(`payment-${year}`, session);
   return `PAY-${year}-${String(seq).padStart(4, '0')}`;
 };
 
-/*
-|--------------------------------------------------------------------------
-| GET ALL PAYMENTS
-|--------------------------------------------------------------------------
-*/
 const getAllPayments = async (req, res) => {
   try {
     const {
@@ -166,6 +164,7 @@ const getAllPayments = async (req, res) => {
     } = req.query;
 
     const query = { isActive: true };
+    const andConditions = [];
 
     if (order) {
       if (!isValidId(order)) {
@@ -185,13 +184,37 @@ const getAllPayments = async (req, res) => {
       query.contact = contact;
     }
 
+    /* ---------- STATUS FILTER (Pending = special) ---------- */
     if (status) {
       if (!VALID_STATUSES.includes(status)) {
         return res
           .status(400)
           .json({ success: false, message: 'Invalid status filter' });
       }
-      query.status = status;
+
+      if (status === 'Pending') {
+        // 1. Find every order that still has an outstanding balance
+        const unpaidOrders = await Order.find({
+          isActive: true,
+          paymentStatus: { $in: ['Pending', 'Partial'] },
+        })
+          .select('_id')
+          .lean();
+
+        const unpaidOrderIds = unpaidOrders.map((o) => o._id);
+
+        // 2. Show payments that are either:
+        //    a) themselves marked Pending, OR
+        //    b) belong to an order that hasn't been fully settled
+        andConditions.push({
+          $or: [
+            { status: 'Pending' },
+            { order: { $in: unpaidOrderIds } },
+          ],
+        });
+      } else {
+        query.status = status;
+      }
     }
 
     if (paymentMode) {
@@ -223,32 +246,36 @@ const getAllPayments = async (req, res) => {
             .status(400)
             .json({ success: false, message: 'Invalid toDate' });
         }
-        query.paymentDate.$lte = endOfDay(d); // 👈 end-of-day, not midnight
+        query.paymentDate.$lte = endOfDay(d);
       }
     }
 
+    /* ---------- SEARCH (pushed into $and, not $or) ---------- */
     if (search && typeof search === 'string' && search.trim()) {
       const safe = escapeRegex(search.trim().slice(0, 100));
-      query.$or = [
-        { paymentNumber: { $regex: safe, $options: 'i' } },
-        { transactionId: { $regex: safe, $options: 'i' } },
-        { chequeNumber: { $regex: safe, $options: 'i' } },
-        { paidFrom: { $regex: safe, $options: 'i' } },
-        { notes: { $regex: safe, $options: 'i' } },
-      ];
+      andConditions.push({
+        $or: [
+          { paymentNumber: { $regex: safe, $options: 'i' } },
+          { transactionId: { $regex: safe, $options: 'i' } },
+          { chequeNumber: { $regex: safe, $options: 'i' } },
+          { paidFrom: { $regex: safe, $options: 'i' } },
+          { notes: { $regex: safe, $options: 'i' } },
+        ],
+      });
+    }
+
+    /* Combine any number of $or blocks without clobbering each other */
+    if (andConditions.length > 0) {
+      query.$and = andConditions;
     }
 
     const pageNumber = Math.max(Number(page) || 1, 1);
     const limitNumber = Math.min(Math.max(Number(limit) || 20, 1), MAX_LIMIT);
     const skip = (pageNumber - 1) * limitNumber;
 
+    /* ✅ deep-populate order.contact */
     const [payments, total] = await Promise.all([
-      Payment.find(query)
-        .populate(
-          'order',
-          'orderNumber grandTotal amountPaid status paymentStatus'
-        )
-        .populate('contact', 'name company phone')
+      populatePayment(Payment.find(query))
         .sort({ paymentDate: -1 })
         .skip(skip)
         .limit(limitNumber),
@@ -269,11 +296,6 @@ const getAllPayments = async (req, res) => {
   }
 };
 
-/*
-|--------------------------------------------------------------------------
-| GET PAYMENT BY ID
-|--------------------------------------------------------------------------
-*/
 const getPaymentById = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -282,9 +304,9 @@ const getPaymentById = async (req, res) => {
         .json({ success: false, message: 'Invalid payment ID' });
     }
 
-    const payment = await Payment.findById(req.params.id)
-      .populate('order', 'orderNumber grandTotal status paymentStatus amountPaid')
-      .populate('contact', 'name company phone email');
+    const payment = await populatePayment(
+      Payment.findById(req.params.id)
+    );
 
     if (!payment || !payment.isActive) {
       return res
@@ -298,11 +320,6 @@ const getPaymentById = async (req, res) => {
   }
 };
 
-/*
-|--------------------------------------------------------------------------
-| CREATE PAYMENT
-|--------------------------------------------------------------------------
-*/
 const createPayment = async (req, res) => {
   const session = await mongoose.startSession();
 
@@ -353,7 +370,6 @@ const createPayment = async (req, res) => {
         .json({ success: false, message: 'Invalid status' });
     }
 
-    // conditional fields (mirror the model, fail fast with clean messages)
     if (paymentMode === 'Cheque') {
       if (!safeString(chequeNumber, 50)) {
         return res.status(400).json({
@@ -375,7 +391,6 @@ const createPayment = async (req, res) => {
       });
     }
 
-    // 👈 The bug fix — explicit date parsing
     let cleanPaymentDate = new Date();
     if (paymentDate !== undefined && paymentDate !== null && paymentDate !== '') {
       const parsed = parseDate(paymentDate);
@@ -409,7 +424,6 @@ const createPayment = async (req, res) => {
     let createdPayment;
 
     await session.withTransaction(async () => {
-      /* Only Completed payments affect the Order */
       if (status === 'Completed') {
         const updatedOrder = await applyToOrder({
           orderId,
@@ -458,9 +472,9 @@ const createPayment = async (req, res) => {
       createdPayment = payment;
     });
 
-    const populated = await Payment.findById(createdPayment._id)
-      .populate('order', 'orderNumber grandTotal amountPaid paymentStatus')
-      .populate('contact', 'name company');
+    const populated = await populatePayment(
+      Payment.findById(createdPayment._id)
+    );
 
     res.status(201).json({
       success: true,
@@ -480,11 +494,6 @@ const createPayment = async (req, res) => {
   }
 };
 
-/*
-|--------------------------------------------------------------------------
-| UPDATE PAYMENT
-|--------------------------------------------------------------------------
-*/
 const updatePayment = async (req, res) => {
   const session = await mongoose.startSession();
 
@@ -502,7 +511,6 @@ const updatePayment = async (req, res) => {
         .json({ success: false, message: 'Payment not found' });
     }
 
-    /* ---------- validate incoming fields ---------- */
     const {
       paymentMode,
       paidFrom,
@@ -532,7 +540,7 @@ const updatePayment = async (req, res) => {
     let cleanPaymentDate;
     if (paymentDate !== undefined) {
       if (paymentDate === null || paymentDate === '') {
-        cleanPaymentDate = undefined; // keep existing
+        cleanPaymentDate = undefined;
       } else {
         const parsed = parseDate(paymentDate);
         if (!parsed) {
@@ -566,7 +574,6 @@ const updatePayment = async (req, res) => {
 
       const wasApplied = payment.appliedToOrder;
 
-      // Whitelisted updates with sanitization
       if (paymentMode !== undefined) payment.paymentMode = paymentMode;
       if (paidFrom !== undefined) {
         payment.paidFrom = safeString(paidFrom, 150) || undefined;
@@ -590,7 +597,6 @@ const updatePayment = async (req, res) => {
       }
       if (isReconciled !== undefined) {
         payment.isReconciled = Boolean(isReconciled);
-        // Auto-fill reconciledDate when first reconciled
         if (isReconciled && !payment.reconciledDate && cleanReconciledDate === undefined) {
           payment.reconciledDate = new Date();
         }
@@ -603,7 +609,6 @@ const updatePayment = async (req, res) => {
 
       const isCompletedNow = payment.status === 'Completed';
 
-      /* Only touch the order if the applied state changed */
       if (wasApplied !== isCompletedNow) {
         if (isCompletedNow) {
           const updatedOrder = await applyToOrder({
@@ -636,9 +641,9 @@ const updatePayment = async (req, res) => {
       updatedPayment = payment;
     });
 
-    const populated = await Payment.findById(updatedPayment._id)
-      .populate('order', 'orderNumber grandTotal amountPaid paymentStatus')
-      .populate('contact', 'name company');
+    const populated = await populatePayment(
+      Payment.findById(updatedPayment._id)
+    );
 
     res.status(200).json({
       success: true,
@@ -658,11 +663,6 @@ const updatePayment = async (req, res) => {
   }
 };
 
-/*
-|--------------------------------------------------------------------------
-| DELETE PAYMENT  (soft)
-|--------------------------------------------------------------------------
-*/
 const deletePayment = async (req, res) => {
   const session = await mongoose.startSession();
 
@@ -710,11 +710,6 @@ const deletePayment = async (req, res) => {
   }
 };
 
-/*
-|--------------------------------------------------------------------------
-| GET ALL PAYMENTS FOR ONE ORDER
-|--------------------------------------------------------------------------
-*/
 const getPaymentsByOrder = async (req, res) => {
   try {
     if (!isValidId(req.params.orderId)) {
@@ -722,16 +717,27 @@ const getPaymentsByOrder = async (req, res) => {
         .status(400)
         .json({ success: false, message: 'Invalid order ID' });
     }
-
     const [payments, order] = await Promise.all([
       Payment.find({ order: req.params.orderId, isActive: true })
         .populate('contact', 'name company phone email')
-        .populate('order', 'orderNumber grandTotal amountPaid paymentStatus')
+        .populate({
+          path: 'order',
+          select: ORDER_SELECT,
+          populate: {
+            path: 'contact',
+            select: 'name company phone email address gstin state stateCode',
+          },
+        })
         .sort({ paymentDate: -1, createdAt: -1 }),
 
-      Order.findById(req.params.orderId).select(
-        'orderNumber grandTotal amountPaid paymentStatus contact'
-      ),
+      Order.findById(req.params.orderId)
+        .select(
+          'orderNumber grandTotal amountPaid paymentStatus customerName customerPhone contact'
+        )
+        .populate(
+          'contact',
+          'name company phone email address gstin state stateCode'
+        ),
     ]);
 
     if (!order) {

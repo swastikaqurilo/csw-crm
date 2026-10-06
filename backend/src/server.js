@@ -21,7 +21,8 @@ const personRoutes = require("./routes/personRoutes");
 const expenseRoutes = require("./routes/expenseRoutes");
 const accountingRoutes = require("./routes/accountingRoutes");
 const rawMaterialRoutes = require("./routes/rawMaterialRoutes");
-
+const settingRoutes = require("./routes/settingRoutes");
+const notificationRoutes = require("./routes/notificationRoutes");
 
 const authRoutes = require("./routes/authRoutes");
 const { protect } = require("./middleware/auth");
@@ -61,6 +62,8 @@ app.use("/api/people", personRoutes);
 app.use("/api/expense", expenseRoutes);
 app.use("/api/accounting", accountingRoutes);
 app.use("/api/raw-material", rawMaterialRoutes);
+app.use('/api/settings', settingRoutes);
+app.use("/api/notifications", notificationRoutes);
 
 app.use((req, res) => {
   res.status(404).json({

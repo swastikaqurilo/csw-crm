@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { CalendarDays, X } from "lucide-react";
 
 export const DATE_PRESETS = [
@@ -62,7 +63,6 @@ export const getPresetRange = (preset) => {
   }
 };
 
-// Utility to check if a record falls within range
 export const isWithinRange = (recordDate, from, to) => {
   if (!from && !to) return true;
   if (!recordDate) return false;
@@ -81,15 +81,6 @@ export const isWithinRange = (recordDate, from, to) => {
   return true;
 };
 
-/**
- * Reusable DateFilter component.
- *
- * Props:
- *  - from, to: controlled string values (YYYY-MM-DD)
- *  - onChange({ from, to, preset }): callback
- *  - accent: optional color (defaults to blue)
- *  - showPresets: boolean, default true
- */
 export default function DateFilter({
   from,
   to,
@@ -99,8 +90,65 @@ export default function DateFilter({
 }) {
   const [preset, setPreset] = useState("all");
   const [open, setOpen] = useState(false);
+  const [coords, setCoords] = useState({ top: 0, left: 0, width: 340 });
+
+  const btnRef = useRef(null);
+  const panelRef = useRef(null);
 
   const hasFilter = Boolean(from || to);
+
+  /* ---------- panel positioning ---------- */
+  const updateCoords = () => {
+    if (!btnRef.current) return;
+    const r = btnRef.current.getBoundingClientRect();
+    const panelWidth = Math.min(360, window.innerWidth - 24);
+
+    // Try to align panel's right edge with button's right edge
+    let left = r.right - panelWidth;
+    // Clamp so it never goes off the left/right edge of the screen
+    if (left < 12) left = 12;
+    if (left + panelWidth > window.innerWidth - 12) {
+      left = window.innerWidth - 12 - panelWidth;
+    }
+
+    // Try to open downward; flip up if there's not enough space below
+    const panelHeightEstimate = 260;
+    const spaceBelow = window.innerHeight - r.bottom;
+    const openUpward = spaceBelow < panelHeightEstimate && r.top > panelHeightEstimate;
+
+    setCoords({
+      top: openUpward ? r.top - 8 : r.bottom + 8,
+      left,
+      width: panelWidth,
+      openUpward,
+    });
+  };
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    updateCoords();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = () => updateCoords();
+    window.addEventListener("resize", handler);
+    window.addEventListener("scroll", handler, true);
+    return () => {
+      window.removeEventListener("resize", handler);
+      window.removeEventListener("scroll", handler, true);
+    };
+  }, [open]);
+
+  /* ---------- close on Escape ---------- */
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
 
   const applyPreset = (key) => {
     setPreset(key);
@@ -114,157 +162,128 @@ export default function DateFilter({
   };
 
   return (
-    <div style={{ position: "relative" }}>
-      {/* Toggle button */}
+    <>
+      {/* ---------- Toggle button ---------- */}
       <button
+        ref={btnRef}
+        type="button"
         onClick={() => setOpen((s) => !s)}
+        className="flex h-10 w-full min-w-0 items-center justify-center gap-1.5 rounded-lg border px-3 text-xs font-semibold transition-colors sm:w-auto"
         style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          padding: "10px 14px",
-          borderRadius: 10,
-          border: `1px solid ${hasFilter ? accent : "#E5E7EB"}`,
+          borderColor: hasFilter ? accent : "#E5E7EB",
           background: hasFilter ? `${accent}15` : "#fff",
           color: hasFilter ? accent : "#374151",
-          fontWeight: 600,
-          cursor: "pointer",
-          whiteSpace: "nowrap",
         }}
       >
-        <CalendarDays size={16} />
-        {hasFilter ? `${from || "…"} → ${to || "…"}` : "Date Filter"}
+        <CalendarDays size={15} className="shrink-0" />
+
+        <span className="min-w-0 truncate">
+          {hasFilter ? `${from || "…"} → ${to || "…"}` : "Date Filter"}
+        </span>
+
         {hasFilter && (
           <X
             size={14}
+            className="shrink-0 cursor-pointer"
             onClick={(e) => {
               e.stopPropagation();
               clear();
             }}
-            style={{ cursor: "pointer" }}
           />
         )}
       </button>
 
-      {/* Panel */}
-      {open && (
-        <>
-          {/* click-away */}
-          <div
-            onClick={() => setOpen(false)}
-            style={{
-              position: "fixed",
-              inset: 0,
-              zIndex: 40,
-            }}
-          />
-          <div
-            style={{
-              position: "absolute",
-              top: "calc(100% + 8px)",
-              right: 0,
-              zIndex: 50,
-              minWidth: 340,
-              padding: 16,
-              background: "#fff",
-              border: "1px solid #E5E7EB",
-              borderRadius: 12,
-              boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
-            }}
-          >
-            {showPresets && (
-              <div
-                style={{
-                  display: "flex",
-                  gap: 8,
-                  flexWrap: "wrap",
-                  marginBottom: 14,
-                }}
-              >
-                {DATE_PRESETS.map((p) => (
-                  <button
-                    key={p.key}
-                    onClick={() => applyPreset(p.key)}
-                    style={{
-                      padding: "6px 12px",
-                      borderRadius: 999,
-                      border: `1px solid ${
-                        preset === p.key ? accent : "#E5E7EB"
-                      }`,
-                      background: preset === p.key ? `${accent}15` : "#fff",
-                      color: preset === p.key ? accent : "#374151",
-                      fontSize: 13,
-                      fontWeight: 500,
-                      cursor: "pointer",
-                    }}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-            )}
+      {/* ---------- Panel (via portal — escapes overflow-hidden) ---------- */}
+      {open &&
+        createPortal(
+          <>
+            {/* click-away backdrop */}
+            <div
+              onClick={() => setOpen(false)}
+              style={{
+                position: "fixed",
+                inset: 0,
+                zIndex: 9998,
+              }}
+            />
 
-            <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <label style={{ fontSize: 13, color: "#6B7280" }}>From</label>
-                <input
-                  type="date"
-                  value={from}
-                  onChange={(e) =>
-                    onChange({ from: e.target.value, to, preset: "custom" })
-                  }
-                  style={{
-                    padding: "8px 10px",
-                    borderRadius: 8,
-                    border: "1px solid #E5E7EB",
-                    fontSize: 14,
-                  }}
-                />
+            <div
+              ref={panelRef}
+              style={{
+                position: "fixed",
+                top: coords.top,
+                left: coords.left,
+                width: coords.width,
+                zIndex: 9999,
+                transform: coords.openUpward ? "translateY(-100%)" : undefined,
+              }}
+              className="rounded-xl border border-slate-200 bg-white p-4 shadow-xl"
+            >
+              {showPresets && (
+                <div className="mb-3.5 flex flex-wrap gap-2">
+                  {DATE_PRESETS.map((p) => (
+                    <button
+                      key={p.key}
+                      type="button"
+                      onClick={() => applyPreset(p.key)}
+                      className="rounded-full border px-3 py-1.5 text-[13px] font-medium transition-colors"
+                      style={{
+                        borderColor: preset === p.key ? accent : "#E5E7EB",
+                        background: preset === p.key ? `${accent}15` : "#fff",
+                        color: preset === p.key ? accent : "#374151",
+                      }}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* From / To — stack on narrow panel, side-by-side when there's room */}
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-3">
+                <div className="flex min-w-0 flex-1 items-center gap-2">
+                  <label className="w-10 shrink-0 text-[13px] text-slate-500">
+                    From
+                  </label>
+                  <input
+                    type="date"
+                    value={from || ""}
+                    onChange={(e) =>
+                      onChange({ from: e.target.value, to, preset: "custom" })
+                    }
+                    className="h-9 w-full min-w-0 rounded-lg border border-slate-200 px-2.5 text-sm outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
+                  />
+                </div>
+
+                <div className="flex min-w-0 flex-1 items-center gap-2">
+                  <label className="w-6 shrink-0 text-[13px] text-slate-500">
+                    To
+                  </label>
+                  <input
+                    type="date"
+                    value={to || ""}
+                    onChange={(e) =>
+                      onChange({ from, to: e.target.value, preset: "custom" })
+                    }
+                    className="h-9 w-full min-w-0 rounded-lg border border-slate-200 px-2.5 text-sm outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-900/5"
+                  />
+                </div>
               </div>
 
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <label style={{ fontSize: 13, color: "#6B7280" }}>To</label>
-                <input
-                  type="date"
-                  value={to}
-                  onChange={(e) =>
-                    onChange({ from, to: e.target.value, preset: "custom" })
-                  }
-                  style={{
-                    padding: "8px 10px",
-                    borderRadius: 8,
-                    border: "1px solid #E5E7EB",
-                    fontSize: 14,
-                  }}
-                />
-              </div>
+              {hasFilter && (
+                <button
+                  type="button"
+                  onClick={clear}
+                  className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-[13px] font-semibold text-red-600 transition hover:bg-red-100"
+                >
+                  <X size={14} />
+                  Clear
+                </button>
+              )}
             </div>
-
-            {hasFilter && (
-              <button
-                onClick={clear}
-                style={{
-                  marginTop: 12,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  padding: "6px 12px",
-                  borderRadius: 8,
-                  border: "1px solid #FCA5A5",
-                  background: "#FEF2F2",
-                  color: "#DC2626",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                }}
-              >
-                <X size={14} />
-                Clear
-              </button>
-            )}
-          </div>
-        </>
-      )}
-    </div>
+          </>,
+          document.body
+        )}
+    </>
   );
 }

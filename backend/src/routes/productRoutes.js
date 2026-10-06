@@ -16,6 +16,7 @@ const {
   updateProduction,
   deleteProduction,
   getRecentRates,
+  debugReels,
 } = require("../controllers/productController");
 
 /* ---- Product Stock (must come before /:id) ---- */
@@ -24,6 +25,7 @@ router.patch("/stock/:id/reserved", updateProductReserved);
 router.patch("/stock/:id/adjust", adjustProductStock);
 router.patch("/stock/:id/scrap", recordProductScrap);
 router.get("/stock/:id/movements", getProductStockMovements);
+router.get("/debug/reels", debugReels);
 
 /* ---- Production Entries ---- */
 router.get("/recent-rates", getRecentRates);

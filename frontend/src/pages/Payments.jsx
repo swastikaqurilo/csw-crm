@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, Fragment } from "react";
 import {
   Plus,
   Search,
@@ -20,6 +20,8 @@ import {
   Split,
   History,
   Smartphone,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 
 import {
@@ -62,8 +64,6 @@ const PAYMENT_MODES = [
 const PAYMENT_STATUSES = [
   "Pending",
   "Completed",
-  "Failed",
-  "Bounced",
   "Cancelled",
 ];
 
@@ -97,12 +97,12 @@ function getStatusClasses(status) {
       return "border-emerald-200 bg-emerald-50 text-emerald-700";
     case "Pending":
       return "border-amber-200 bg-amber-50 text-amber-700";
-    case "Failed":
-      return "border-red-200 bg-red-50 text-red-700";
-    case "Bounced":
-      return "border-orange-200 bg-orange-50 text-orange-700";
     case "Cancelled":
       return "border-slate-200 bg-slate-100 text-slate-600";
+    case "Paid":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    case "Partial":
+      return "border-blue-200 bg-blue-50 text-blue-700";
     default:
       return "border-slate-200 bg-slate-100 text-slate-600";
   }
@@ -116,9 +116,19 @@ function getCustomerName(payment) {
   return (
     payment?.order?.contact?.company ||
     payment?.order?.contact?.name ||
+    payment?.order?.customerName ||
     payment?.contact?.company ||
     payment?.contact?.name ||
     "Unknown Customer"
+  );
+}
+
+function getCustomerPhone(payment) {
+  return (
+    payment?.order?.contact?.phone ||
+    payment?.order?.customerPhone ||
+    payment?.contact?.phone ||
+    "—"
   );
 }
 
@@ -129,8 +139,10 @@ function getOrderNumber(payment) {
 function getStatusIcon(status) {
   switch (status) {
     case "Completed":
+    case "Paid":
       return CheckCircle2;
     case "Pending":
+    case "Partial":
       return Clock3;
     case "Failed":
       return X;
@@ -176,6 +188,7 @@ function Payments() {
   const [dateTo, setDateTo] = useState("");
 
   const [selectedId, setSelectedId] = useState(null);
+  const [expandedOrders, setExpandedOrders] = useState(new Set());
 
   const [summary, setSummary] = useState({
     totalCollected: 0,
@@ -207,16 +220,18 @@ function Payments() {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
 
-  const PAYMENTS_PER_PAGE = 8;
+  const ORDERS_PER_PAGE = 10;
 
   const fetchPayments = async () => {
     try {
       setLoading(true);
       setError("");
 
+      // Fetch a large limit to group by order on the frontend.
+      // For large datasets, the backend should support grouping/pagination by order.
       const response = await getPayments({
-        page,
-        limit: PAYMENTS_PER_PAGE,
+        page: 1,
+        limit: 1000,
         ...(search.trim() ? { search: search.trim() } : {}),
         ...(methodFilter !== "All Methods" ? { paymentMode: methodFilter } : {}),
         ...(statusFilter !== "All Records" ? { status: statusFilter } : {}),
@@ -225,19 +240,10 @@ function Payments() {
       });
 
       const data = response?.data?.data || [];
-
       setPayments(data);
-      setPages(response?.data?.pages || 1);
-      setTotal(response?.data?.total || 0);
-
-      if (data.length > 0) {
-        setSelectedId((current) => {
-          const exists = data.some((payment) => payment._id === current);
-          return exists ? current : data[0]._id;
-        });
-      } else {
-        setSelectedId(null);
-      }
+      
+      // Reset page when filters change
+      setPage(1);
     } catch (err) {
       console.error("Failed to fetch payments:", err);
       setError(
@@ -282,12 +288,108 @@ function Payments() {
 
   useEffect(() => {
     fetchPayments();
-  }, [page, search, methodFilter, statusFilter, dateFrom, dateTo]);
+  }, [search, methodFilter, statusFilter, dateFrom, dateTo]);
 
   useEffect(() => {
     fetchSummary();
     fetchOrders();
   }, []);
+
+  // ============ GROUPED PAYMENTS LOGIC ============
+  const groupedPayments = useMemo(() => {
+    const groups = {};
+
+    const getTimestamp = (dateVal) => {
+      if (!dateVal) return 0;
+      const time = new Date(dateVal).getTime();
+      return isNaN(time) ? 0 : time;
+    };
+
+    payments.forEach((payment) => {
+      const orderId = payment.order?._id || payment.order;
+      if (!orderId) return;
+
+      if (!groups[orderId]) {
+        groups[orderId] = {
+          order: payment.order || { _id: orderId, orderNumber: "Unknown Order" },
+          payments: [],
+          totalAmount: 0,
+          completedAmount: 0,
+          pendingAmount: 0,
+          latestDate: payment.paymentDate,
+          latestTimestamp: getTimestamp(payment.paymentDate),
+          status: "Pending",
+        };
+      }
+
+      const group = groups[orderId];
+      group.payments.push(payment);
+      group.totalAmount += Number(payment.amount || 0);
+
+      if (payment.status === "Completed") {
+        group.completedAmount += Number(payment.amount || 0);
+      }
+
+      const paymentTimestamp = getTimestamp(payment.paymentDate);
+      if (paymentTimestamp > group.latestTimestamp) {
+        group.latestTimestamp = paymentTimestamp;
+        group.latestDate = payment.paymentDate;
+      }
+    });
+
+    Object.values(groups).forEach((group) => {
+      group.payments.sort((a, b) => {
+        const timeA = getTimestamp(a.paymentDate);
+        const timeB = getTimestamp(b.paymentDate);
+        if (timeB !== timeA) return timeB - timeA;
+        return (b._id || "").localeCompare(a._id || "");
+      });
+
+      const orderTotal = Number(group.order.grandTotal || 0);
+      const paid = group.completedAmount;
+      
+      const remaining = Math.max(0, orderTotal - paid);
+      group.pendingAmount = remaining;
+
+      if (remaining <= 0.01 && orderTotal > 0) {
+        group.status = "Paid";
+      } else if (paid > 0.01 && remaining > 0.01) {
+        group.status = "Partial";
+      } else if (group.pendingAmount > 0) {
+        group.status = "Pending";
+      } else {
+        group.status = group.order.paymentStatus || "Pending";
+      }
+    });
+
+    return Object.values(groups).sort((a, b) => {
+      if (b.latestTimestamp !== a.latestTimestamp) {
+        return b.latestTimestamp - a.latestTimestamp;
+      }
+      return (b.order.orderNumber || "").localeCompare(a.order.orderNumber || "");
+    });
+  }, [payments]);
+
+  const totalOrders = groupedPayments.length;
+  const totalPages = Math.ceil(totalOrders / ORDERS_PER_PAGE) || 1;
+  const paginatedOrders = groupedPayments.slice(
+    (page - 1) * ORDERS_PER_PAGE,
+    page * ORDERS_PER_PAGE
+  );
+
+  const toggleExpand = (orderId) => {
+    setExpandedOrders((prev) => {
+      const next = new Set(prev);
+      if (next.has(orderId)) next.delete(orderId);
+      else next.add(orderId);
+      return next;
+    });
+  };
+
+
+  const collapseAll = () => {
+    setExpandedOrders(new Set());
+  };
 
   const selectedPayment = useMemo(() => {
     return (
@@ -319,36 +421,35 @@ function Payments() {
   }, [summary]);
 
   const paymentsRemaining = useMemo(() => {
-  let count = 0;
-  let total = 0;
-  for (const order of orders) {
-    const balance = Math.max(
-      0,
-      Number(order.grandTotal || 0) - Number(order.amountPaid || 0)
-    );
-    if (balance > 0.01) {
-      count += 1;
-      total += balance;
-    }
-  }
-  return { count, total };
-}, [orders]);
-
-    const partialPayments = useMemo(() => {
-      let count = 0;
-      let outstanding = 0;
-      for (const order of orders) {
-        const total = Number(order.grandTotal || 0);
-        const paid = Number(order.amountPaid || 0);
-        const balance = total - paid;
-        // Partial = some money received, but not fully settled
-        if (paid > 0.01 && balance > 0.01) {
-          count += 1;
-          outstanding += balance;
-        }
+    let count = 0;
+    let total = 0;
+    for (const order of orders) {
+      const balance = Math.max(
+        0,
+        Number(order.grandTotal || 0) - Number(order.amountPaid || 0)
+      );
+      if (balance > 0.01) {
+        count += 1;
+        total += balance;
       }
-      return { count, outstanding };
-    }, [orders]);
+    }
+    return { count, total };
+  }, [orders]);
+
+  const partialPayments = useMemo(() => {
+    let count = 0;
+    let outstanding = 0;
+    for (const order of orders) {
+      const total = Number(order.grandTotal || 0);
+      const paid = Number(order.amountPaid || 0);
+      const balance = total - paid;
+      if (paid > 0.01 && balance > 0.01) {
+        count += 1;
+        outstanding += balance;
+      }
+    }
+    return { count, outstanding };
+  }, [orders]);
 
   const hasActiveDateFilter = Boolean(dateFrom || dateTo);
 
@@ -575,7 +676,7 @@ function Payments() {
   };
 
   const goToPage = (nextPage) => {
-    if (nextPage < 1 || nextPage > pages) return;
+    if (nextPage < 1 || nextPage > totalPages) return;
     setPage(nextPage);
   };
 
@@ -759,7 +860,6 @@ function Payments() {
             value={search}
             onChange={(e) => {
               setSearch(e.target.value);
-              setPage(1);
             }}
             placeholder="Search by payment ID, transaction ID, cheque..."
             className="h-10 w-full rounded-lg border border-slate-200 bg-slate-50/50 pl-9 pr-3 text-sm text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-[#0f172a] focus:bg-white focus:ring-2 focus:ring-slate-900/10"
@@ -771,7 +871,6 @@ function Payments() {
           value={methodFilter}
           onChange={(e) => {
             setMethodFilter(e.target.value);
-            setPage(1);
           }}
         >
           <option>All Methods</option>
@@ -787,7 +886,6 @@ function Payments() {
           value={statusFilter}
           onChange={(e) => {
             setStatusFilter(e.target.value);
-            setPage(1);
           }}
         >
           <option>All Records</option>
@@ -805,27 +903,39 @@ function Payments() {
           onChange={({ from, to }) => {
             setDateFrom(from);
             setDateTo(to);
-            setPage(1);
           }}
         />
       </div>
 
-      {/* ============ LEDGER TABLE ============ */}
+      {/* ============ LEDGER TABLE (GROUPED BY ORDER) ============ */}
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
-        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+        {/* Table Header Actions */}
+        <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-sm font-semibold text-slate-900">
-              Payment Ledger
+              Payment Ledger by Order
             </h2>
             <p className="mt-0.5 text-[11px] text-slate-500">
-              {hasActiveDateFilter
-                ? `Filtered: ${dateFrom || "earliest"} → ${dateTo || "latest"}`
-                : "Customer payment and settlement records"}
+              Orders with payments - expand a row to see every payment (LIFO)
             </p>
           </div>
-          <div className="flex h-8 items-center gap-1.5 rounded-md bg-slate-100 px-2.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-            <ReceiptText size={13} />
-            {total} Records
+          <div className="flex items-center gap-2">
+            {/* <button
+              onClick={expandAll}
+              className="h-8 rounded-md border border-slate-200 bg-white px-3 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+            >
+              Expand all
+            </button> */}
+            <button
+              onClick={collapseAll}
+              className="h-8 rounded-md border border-slate-200 bg-white px-3 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+            >
+              Collapse all
+            </button>
+            <div className="flex h-8 items-center gap-1.5 rounded-md bg-slate-100 px-2.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+              <ReceiptText size={13} />
+              {totalOrders} ORDERS · {payments.length} PAYMENTS
+            </div>
           </div>
         </div>
 
@@ -834,22 +944,22 @@ function Payments() {
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50/70">
                 <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
-                  Payment Ref
-                </th>
-                <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
                   Order
                 </th>
                 <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
                   Customer
                 </th>
                 <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
-                  Amount
+                  Payments
+                </th>
+                <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
+                  Completed
+                </th>
+                <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
+                  Pending
                 </th>
                 <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
-                  Date
-                </th>
-                <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
-                  Method
+                  Latest
                 </th>
                 <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
                   Status
@@ -872,7 +982,7 @@ function Payments() {
                     </div>
                   </td>
                 </tr>
-              ) : payments.length === 0 ? (
+              ) : paginatedOrders.length === 0 ? (
                 <tr>
                   <td colSpan="8" className="px-4 py-16 text-center">
                     <div className="flex flex-col items-center">
@@ -891,128 +1001,234 @@ function Payments() {
                   </td>
                 </tr>
               ) : (
-                payments.map((payment) => {
-                  const customer = getCustomerName(payment);
-                  const StatusIcon = getStatusIcon(payment.status);
-                  const ModeIcon = getModeIcon(payment.paymentMode);
-                  const isSelected = selectedId === payment._id;
+                paginatedOrders.map((group) => {
+                  const orderId = group.order._id;
+                  const isExpanded = expandedOrders.has(orderId);
+                  const customerName =
+                    group.order.contact?.company ||
+                    group.order.contact?.name ||
+                    group.order.customerName ||
+                    "Unknown Customer";
+                  const customerPhone =
+                    group.order.contact?.phone ||
+                    group.order.customerPhone ||
+                    "—";
+                  const StatusIcon = getStatusIcon(group.status);
 
                   return (
-                    <tr
-                      key={payment._id}
-                      onClick={() => {
-                        setSelectedId(payment._id);
-                        openViewModal(payment);
-                      }}
-                      className={`group cursor-pointer border-b border-slate-100 transition-colors last:border-b-0 ${
-                        isSelected ? "bg-slate-50" : "hover:bg-slate-50/70"
-                      }`}
-                    >
-                      <td className="px-4 py-3.5">
-                        <span className="font-mono text-xs font-semibold text-[#0f172a]">
-                          {payment.paymentNumber}
-                        </span>
-                      </td>
-
-                      <td className="px-4 py-3.5">
-                        <span className="text-xs font-semibold text-slate-700">
-                          {getOrderNumber(payment)}
-                        </span>
-                      </td>
-
-                      <td className="px-4 py-3.5">
-                        <div className="flex items-center gap-2.5">
-                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-slate-100 text-[11px] font-bold text-slate-600">
-                            {customer.charAt(0).toUpperCase()}
+                    <Fragment key={orderId}>
+                      {/* PARENT ROW (ORDER) */}
+                      <tr
+                        className={`group cursor-pointer border-b border-slate-100 transition-colors last:border-b-0 ${
+                          isExpanded ? "bg-slate-50" : "hover:bg-slate-50/70"
+                        }`}
+                        onClick={() => toggleExpand(orderId)}
+                      >
+                        <td className="px-4 py-3.5">
+                          <div className="flex items-center gap-3">
+                            <button className="flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-slate-200 hover:text-slate-700">
+                              {isExpanded ? (
+                                <ChevronDown size={16} />
+                              ) : (
+                                <ChevronRight size={16} />
+                              )}
+                            </button>
+                            <div>
+                              <p className="font-mono text-xs font-semibold text-[#0f172a]">
+                                {group.order.orderNumber || "—"}
+                              </p>
+                              <p className="mt-0.5 text-[10px] text-slate-400">
+                                {group.payments.length} payments
+                              </p>
+                            </div>
                           </div>
-                          <span className="max-w-[180px] truncate text-xs font-medium text-slate-700">
-                            {customer}
+                        </td>
+
+                        <td className="px-4 py-3.5">
+                          <div className="flex items-center gap-2.5">
+                            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-slate-200 text-[11px] font-bold text-slate-600">
+                              {customerName.charAt(0).toUpperCase()}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="max-w-[180px] truncate text-xs font-medium text-slate-700">
+                                {customerName}
+                              </p>
+                              {customerPhone !== "—" && (
+                                <p className="mt-0.5 max-w-[180px] truncate text-[10px] text-slate-400">
+                                  {customerPhone}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+
+                        <td className="px-4 py-3.5 text-right">
+                          <span className="text-sm font-semibold text-slate-900 tabular-nums">
+                            {formatCurrency(group.totalAmount)}
                           </span>
-                        </div>
-                      </td>
+                        </td>
 
-                      <td className="px-4 py-3.5 text-right">
-                        <span
-                          className={`text-sm font-semibold tabular-nums ${
-                            payment.status === "Completed"
-                              ? "text-emerald-700"
-                              : payment.status === "Pending"
-                              ? "text-amber-700"
-                              : "text-slate-700"
-                          }`}
-                        >
-                          {formatCurrency(payment.amount)}
-                        </span>
-                      </td>
-
-                      <td className="px-4 py-3.5">
-                        <span className="text-xs text-slate-500">
-                          {formatDate(payment.paymentDate)}
-                        </span>
-                      </td>
-
-                      <td className="px-4 py-3.5">
-                        <div className="flex items-center gap-1.5">
-                          <ModeIcon size={12} className="text-slate-400" />
-                          <span className="text-xs font-medium text-slate-700">
-                            {payment.paymentMode}
+                        <td className="px-4 py-3.5 text-right">
+                          <span className="text-sm font-semibold text-emerald-600 tabular-nums">
+                            {formatCurrency(group.completedAmount)}
                           </span>
-                        </div>
-                        <div className="mt-0.5 max-w-[150px] truncate font-mono text-[10px] text-slate-400">
-                          {getPaymentReference(payment)}
-                        </div>
-                      </td>
+                        </td>
 
-                      <td className="px-4 py-3.5">
-                        <span
-                          className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] font-semibold ${getStatusClasses(
+                        <td className="px-4 py-3.5 text-right">
+                          <span className="text-sm font-semibold text-amber-600 tabular-nums">
+                            {group.pendingAmount > 0
+                              ? formatCurrency(group.pendingAmount)
+                              : "—"}
+                          </span>
+                        </td>
+
+                        <td className="px-4 py-3.5">
+                          <span className="text-xs text-slate-500">
+                            {formatDate(group.latestDate)}
+                          </span>
+                        </td>
+
+                        <td className="px-4 py-3.5">
+                          <span
+                            className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] font-semibold ${getStatusClasses(
+                              group.status
+                            )}`}
+                          >
+                            <StatusIcon size={11} />
+                            {group.status}
+                          </span>
+                        </td>
+
+                        <td className="px-4 py-3.5">
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openAddModalForOrder(orderId);
+                              }}
+                              title="Add payment to this order"
+                            >
+                              <Plus size={14} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+
+                      {/* CHILD ROWS (PAYMENTS) */}
+                      {isExpanded &&
+                        group.payments.map((payment) => {
+                          const PaymentStatusIcon = getStatusIcon(
                             payment.status
-                          )}`}
-                        >
-                          <StatusIcon size={11} />
-                          {payment.status}
-                        </span>
-                      </td>
+                          );
+                          const ModeIcon = getModeIcon(payment.paymentMode);
 
-                      <td className="px-4 py-3.5">
-                        <div className="flex items-center justify-end gap-1">
-                          <button
-                            className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openViewModal(payment);
-                            }}
-                            title="View payment"
-                          >
-                            <Eye size={14} />
-                          </button>
-                          <button
-                            className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openEditModal(payment);
-                            }}
-                            title="Edit payment"
-                          >
-                            <Pencil size={14} />
-                          </button>
-                          <button
-                            className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-red-50 hover:text-red-600"
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDelete(payment);
-                            }}
-                            title="Delete payment"
-                            disabled={saving}
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
+                          return (
+                            <tr
+                              key={payment._id}
+                              className="border-b border-slate-100 bg-slate-50/50 transition-colors last:border-b-0"
+                            >
+                              <td className="px-4 py-3 pl-14">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono text-[11px] font-semibold text-slate-500">
+                                    {payment.paymentNumber}
+                                  </span>
+                                  <div className="flex items-center gap-1 text-[10px] text-slate-400">
+                                    <ModeIcon size={10} />
+                                    <span>{payment.paymentMode}</span>
+                                  </div>
+                                  {getPaymentReference(payment) !== "—" && (
+                                    <span className="max-w-[100px] truncate font-mono text-[10px] text-slate-400">
+                                      {getPaymentReference(payment)}
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+
+                              <td className="px-4 py-3"></td>
+
+                              <td className="px-4 py-3 text-right">
+                                <span className="text-xs font-semibold text-slate-700 tabular-nums">
+                                  {formatCurrency(payment.amount)}
+                                </span>
+                              </td>
+
+                              <td className="px-4 py-3 text-right">
+                                <span className="text-xs font-semibold text-emerald-600 tabular-nums">
+                                  {payment.status === "Completed"
+                                    ? formatCurrency(payment.amount)
+                                    : "—"}
+                                </span>
+                              </td>
+
+                              <td className="px-4 py-3 text-right">
+                                <span className="text-xs font-semibold text-amber-600 tabular-nums">
+                                  {payment.status === "Pending"
+                                    ? formatCurrency(payment.amount)
+                                    : "—"}
+                                </span>
+                              </td>
+
+                              <td className="px-4 py-3">
+                                <span className="text-[11px] text-slate-500">
+                                  {formatDate(payment.paymentDate)}
+                                </span>
+                              </td>
+
+                              <td className="px-4 py-3">
+                                <span
+                                  className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-semibold ${getStatusClasses(
+                                    payment.status
+                                  )}`}
+                                >
+                                  <PaymentStatusIcon size={9} />
+                                  {payment.status}
+                                </span>
+                              </td>
+
+                              <td className="px-4 py-3">
+                                <div className="flex items-center justify-end gap-1">
+                                  <button
+                                    className="flex h-6 w-6 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700"
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openViewModal(payment);
+                                    }}
+                                    title="View payment"
+                                  >
+                                    <Eye size={13} />
+                                  </button>
+                                  <button
+                                    className="flex h-6 w-6 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700"
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openEditModal(payment);
+                                    }}
+                                    title="Edit payment"
+                                  >
+                                    <Pencil size={13} />
+                                  </button>
+                                  <button
+                                    className="flex h-6 w-6 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleDelete(payment);
+                                    }}
+                                    title="Delete payment"
+                                    disabled={saving}
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </Fragment>
                   );
                 })
               )}
@@ -1025,14 +1241,14 @@ function Payments() {
           <span className="text-[11px] text-slate-500">
             Showing{" "}
             <span className="font-semibold text-slate-700">
-              {total === 0 ? 0 : (page - 1) * PAYMENTS_PER_PAGE + 1}
+              {totalOrders === 0 ? 0 : (page - 1) * ORDERS_PER_PAGE + 1}
             </span>{" "}
             to{" "}
             <span className="font-semibold text-slate-700">
-              {Math.min(page * PAYMENTS_PER_PAGE, total)}
+              {Math.min(page * ORDERS_PER_PAGE, totalOrders)}
             </span>{" "}
-            of <span className="font-semibold text-slate-700">{total}</span>{" "}
-            payment records
+            of <span className="font-semibold text-slate-700">{totalOrders}</span>{" "}
+            orders
           </span>
 
           <div className="flex items-center gap-1">
@@ -1045,7 +1261,7 @@ function Payments() {
               Previous
             </button>
 
-            {Array.from({ length: pages }, (_, i) => i + 1).map(
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map(
               (pageNumber) => (
                 <button
                   key={pageNumber}
@@ -1064,7 +1280,7 @@ function Payments() {
 
             <button
               type="button"
-              disabled={page >= pages}
+              disabled={page >= totalPages}
               onClick={() => goToPage(page + 1)}
               className="h-8 rounded-md border border-slate-200 bg-white px-3 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
             >
@@ -1086,7 +1302,7 @@ function Payments() {
         </div>
         <span className="text-[11px] leading-5 text-slate-500">
           Completed payments are automatically applied to the linked order
-          balance. Pending, Failed, Bounced, and Cancelled payments are recorded
+          balance. Pending, and Cancelled payments are recorded
           for audit purposes but do not affect the order's amount paid.
         </span>
       </div>
@@ -1412,6 +1628,16 @@ function Payments() {
                     value={
                       viewPayment.order?.contact?.company ||
                       viewPayment.order?.contact?.name ||
+                      viewPayment.order?.customerName ||
+                      "—"
+                    }
+                  />
+
+                  <DetailItem
+                    label="Phone"
+                    value={
+                      viewPayment.order?.contact?.phone ||
+                      viewPayment.order?.customerPhone ||
                       "—"
                     }
                   />
@@ -1537,10 +1763,7 @@ function Payments() {
                   </div>
                 ) : splitPayments.length === 0 ? (
                   <div className="rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-6 text-center">
-                    <History
-                      size={20}
-                      className="mx-auto text-slate-300"
-                    />
+                    <History size={20} className="mx-auto text-slate-300" />
                     <p className="mt-2 text-xs font-medium text-slate-500">
                       No other payments on this order
                     </p>

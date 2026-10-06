@@ -15,9 +15,11 @@ import {
   ChevronRight,
   Landmark,
   ReceiptText,
+  Menu,
+  X,
 } from "lucide-react";
-import { NavLink } from "react-router-dom";
-import { useState } from "react";
+import { NavLink, useLocation } from "react-router-dom";
+import { useEffect, useState } from "react";
 import logo from "../assets/cswlogo.png";
 
 const mainItems = [
@@ -25,19 +27,16 @@ const mainItems = [
   { name: "Enquiries", path: "/enquiries", icon: Inbox },
   { name: "Contacts", path: "/contacts", icon: Users },
   { name: "Follow-ups", path: "/follow-ups", icon: CalendarCheck },
-  // { name: "Reports", path: "/reports", icon: BarChart3 },
 ];
 
 const businessItems = [
   { name: "Products", path: "/products", icon: Package },
-  // { name: "Inventory", path: "/inventory", icon: Warehouse },
   { name: "Raw Materials", path: "/rawmats", icon: Warehouse },
   { name: "Orders", path: "/orders", icon: ShoppingCart },
 ];
 
 const financeItems = [
   { name: "Payments", path: "/payments", icon: CreditCard },
-  // { name: "Revenue", path: "/revenue", icon: TrendingUp },
   { name: "Accounting", path: "/accounting", icon: Landmark },
   { name: "Expenses", path: "/expenses", icon: ReceiptText },
 ];
@@ -52,6 +51,7 @@ function SidebarSection({
   isOpen,
   onToggle,
   collapsed,
+  onItemClick,
 }) {
   return (
     <div className="px-2">
@@ -62,7 +62,6 @@ function SidebarSection({
           className="flex w-full items-center justify-between px-3 py-2 text-[10px] font-semibold tracking-[0.08em] text-slate-400 transition-colors hover:text-slate-200"
         >
           <span>{label}</span>
-
           <ChevronDown
             size={14}
             strokeWidth={1.75}
@@ -75,20 +74,18 @@ function SidebarSection({
 
       <div
         className={`overflow-hidden transition-all duration-200 ${
-          collapsed || isOpen
-            ? "max-h-[500px] opacity-100"
-            : "max-h-0 opacity-0"
+          collapsed || isOpen ? "max-h-[500px] opacity-100" : "max-h-0 opacity-0"
         }`}
       >
         <div className="space-y-0.5">
           {items.map((item) => {
             const Icon = item.icon;
-
             return (
               <NavLink
                 key={item.path}
                 to={item.path}
                 title={collapsed ? item.name : undefined}
+                onClick={onItemClick}
                 className={({ isActive }) =>
                   [
                     "group flex h-10 items-center rounded-md",
@@ -112,10 +109,7 @@ function SidebarSection({
                           : "shrink-0 text-slate-400 group-hover:text-slate-200"
                       }
                     />
-
-                    {!collapsed && (
-                      <span className="truncate">{item.name}</span>
-                    )}
+                    {!collapsed && <span className="truncate">{item.name}</span>}
                   </>
                 )}
               </NavLink>
@@ -129,6 +123,8 @@ function SidebarSection({
 
 function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(false);
 
   const [openSections, setOpenSections] = useState({
     main: true,
@@ -137,125 +133,192 @@ function Sidebar() {
     system: true,
   });
 
+  const location = useLocation();
+
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const update = () => setIsDesktop(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+
+  const effectiveCollapsed = isDesktop && collapsed;
+
   const toggleSection = (section) => {
-    setOpenSections((prev) => ({
-      ...prev,
-      [section]: !prev[section],
-    }));
+    setOpenSections((prev) => ({ ...prev, [section]: !prev[section] }));
   };
 
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [mobileOpen]);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") setMobileOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mobileOpen]);
+
+  useEffect(() => {
+    if (isDesktop) setMobileOpen(false);
+  }, [isDesktop]);
+
   return (
-    <aside
-      className={`sticky top-0 flex h-screen shrink-0 flex-col border-r border-slate-800 bg-[#0f172a] text-white transition-[width] duration-200 ${
-        collapsed ? "w-[68px]" : "w-[250px]"
-      }`}
-    >
-      {/* Logo Header */}
-      {/* Logo Header */}
-<div
-  className={`flex h-16 shrink-0 items-center border-b border-white/10 ${
-    collapsed ? "justify-center px-2" : "gap-3 px-4"
-  }`}
->
-  <div
-    className={`flex shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white shadow-md ring-1 ring-white/20 ${
-      collapsed ? "h-10 w-10" : "h-12 w-12"
-    }`}
-  >
-    <img
-      src={logo}
-      alt="CSW Logo"
-      className="h-full w-full object-contain p-1"
-    />
-  </div>
-
-  {!collapsed && (
-    <div className="flex min-w-0 flex-col">
-      <span className="text-[15px] font-bold tracking-tight text-white leading-none">
-        CSW
-      </span>
-      {/* <span className="mt-0.5 text-[10px] font-semibold tracking-[0.12em] text-slate-400 uppercase">
-        ERP
-      </span> */}
-    </div>
-  )}
-</div>
-      <nav className="flex-1 overflow-y-auto py-3">
-        <div className="space-y-2">
-          <SidebarSection
-            label="MAIN"
-            items={mainItems}
-            isOpen={openSections.main}
-            onToggle={() => toggleSection("main")}
-            collapsed={collapsed}
-          />
-
-          <SidebarSection
-            label="BUSINESS"
-            items={businessItems}
-            isOpen={openSections.business}
-            onToggle={() => toggleSection("business")}
-            collapsed={collapsed}
-          />
-
-          <SidebarSection
-            label="FINANCE"
-            items={financeItems}
-            isOpen={openSections.finance}
-            onToggle={() => toggleSection("finance")}
-            collapsed={collapsed}
-          />
-
-          <SidebarSection
-            label="SYSTEM"
-            items={systemItems}
-            isOpen={openSections.system}
-            onToggle={() => toggleSection("system")}
-            collapsed={collapsed}
-          />
-        </div>
-      </nav>
-
-      <div
-        className={`shrink-0 border-t border-white/10 p-2 ${
-          collapsed ? "space-y-2" : ""
-        }`}
+    <>
+      {/* Mobile hamburger */}
+      <button
+        type="button"
+        onClick={() => setMobileOpen(true)}
+        aria-label="Open navigation"
+        className="fixed left-3 top-3 z-40 flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-md transition-colors hover:bg-slate-50 active:bg-slate-100 lg:hidden"
       >
+        <Menu size={18} />
+      </button>
+
+      {/* Mobile backdrop */}
+      <div
+        onClick={() => setMobileOpen(false)}
+        aria-hidden="true"
+        className={`fixed inset-0 z-40 bg-slate-950/60 backdrop-blur-sm transition-opacity duration-200 lg:hidden ${
+          mobileOpen ? "opacity-100" : "pointer-events-none opacity-0"
+        }`}
+      />
+
+      {/* Sidebar */}
+      <aside
+        className={[
+          "fixed inset-y-0 left-0 z-50 flex h-screen shrink-0 flex-col",
+          "border-r border-slate-800 bg-[#0f172a] text-white",
+          "transition-[width,transform] duration-200 ease-out",
+          "lg:sticky lg:top-0 lg:translate-x-0 lg:shadow-none",
+          mobileOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full",
+          "w-[250px]",
+          collapsed ? "lg:w-[68px]" : "lg:w-[250px]",
+        ].join(" ")}
+      >
+        {/* Logo header */}
         <div
-          className={`flex items-center rounded-md ${
-            collapsed ? "justify-center px-0 py-2" : "gap-3 px-2 py-2"
+          className={`flex h-16 shrink-0 items-center border-b border-white/10 ${
+            effectiveCollapsed ? "justify-center px-2" : "gap-3 px-4"
           }`}
         >
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-xs font-semibold text-white">
-            A
+          <div
+            className={`flex shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white shadow-md ring-1 ring-white/20 ${
+              effectiveCollapsed ? "h-10 w-10" : "h-12 w-12"
+            }`}
+          >
+            <img
+              src={logo}
+              alt="CSW Logo"
+              className="h-full w-full object-contain p-1"
+            />
           </div>
 
-          {!collapsed && (
-            <div className="min-w-0">
-              <strong className="block truncate text-xs font-semibold text-white">
-                Admin
-              </strong>
-              <span className="block truncate text-[10px] text-slate-400">
-                Administrator
+          {!effectiveCollapsed && (
+            <div className="flex min-w-0 flex-col">
+              <span className="text-[15px] font-bold leading-none tracking-tight text-white">
+                CSW
               </span>
             </div>
           )}
+
+          <button
+            type="button"
+            onClick={() => setMobileOpen(false)}
+            aria-label="Close navigation"
+            className="ml-auto flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-white lg:hidden"
+          >
+            <X size={16} />
+          </button>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setCollapsed((prev) => !prev)}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className="mt-1 flex h-9 w-full items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-white"
+        {/* Nav */}
+        <nav className="flex-1 overflow-y-auto py-3">
+          <div className="space-y-2">
+            <SidebarSection
+              label="MAIN"
+              items={mainItems}
+              isOpen={openSections.main}
+              onToggle={() => toggleSection("main")}
+              collapsed={effectiveCollapsed}
+              onItemClick={() => setMobileOpen(false)}
+            />
+            <SidebarSection
+              label="BUSINESS"
+              items={businessItems}
+              isOpen={openSections.business}
+              onToggle={() => toggleSection("business")}
+              collapsed={effectiveCollapsed}
+              onItemClick={() => setMobileOpen(false)}
+            />
+            <SidebarSection
+              label="FINANCE"
+              items={financeItems}
+              isOpen={openSections.finance}
+              onToggle={() => toggleSection("finance")}
+              collapsed={effectiveCollapsed}
+              onItemClick={() => setMobileOpen(false)}
+            />
+            <SidebarSection
+              label="SYSTEM"
+              items={systemItems}
+              isOpen={openSections.system}
+              onToggle={() => toggleSection("system")}
+              collapsed={effectiveCollapsed}
+              onItemClick={() => setMobileOpen(false)}
+            />
+          </div>
+        </nav>
+
+        {/* Footer */}
+        <div
+          className={`shrink-0 border-t border-white/10 p-2 ${
+            effectiveCollapsed ? "space-y-2" : ""
+          }`}
         >
-          {collapsed ? (
-            <ChevronRight size={16} />
-          ) : (
-            <ChevronLeft size={16} />
-          )}
-        </button>
-      </div>
-    </aside>
+          <div
+            className={`flex items-center rounded-md ${
+              effectiveCollapsed ? "justify-center px-0 py-2" : "gap-3 px-2 py-2"
+            }`}
+          >
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-xs font-semibold text-white">
+              A
+            </div>
+            {!effectiveCollapsed && (
+              <div className="min-w-0">
+                <strong className="block truncate text-xs font-semibold text-white">
+                  Admin
+                </strong>
+                <span className="block truncate text-[10px] text-slate-400">
+                  Administrator
+                </span>
+              </div>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setCollapsed((prev) => !prev)}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className="mt-1 hidden h-9 w-full items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-white lg:flex"
+          >
+            {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+          </button>
+        </div>
+      </aside>
+    </>
   );
 }
 

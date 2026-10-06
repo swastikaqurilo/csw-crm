@@ -26,6 +26,22 @@ const VALID_STATUSES = [
 
 const VALID_PAYMENT_STATUSES = ["Pending", "Partial", "Paid", "Overdue"];
 
+const { getGlobalSettings } = require("../utils/getSettings");
+
+const CONTACT_FIELDS =
+  "name company role phone email address billingAddress shippingAddress " +
+  "gstin state stateCode shippingName shippingCompany shippingGstin " +
+  "shippingState shippingStateCode";
+
+const round2 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+
+const normalizePhone = (v) => {
+  let d = String(v || "").replace(/\D/g, "");
+  if (d.length > 10 && d.startsWith("91")) d = d.slice(2);
+  if (d.length > 10 && d.startsWith("0")) d = d.slice(1);
+  return d.slice(0, 10);
+};
+
 /* ---------- helpers ---------- */
 const isValidId = (v) => mongoose.isValidObjectId(v);
 
@@ -69,24 +85,33 @@ const handleError = (res, error, fallbackMessage) => {
   return res.status(500).json({ success: false, message: fallbackMessage });
 };
 
-/* ======================================================
-   NUMBER GENERATORS
-====================================================== */
 const generateOrderNumber = async (session = null) => {
   const year = new Date().getFullYear();
   const seq = await getNextSequence(`order-${year}`, session);
-  return `ORD-${year}-${String(seq).padStart(4, "0")}`;
+
+  let prefix = "ORD";
+  try {
+    const settings = await getGlobalSettings();
+    if (settings?.numbering?.orderPrefix) prefix = settings.numbering.orderPrefix;
+  } catch (_) { /* fallback */ }
+
+  return `${prefix}-${year}-${String(seq).padStart(4, "0")}`;
 };
 
 const generateInvoiceNumber = async (session = null) => {
   const year = new Date().getFullYear();
   const seq = await getNextSequence(`invoice-${year}`, session);
-  return `INV-${year}-${String(seq).padStart(4, "0")}`;
+
+  let prefix = "INV";
+  try {
+    const settings = await getGlobalSettings();
+    if (settings?.invoice?.prefix) prefix = settings.invoice.prefix;
+  } catch (_) {
+  }
+
+  return `${prefix}-${year}-${String(seq).padStart(4, "0")}`;
 };
 
-/* ======================================================
-   AMOUNT IN WORDS
-====================================================== */
 const numberToWords = (number) => {
   const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
     "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
@@ -123,35 +148,9 @@ const amountInWords = (amount) => {
   return `Rupees ${numberToWords(rounded)} Only`;
 };
 
-/* ======================================================
-   STOCK MOVEMENT — ProductStock (reel sizes)
-
-   Flow:
-     Draft → Confirmed     : deduct stock (with reserved gate)
-     * → Dispatched        : no stock change (already deducted)
-     * → Cancelled         : if Deducted, restore quantity
-
-   `reservedQty` is a manual admin field set from the
-   Products page. It is never touched by order creation.
-   When Confirmed exceeds free qty, the API returns a 409
-   RESERVED_CONFLICT. Retry with allowReserved:true to
-   consume the reserved portion and reduce reservedQty.
-
-   Atomic pipeline updates preserve qty + movementLog
-   integrity in one op. On partial failure, already-applied
-   items are rolled back.
-====================================================== */
-
 const resolveStockId = (item) =>
   item.productStock?._id || item.productStock || null;
 
-/**
- * Deduct order stock when an order is confirmed.
- * If free qty is insufficient but total qty is enough,
- * throws a 409 RESERVED_CONFLICT unless allowReserved is true.
- * On allowReserved, reduces reservedQty by the overlap.
- * Rolls back applied items on failure.
- */
 const deductOrderStock = async (order, user, allowReserved = false) => {
   const completed = []; // { stockId, qty, usedFromReserved }
 
@@ -468,7 +467,7 @@ const getAllOrders = async (req, res) => {
 
     const [orders, total] = await Promise.all([
       Order.find(query)
-        .populate("contact", "name company phone email address gstin state stateCode")
+        .populate("contact", CONTACT_FIELDS)
         .populate("enquiry", "enquiryNumber customerName company subject")
         .sort({ orderDate: -1, createdAt: -1 })
         .skip(skip)
@@ -500,7 +499,7 @@ const getOrderById = async (req, res) => {
     }
 
     const order = await Order.findById(req.params.id)
-      .populate("contact", "name company role phone email address gstin state stateCode")
+      .populate("contact", CONTACT_FIELDS)
       .populate("enquiry", "enquiryNumber customerName company phone email project location timeline");
 
     if (!order || !order.isActive) {
@@ -525,14 +524,41 @@ const createOrder = async (req, res) => {
       allowReserved = false,
     } = req.body;
 
-    if (!contact || !isValidId(contact)) {
-      return res.status(400).json({ success: false, message: "Valid contact ID is required" });
-    }
-    const contactDoc = await Contact.findById(contact);
-    if (!contactDoc) {
-      return res.status(404).json({ success: false, message: "Contact not found" });
+    /* ---------- resolve customer ---------- */
+    let contactDoc = null;
+    let finalContactId = null;
+
+    if (contact && isValidId(contact)) {
+      // Existing customer
+      contactDoc = await Contact.findById(contact);
+      if (!contactDoc) {
+        return res.status(404).json({ success: false, message: "Contact not found" });
+      }
+      finalContactId = contactDoc._id;
+    } else if (customerName && customerPhone) {
+      // New customer — auto-create a Contact from name + phone
+      try {
+        contactDoc = await Contact.create({
+          name: String(customerName).trim().slice(0, 150),
+          phone: normalizePhone(customerPhone),
+          company: "",
+          email: "",
+        });
+        finalContactId = contactDoc._id;
+      } catch (err) {
+        return res.status(400).json({
+          success: false,
+          message: err.message || "Failed to create new customer",
+        });
+      }
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: "Either select a customer or provide a new customer's name and phone.",
+      });
     }
 
+    /* ---------- validation ---------- */
     let cleanEnquiry = null;
     if (enquiry) {
       if (!isValidId(enquiry)) {
@@ -568,13 +594,17 @@ const createOrder = async (req, res) => {
     const taxAmount = (taxableAmount * numericTaxPercent) / 100;
     const grandTotal = taxableAmount + taxAmount;
 
+    /* ---------- build order payload ---------- */
     const orderPayload = {
       enquiry: cleanEnquiry,
-      contact,
+      contact: finalContactId,
       customerName:
         safeString(customerName, 150) ||
-        (contactDoc.company ? `${contactDoc.company} — ${contactDoc.name}` : contactDoc.name),
-      customerPhone: safeString(customerPhone, 30) || contactDoc.phone || "",
+        (contactDoc.company
+          ? `${contactDoc.company} — ${contactDoc.name}`
+          : contactDoc.name),
+      customerPhone:
+        normalizePhone(customerPhone) || contactDoc.phone || "",
       items: processedItems,
       subTotal,
       discount: orderDiscount,
@@ -590,6 +620,7 @@ const createOrder = async (req, res) => {
       createdBy: req.user?._id || null,
     };
 
+    /* ---------- create ---------- */
     let order = null;
     for (let attempt = 0; attempt < 3 && !order; attempt++) {
       try {
@@ -602,7 +633,6 @@ const createOrder = async (req, res) => {
     }
 
     // If created directly as Confirmed, deduct stock immediately
-    // (with reserved-conflict gate).
     if (order.status === "Confirmed") {
       try {
         await deductOrderStock(order, req.user, !!allowReserved);
@@ -610,7 +640,6 @@ const createOrder = async (req, res) => {
         order.stockDeductedAt = new Date();
         await order.save();
       } catch (err) {
-        // Order was created but deduction failed — fall back to Draft.
         order.status = "Draft";
         order.stockStatus = "Pending";
         await order.save();
@@ -621,7 +650,7 @@ const createOrder = async (req, res) => {
             code: "RESERVED_CONFLICT",
             message: err.message,
             data: err.data,
-            order, // Draft, so the client can retry
+            order,
           });
         }
 
@@ -634,7 +663,7 @@ const createOrder = async (req, res) => {
     }
 
     const populated = await Order.findById(order._id)
-      .populate("contact", "name company role phone email address gstin state stateCode")
+      .populate("contact", CONTACT_FIELDS)
       .populate("enquiry", "enquiryNumber customerName company subject");
 
     return res.status(201).json({
@@ -732,7 +761,7 @@ const updateOrder = async (req, res) => {
     await order.save();
 
     const populated = await Order.findById(order._id)
-      .populate("contact", "name company role phone email address gstin state stateCode")
+      .populate("contact", CONTACT_FIELDS)
       .populate("enquiry", "enquiryNumber customerName company subject");
 
     return res.status(200).json({
@@ -777,7 +806,7 @@ const updateOrderStatus = async (req, res) => {
 
     if (fromStatus === status) {
       const populated = await Order.findById(order._id)
-        .populate("contact", "name company role phone email address gstin state stateCode")
+        .populate("contact", CONTACT_FIELDS)
         .populate("enquiry", "enquiryNumber customerName company subject");
       return res.status(200).json({
         success: true,
@@ -837,7 +866,7 @@ const updateOrderStatus = async (req, res) => {
     await order.save();
 
     const populated = await Order.findById(order._id)
-      .populate("contact", "name company role phone email address gstin state stateCode")
+      .populate("contact", CONTACT_FIELDS)
       .populate("enquiry", "enquiryNumber customerName company subject");
 
     return res.status(200).json({
@@ -890,7 +919,7 @@ const updatePayment = async (req, res) => {
     await order.save();
 
     const populated = await Order.findById(order._id)
-      .populate("contact", "name company role phone email address gstin state stateCode");
+      .populate("contact", CONTACT_FIELDS);
 
     return res.status(200).json({ success: true, message: "Payment updated", data: populated });
   } catch (error) {
@@ -936,17 +965,13 @@ const deleteOrder = async (req, res) => {
   }
 };
 
-/* ======================================================
-   GENERATE INVOICE
-====================================================== */
 const generateInvoice = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
       return res.status(400).json({ success: false, message: "Invalid order ID" });
     }
 
-    const order = await Order.findById(req.params.id)
-      .populate("contact", "name company phone email address gstin state stateCode");
+    const order = await Order.findById(req.params.id).populate("contact", CONTACT_FIELDS);
 
     if (!order || !order.isActive) {
       return res.status(404).json({ success: false, message: "Order not found" });
@@ -976,35 +1001,64 @@ const generateInvoice = async (req, res) => {
       return res.status(400).json({ success: false, message: "Cannot generate invoice because customer information is missing" });
     }
 
-    const subTotal = Number(order.subTotal || 0);
-    const discount = Number(order.discount || 0);
-    const taxableAmount = Math.max(0, subTotal - discount);
-    const taxPercent = Number(order.taxPercent || 0);
-
-    const taxType = "IGST";
-    const igstPercent = taxPercent;
-    const igstAmount = (taxableAmount * igstPercent) / 100;
-    const cgstPercent = 0, cgstAmount = 0;
-    const sgstPercent = 0, sgstAmount = 0;
-    const totalTax = igstAmount + cgstAmount + sgstAmount;
-    const grandTotal = taxableAmount + totalTax;
-
-    const invoiceItems = order.items.map((item) => ({
-      product: item.productStock || item.product,   // keep ref for history
-      description: item.productName || `Reel ${item.size}`,
-      hsnSac: "",
-      quantity: Number(item.quantity || 0),
-      rate: Number(item.rate || 0),
-      unit: item.unit || "Reel",
-      amount: Number(item.amount || 0),
-    }));
-
     const contact = order.contact;
 
+    /* ---------- 🔽 LOAD SETTINGS 🔽 ---------- */
+    const settings = await getGlobalSettings();
+    if (!settings?.seller?.name || !settings?.seller?.gstin) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Seller details are not configured. Please fill in Business Profile in Settings before generating an invoice.",
+      });
+    }
+
+    const sellerCfg = settings.seller || {};
+    const bankCfg = settings.bank || {};
+    const invCfg = settings.invoice || {};
+
+    // Build a single-line seller address for the invoice header
+    const sellerAddressLine = [
+      sellerCfg.address,
+      sellerCfg.addressLine2,
+      sellerCfg.city,
+      sellerCfg.state,
+      sellerCfg.pincode,
+    ]
+      .filter(Boolean)
+      .join(", ");
+
+    const sellerSnapshot = {
+      name: sellerCfg.name,
+      address: sellerAddressLine,
+      gstin: sellerCfg.gstin,
+      state: sellerCfg.state,
+      stateCode: sellerCfg.stateCode,
+      pan: sellerCfg.pan || "",
+      phone: sellerCfg.phone || "",
+      email: sellerCfg.email || "",
+      cin: sellerCfg.cin || "",
+      msme: sellerCfg.msme || "",
+      logoUrl: sellerCfg.logoUrl || "",
+      signatureUrl: sellerCfg.signatureUrl || "",
+    };
+
+    const bankSnapshot = {
+      accountName: bankCfg.accountName || "",
+      accountNumber: bankCfg.accountNumber || "",
+      bankName: bankCfg.bankName || "",
+      ifsc: bankCfg.ifsc || "",
+      branch: bankCfg.branch || "",
+      upiId: bankCfg.upiId || "",
+    };
+
+    const defaultHsn = invCfg.defaultHsn || "7217";
+
+    /* ---------- buyer (bill to) ---------- */
     const buyer = {
       name: contact.name || "",
       company: contact.company || "",
-      address: order.billingAddress || contact.address || "",
+      address: order.billingAddress || contact.billingAddress || contact.address || "",
       gstin: contact.gstin || "",
       state: contact.state || "",
       stateCode: contact.stateCode || "",
@@ -1012,14 +1066,55 @@ const generateInvoice = async (req, res) => {
       email: contact.email || "",
     };
 
+    /* ---------- consignee (ship to) — falls back to buyer ---------- */
     const consignee = {
-      name: contact.name || "",
-      company: contact.company || "",
-      address: order.shippingAddress || contact.address || "",
-      gstin: contact.gstin || "",
-      state: contact.state || "",
-      stateCode: contact.stateCode || "",
+      name: contact.shippingName || contact.name || "",
+      company: contact.shippingCompany || contact.company || "",
+      address: order.shippingAddress || contact.shippingAddress || contact.address || "",
+      gstin: contact.shippingGstin || contact.gstin || "",
+      state: contact.shippingState || contact.state || "",
+      stateCode: contact.shippingStateCode || contact.stateCode || "",
     };
+
+    /* ---------- amounts ---------- */
+    const subTotal = Number(order.subTotal || 0);
+    const discount = Number(order.discount || 0);
+    const taxableAmount = Math.max(0, subTotal - discount);
+    const taxPercent = Number(order.taxPercent || invCfg.defaultGstRate || 0);
+
+    /* ---------- tax type ----------
+       Reads seller stateCode from Settings now (was hardcoded env). */
+    const sellerCode = String(sellerCfg.stateCode || "").trim();
+    const supplyCode = String(consignee.stateCode || buyer.stateCode || "").trim();
+    const intraState = Boolean(sellerCode && supplyCode && sellerCode === supplyCode);
+    const taxType = intraState ? "CGST_SGST" : "IGST";
+
+    const igstPercent = intraState ? 0 : taxPercent;
+    const igstAmount = intraState ? 0 : round2((taxableAmount * taxPercent) / 100);
+
+    const cgstPercent = intraState ? taxPercent / 2 : 0;
+    const cgstAmount = intraState ? round2((taxableAmount * cgstPercent) / 100) : 0;
+    const sgstPercent = cgstPercent;
+    const sgstAmount = cgstAmount;
+
+    const totalTax = round2(igstAmount + cgstAmount + sgstAmount);
+
+    /* ---------- round-off (from Settings) ---------- */
+    const rawGrandTotal = round2(taxableAmount + totalTax);
+    const roundOff = invCfg.roundOffEnabled
+      ? round2(Math.round(rawGrandTotal) - rawGrandTotal)
+      : 0;
+    const grandTotal = round2(rawGrandTotal + roundOff);
+
+    const invoiceItems = order.items.map((item) => ({
+      product: item.productStock || item.product,
+      description: item.productName || `Reel ${item.size}`,
+      hsnSac: item.hsnSac || defaultHsn,   // per-item HSN falls back to Settings
+      quantity: Number(item.quantity || 0),
+      rate: Number(item.rate || 0),
+      unit: item.unit || "Reel",
+      amount: Number(item.amount || 0),
+    }));
 
     let invoice = null;
     for (let attempt = 0; attempt < 3 && !invoice; attempt++) {
@@ -1029,13 +1124,21 @@ const generateInvoice = async (req, res) => {
           invoiceNumber,
           order: order._id,
           invoiceDate: new Date(),
-          seller: { name: "", address: "", gstin: "", state: "", stateCode: "" },
+          dueDate: invCfg.defaultDueDays
+            ? new Date(Date.now() + invCfg.defaultDueDays * 86400000)
+            : null,
+
+          seller: sellerSnapshot,   // 🔽 was { ...SELLER }
+          bank: bankSnapshot,       // 🔽 new field — add to Invoice model
           buyer,
           consignee,
+
           items: invoiceItems,
+
           subTotal,
           discount,
           taxableAmount,
+
           taxType,
           taxPercent,
           igstPercent,
@@ -1045,9 +1148,16 @@ const generateInvoice = async (req, res) => {
           sgstPercent,
           sgstAmount,
           totalTax,
+
+          roundOff,                 // 🔽 new
           grandTotal,
           amountInWords: amountInWords(grandTotal),
           taxAmountInWords: amountInWords(totalTax),
+
+          termsAndConditions: invCfg.termsAndConditions || "",
+          declaration: invCfg.declaration || "",
+          footerNote: invCfg.footerNote || "",
+
           reference: order.orderNumber,
         });
       } catch (err) {
@@ -1079,7 +1189,7 @@ const generateInvoice = async (req, res) => {
       }
       return res.status(409).json({
         success: false,
-        message: "Invoice number collision. Resync the counter (db.counters, _id: invoice-YYYY) and try again.",
+        message: "Invoice number collision. Resync the counter and try again.",
       });
     }
 

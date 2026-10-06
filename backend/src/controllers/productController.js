@@ -51,16 +51,28 @@ const parseNum = (v, field, max = MAX_QTY) => {
   return n;
 };
 
-/* ============================================================
-   RAW MATERIAL HELPERS
-============================================================ */
 const findSteelStock = () =>
   RawStock.findOne({ category: "Steel", isActive: true }).sort({ createdAt: 1 });
 
-const findReelStock = (size) =>
-  RawStock.findOne({ category: "Reel", name: `Reel ${size}`, isActive: true });
+const findTapeStock = () =>
+  RawStock.findOne({ category: "Tape", isActive: true }).sort({ createdAt: 1 });
 
-const verifyStockAvailable = async ({ steelNeeded, reelsBySize }, allowReserved = false) => {
+const findReelStock = (size) => {
+  const kg = Number(String(size).replace("kg", ""));
+  if (!Number.isFinite(kg) || kg <= 0) return null;
+
+  return RawStock.findOne({
+    category: "Reel",
+    isActive: true,
+    name: { $regex: new RegExp(`(^|\\D)${kg}\\s*kg(\\D|$)`, "i") },
+  });
+};
+
+const verifyStockAvailable = async (
+  { steelNeeded, reelsBySize, tapeNeeded = 0 },
+  allowReserved = false
+) => {
+  /* ---------- STEEL ---------- */
   if (steelNeeded > 0) {
     const steel = await findSteelStock();
     if (!steel) {
@@ -92,7 +104,9 @@ const verifyStockAvailable = async ({ steelNeeded, reelsBySize }, allowReserved 
     }
   }
 
+  /* ---------- REELS ---------- */
   for (const [size, qty] of Object.entries(reelsBySize)) {
+    if (!qty || qty <= 0) continue;
     const reel = await findReelStock(size);
     if (!reel) {
       throw { status: 400, message: `No ${size} Reel raw material found. Add it under Raw Materials first.` };
@@ -123,11 +137,50 @@ const verifyStockAvailable = async ({ steelNeeded, reelsBySize }, allowReserved 
       };
     }
   }
+
+  /* ---------- TAPE (NEW) ---------- */
+  if (tapeNeeded > 0) {
+    const tape = await findTapeStock();
+    if (!tape) {
+      throw { status: 400, message: "No Tape raw material configured. Add one under Raw Materials first." };
+    }
+    const tapeFree = Math.max(Number(tape.quantity || 0) - Number(tape.reservedQty || 0), 0);
+    if (tape.quantity < tapeNeeded) {
+      throw {
+        status: 400,
+        message: `Not enough ${tape.name}. Need ${tapeNeeded} ${tape.unit}, have ${tape.quantity} ${tape.unit}.`,
+      };
+    }
+    if (!allowReserved && tapeNeeded > tapeFree) {
+      throw {
+        status: 409,
+        code: "RESERVED_CONFLICT",
+        message: `This production uses ${tapeNeeded - tapeFree} ${tape.unit} from reserved ${tape.name}.`,
+        data: {
+          material: "tape",
+          name: tape.name,
+          unit: tape.unit,
+          totalQty: tape.quantity,
+          reservedQty: tape.reservedQty || 0,
+          freeQty: tapeFree,
+          requested: tapeNeeded,
+          usedFromReserved: tapeNeeded - tapeFree,
+        },
+      };
+    }
+  }
 };
 
-const deductRawMaterials = async ({ steelNeeded, reelsBySize, productionId, userId }) => {
-  const consumed = { steel: null, reels: [], deductedAt: new Date() };
+const deductRawMaterials = async ({
+  steelNeeded,
+  reelsBySize,
+  tapeNeeded = 0,
+  productionId,
+  userId,
+}) => {
+  const consumed = { steel: null, reels: [], tape: null, deductedAt: new Date() };
 
+  /* ---------- STEEL ---------- */
   if (steelNeeded > 0) {
     const steel = await findSteelStock();
     const before = steel.quantity;
@@ -146,9 +199,10 @@ const deductRawMaterials = async ({ steelNeeded, reelsBySize, productionId, user
       unitAtTime: steel.unit,
       beforeQty: before,
       afterQty: steel.quantity,
-      reason: usedFromReserved > 0
-        ? `Production consumption (used ${usedFromReserved} from reserved)`
-        : "Production consumption",
+      reason:
+        usedFromReserved > 0
+          ? `Production consumption (used ${usedFromReserved} from reserved)`
+          : "Production consumption",
       refType: "Production",
       refId: productionId,
       refLabel: "Daily production",
@@ -166,7 +220,9 @@ const deductRawMaterials = async ({ steelNeeded, reelsBySize, productionId, user
     };
   }
 
+  /* ---------- REELS ---------- */
   for (const [size, qty] of Object.entries(reelsBySize)) {
+    if (!qty || qty <= 0) continue;
     const reel = await findReelStock(size);
     if (!reel) throw { status: 500, message: `Reel ${size} not found during deduction.` };
 
@@ -186,9 +242,10 @@ const deductRawMaterials = async ({ steelNeeded, reelsBySize, productionId, user
       unitAtTime: reel.unit,
       beforeQty: before,
       afterQty: reel.quantity,
-      reason: usedFromReserved > 0
-        ? `Production consumption (${size} reel, used ${usedFromReserved} from reserved)`
-        : `Production consumption (${size} reel)`,
+      reason:
+        usedFromReserved > 0
+          ? `Production consumption (${size} reel, used ${usedFromReserved} from reserved)`
+          : `Production consumption (${size} reel)`,
       refType: "Production",
       refId: productionId,
       refLabel: "Daily production",
@@ -206,6 +263,48 @@ const deductRawMaterials = async ({ steelNeeded, reelsBySize, productionId, user
       reservedUsed: usedFromReserved,
       unit: reel.unit,
     });
+  }
+
+  /* ---------- TAPE (NEW) ---------- */
+  if (tapeNeeded > 0) {
+    const tape = await findTapeStock();
+    if (!tape) throw { status: 500, message: "Tape not found during deduction." };
+
+    const before = tape.quantity;
+    const reservedBefore = Number(tape.reservedQty || 0);
+    const freeBefore = Math.max(before - reservedBefore, 0);
+    const usedFromReserved = Math.max(tapeNeeded - freeBefore, 0);
+
+    tape.quantity = before - tapeNeeded;
+    if (usedFromReserved > 0) {
+      tape.reservedQty = Math.max(reservedBefore - usedFromReserved, 0);
+    }
+    tape.lastIssuedAt = new Date();
+    tape.movementLog.push({
+      type: "out",
+      quantity: tapeNeeded,
+      unitAtTime: tape.unit,
+      beforeQty: before,
+      afterQty: tape.quantity,
+      reason:
+        usedFromReserved > 0
+          ? `Production consumption (used ${usedFromReserved} from reserved)`
+          : "Production consumption (tape)",
+      refType: "Production",
+      refId: productionId,
+      refLabel: "Daily production",
+      by: userId || null,
+    });
+    tape.updatedBy = userId || null;
+    await tape.save();
+
+    consumed.tape = {
+      rawStock: tape._id,
+      name: tape.name,
+      quantity: tapeNeeded,
+      reservedUsed: usedFromReserved,
+      unit: tape.unit,
+    };
   }
 
   return consumed;
@@ -239,6 +338,34 @@ const refundRawMaterials = async ({ consumed, productionId, userId }) => {
       steel.updatedBy = userId || null;
       await steel.save();
     }
+      /* ---------- TAPE (NEW) ---------- */
+  if (consumed.tape?.rawStock && consumed.tape.quantity > 0) {
+    const tape = await RawStock.findById(consumed.tape.rawStock);
+    if (tape) {
+      const before = tape.quantity;
+      tape.quantity = before + consumed.tape.quantity;
+      if (consumed.tape.reservedUsed > 0) {
+        tape.reservedQty = Number(tape.reservedQty || 0) + consumed.tape.reservedUsed;
+      }
+      tape.movementLog.push({
+        type: "in",
+        quantity: consumed.tape.quantity,
+        unitAtTime: tape.unit,
+        beforeQty: before,
+        afterQty: tape.quantity,
+        reason:
+          consumed.tape.reservedUsed > 0
+            ? `Production entry reversed (restored ${consumed.tape.reservedUsed} to reserved)`
+            : "Production entry reversed (tape)",
+        refType: "Production",
+        refId: productionId,
+        refLabel: "Production reversal",
+        by: userId || null,
+      });
+      tape.updatedBy = userId || null;
+      await tape.save();
+    }
+  }
   }
 
   for (const r of consumed.reels || []) {
@@ -573,7 +700,7 @@ const recordProductScrap = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid ID" });
     }
 
-    const scrapKg = Number(req.body.quantity);   // ✅ input is kg
+    const scrapKg = Number(req.body.quantity);
     if (!Number.isFinite(scrapKg) || scrapKg <= 0 || scrapKg > MAX_QTY) {
       return res.status(400).json({ success: false, message: "Scrap (kg) must be > 0" });
     }
@@ -583,7 +710,6 @@ const recordProductScrap = async (req, res) => {
       return res.status(404).json({ success: false, message: "Not found" });
     }
 
-    // Reel weight per size
     const REEL_WEIGHT_KG = { "2kg": 2, "5kg": 5, "8kg": 8, "10kg": 10 };
     const reelWeight = REEL_WEIGHT_KG[doc.size];
     if (!reelWeight) {
@@ -601,7 +727,7 @@ const recordProductScrap = async (req, res) => {
     }
 
     doc.quantity = before - reelsToScrap;
-    doc.scrapQty = Number(doc.scrapQty || 0) + scrapKg;   // ✅ track in kg
+    doc.scrapQty = Number(doc.scrapQty || 0) + scrapKg;
     doc.lastScrapAt = new Date();
 
     pushProductMovement(doc, {
@@ -730,8 +856,8 @@ const createProduction = async (req, res) => {
         rate5kg: parseNum(rate5kg, "5kg rate", MAX_RATE),
         rate8kg: parseNum(rate8kg, "8kg rate", MAX_RATE),
         rate10kg: parseNum(rate10kg, "10kg rate", MAX_RATE),
-        tapeUsedBox: parseNum(tapeUsedBox, "tape used (boxes)"),  
-        scrapKg: parseNum(scrapKg, "scrap (kg)"), 
+        tapeUsedBox: parseNum(tapeUsedBox, "tape used (boxes)"),
+        scrapKg: parseNum(scrapKg, "scrap (kg)"),
         notes: safeString(notes, 1000) || undefined,
         createdBy: req.user?._id || null,
       };
@@ -743,6 +869,15 @@ const createProduction = async (req, res) => {
     consumption.steelNeeded = Math.round(
       (consumption.steelNeeded + Number(payload.scrapKg || 0)) * 1000
     ) / 1000;
+
+    // ✅ Strip any size with qty <= 0
+    consumption.reelsBySize = Object.fromEntries(
+      Object.entries(consumption.reelsBySize || {}).filter(
+        ([, q]) => Number(q) > 0
+      )
+    );
+
+    consumption.tapeNeeded = Number(payload.tapeUsedBox || 0);
 
     await verifyStockAvailable(consumption, allowReserved);
 
@@ -823,6 +958,15 @@ const updateProduction = async (req, res) => {
       (newConsumption.steelNeeded + Number(entry.scrapKg || 0)) * 1000
     ) / 1000;
 
+    // ✅ Strip zero sizes too
+    newConsumption.reelsBySize = Object.fromEntries(
+      Object.entries(newConsumption.reelsBySize || {}).filter(
+        ([, q]) => Number(q) > 0
+      )
+    );
+
+    newConsumption.tapeNeeded = Number(entry.tapeUsedBox || 0);
+
     await refundRawMaterials({ consumed: oldConsumed, productionId: entry._id, userId: req.user?._id });
 
     await revertProductionFromStock({
@@ -859,6 +1003,7 @@ const updateProduction = async (req, res) => {
         await deductRawMaterials({
           steelNeeded: oldConsumed.steel?.quantity || 0,
           reelsBySize,
+          tapeNeeded: oldConsumed.tape?.quantity || 0, 
           productionId: entry._id,
           userId: req.user?._id,
         });
@@ -934,6 +1079,7 @@ const previewConsumption = async (req, res) => {
     const steel = consumption.steelNeeded > 0 ? await findSteelStock() : null;
     const reels = [];
     for (const [size, qty] of Object.entries(consumption.reelsBySize)) {
+      if (!qty || qty <= 0) continue;   // ✅ skip before lookup
       const reel = await findReelStock(size);
       reels.push({
         size,
@@ -963,15 +1109,24 @@ const previewConsumption = async (req, res) => {
   }
 };
 
+const debugReels = async (req, res) => {
+  try {
+    const allReels = await RawStock.find({}).select(
+      "category name sizeKg unit quantity isActive"
+    );
+    return res.status(200).json({ success: true, count: allReels.length, data: allReels });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
-  // Product Stock
   getAllProductStock,
   updateProductReserved,
   adjustProductStock,
   recordProductScrap,
   getProductStockMovements,
 
-  // Production Entries
   getAllProductions,
   getProductionById,
   createProduction,
@@ -979,4 +1134,5 @@ module.exports = {
   deleteProduction,
   getRecentRates,
   previewConsumption,
+  debugReels,
 };

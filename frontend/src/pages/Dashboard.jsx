@@ -1,21 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useId } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  Search, RefreshCw, ChevronDown, Command,
+  RefreshCw,
   Wallet, Package, TrendingUp, ShieldCheck,
   ArrowRight, AlertTriangle, Clock, Truck, IndianRupee,
   PauseCircle, CheckCircle2, ArrowDownToLine, ArrowUpFromLine,
-  TrendingDown, Circle, FileText, Inbox,
+  TrendingDown, Circle, Inbox,
 } from "lucide-react";
 import {
-  getEnquiries, getOrders, getPayments, getInventorySummary,
-  getLowStock, getCriticalStock, getDeadStock, getQuotations,
+  getEnquiries, getOrders, getPayments, getRawStock, getProductStock,
   getFollowups, getAccountingDashboard,
 } from "../api/api";
-
-/* ══════════════════════════════════════════════════════════════════
-   HELPERS
-   ══════════════════════════════════════════════════════════════════ */
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
@@ -65,35 +60,106 @@ const ENQUIRY_OPEN = ["new", "contacted", "in progress", "in discussion", "quote
 const ENQUIRY_CLOSED = ["converted", "lost"];
 
 /* ══════════════════════════════════════════════════════════════════
-   SPARKLINE — monochrome navy, subtle
+   STOCK NORMALIZATION
+   Merges raw-material + product rows into a single shape with
+   severity precomputed.
    ══════════════════════════════════════════════════════════════════ */
 
-function Sparkline({ values = [], w = 80, h = 20 }) {
-  const data = values.length > 1 ? values : [1, 1, 1, 1, 1, 1, 1, 1];
+function normalizeStockItem(item, source) {
+  const qty = num(item.quantity);
+  const freeQty = num(item.freeQty);
+  const reservedQty = num(item.reservedQty);
+  const reorder = num(item.reorderLevel);
+  const critical = num(item.criticalLevel);
+
+  // Prefer server-computed flags if present, otherwise derive
+  let severity = "ok";
+  if (source === "raw") {
+    if (item.isCritical === true || (critical > 0 && qty <= critical)) severity = "critical";
+    else if (item.isLowStock === true || (reorder > 0 && qty <= reorder)) severity = "low";
+  } else {
+    // product — has no server flags in the sample; derive
+    if (critical > 0 && qty <= critical) severity = "critical";
+    else if (reorder > 0 && qty <= reorder) severity = "low";
+  }
+  if (qty === 0 && (reorder > 0 || critical > 0)) severity = "out";
+
+  const name =
+    item.displayName ||
+    item.name ||
+    item.materialName ||
+    item.product?.name ||
+    "—";
+
+  const unit = item.unit || (source === "raw" ? "Piece" : "Reel");
+
+  return {
+    _id: item._id || item.id,
+    source,
+    inventoryType: source === "raw" ? "Raw Material" : "Product",
+    name,
+    rawName: item.name || "",
+    category: item.category || "",
+    sizeKg: item.sizeKg || null,
+    size: item.size || "",
+    unit,
+    warehouse: item.warehouse || "Main",
+    quantity: qty,
+    freeQty,
+    reservedQty,
+    reorderLevel: reorder,
+    criticalLevel: critical,
+    severity,
+    shortfall: Math.max(reorder - qty, 0),
+    updatedAt: item.updatedAt || item.createdAt || null,
+  };
+}
+
+function Sparkline({ values = [], h = 36 }) {
+  const uid = useId();
+  const gid = `spark-${uid.replace(/:/g, "")}`;
+  const data = values.length > 1 ? values : [0, 1, 0.5, 1.5, 1, 2, 1.5, 2];
+  const w = 200;
   const min = Math.min(...data);
   const max = Math.max(...data);
   const range = max - min || 1;
   const step = w / (data.length - 1);
   const pts = data.map((v, i) => [
     i * step,
-    h - ((v - min) / range) * (h - 4) - 2,
+    h - ((v - min) / range) * (h - 6) - 3,
   ]);
   const d = pts
     .map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`)
     .join(" ");
+  const areaPath = `${d} L${w},${h} L0,${h} Z`;
+
   return (
-    <svg width={w} height={h} className="overflow-visible">
-      <path d={`${d} L${w},${h} L0,${h} Z`} fill="#0f172a" fillOpacity="0.05" />
+    <svg
+      viewBox={`0 0 ${w} ${h}`}
+      preserveAspectRatio="none"
+      className="w-full"
+      style={{ height: h }}
+      aria-hidden="true"
+    >
+      <defs>
+        <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#0f172a" stopOpacity="0.18" />
+          <stop offset="100%" stopColor="#0f172a" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path d={areaPath} fill={`url(#${gid})`} />
       <path
         d={d}
         fill="none"
         stroke="#0f172a"
-        strokeWidth="1.5"
+        strokeWidth="1.6"
         strokeLinecap="round"
+        strokeLinejoin="round"
+        vectorEffect="non-scaling-stroke"
       />
     </svg>
   );
-}
+} 
 
 /* ══════════════════════════════════════════════════════════════════
    HOOK
@@ -101,9 +167,13 @@ function Sparkline({ values = [], w = 80, h = 20 }) {
 
 function useDashboardData({ autoRefreshMs = 0 } = {}) {
   const [data, setData] = useState({
-    accounting: null, inventorySummary: null,
-    lowStock: [], criticalStock: [], deadStock: [],
-    orders: [], quotations: [], enquiries: [], payments: [], followups: [],
+    accounting: null,
+    rawStock: [],
+    productStock: [],
+    orders: [],
+    enquiries: [],
+    payments: [],
+    followups: [],
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -113,12 +183,9 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
       setError("");
       const r = await Promise.allSettled([
         getAccountingDashboard({}),
-        getInventorySummary(),
-        getLowStock(),
-        getCriticalStock(),
-        getDeadStock({ days: 30 }),
+        getRawStock(),
+        getProductStock(),
         getOrders({ limit: 50, sort: "-createdAt" }),
-        getQuotations({ limit: 50, sort: "-createdAt" }),
         getEnquiries({ limit: 200, sort: "-createdAt" }),
         getPayments({ limit: 100, sort: "-createdAt" }),
         getFollowups({ limit: 100 }),
@@ -126,15 +193,12 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
       const v = (x) => (x.status === "fulfilled" ? x.value : null);
       setData({
         accounting: safeObj(v(r[0])),
-        inventorySummary: safeObj(v(r[1])),
-        lowStock: safeArr(v(r[2])),
-        criticalStock: safeArr(v(r[3])),
-        deadStock: safeArr(v(r[4])),
-        orders: safeArr(v(r[5])),
-        quotations: safeArr(v(r[6])),
-        enquiries: safeArr(v(r[7])),
-        payments: safeArr(v(r[8])),
-        followups: safeArr(v(r[9])),
+        rawStock: safeArr(v(r[1])),
+        productStock: safeArr(v(r[2])),
+        orders: safeArr(v(r[3])),
+        enquiries: safeArr(v(r[4])),
+        payments: safeArr(v(r[5])),
+        followups: safeArr(v(r[6])),
       });
     } catch (err) {
       console.error("Dashboard fetch failed:", err);
@@ -152,6 +216,16 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
     }
   }, [fetchAll, autoRefreshMs]);
 
+  /* ── Normalized stock ────────────────────────────────────────── */
+  const stockItems = [
+    ...data.rawStock.map((i) => normalizeStockItem(i, "raw")),
+    ...data.productStock.map((i) => normalizeStockItem(i, "product")),
+  ];
+
+  const criticalStock = stockItems.filter((i) => i.severity === "critical" || i.severity === "out");
+  const lowStock = stockItems.filter((i) => i.severity === "low");
+
+  /* ── Cash ────────────────────────────────────────────────────── */
   const cash = (() => {
     const o = data.accounting?.overview || {};
     return {
@@ -162,6 +236,7 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
     };
   })();
 
+  /* ── Order book ──────────────────────────────────────────────── */
   const orderBook = (() => {
     const active = data.orders.filter((o) =>
       ORDER_ACTIVE.includes(String(o.status || "").toLowerCase())
@@ -172,6 +247,7 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
     };
   })();
 
+  /* ── Enquiry pipeline ────────────────────────────────────────── */
   const pipeline = (() => {
     const open = data.enquiries.filter((e) =>
       ENQUIRY_OPEN.includes(String(e.status || "").toLowerCase())
@@ -190,18 +266,24 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
     };
   })();
 
+  /* ── Stock health ────────────────────────────────────────────── */
   const stockHealth = (() => {
-    const s = data.inventorySummary || {};
-    const totalRecords = (s.rawMaterial?.count || 0) + (s.product?.count || 0);
-    const lowCount = s.alerts?.lowStockCount || data.lowStock.length;
-    const criticalCount = s.alerts?.criticalStockCount || data.criticalStock.length;
-    const healthy = Math.max(totalRecords - lowCount, 0);
+    const totalRecords = stockItems.length;
+    const criticalCount = criticalStock.length;
+    const lowCount = lowStock.length;
+    const healthy = Math.max(totalRecords - criticalCount - lowCount, 0);
     return {
-      totalRecords, lowCount, criticalCount,
-      pct: totalRecords > 0 ? Math.round((healthy / totalRecords) * 100) : 100,
+      totalRecords,
+      lowCount,
+      criticalCount,
+      pct:
+        totalRecords > 0
+          ? Math.round((healthy / totalRecords) * 100)
+          : 100,
     };
   })();
 
+  /* ── Revenue series ──────────────────────────────────────────── */
   const revenueSeries = (data.accounting?.profitLoss?.monthlyData || []).map((m) => ({
     label: m.month || m.label || "",
     revenue: num(m.revenue),
@@ -209,6 +291,7 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
     net: num(m.netProfit),
   }));
 
+  /* ── Alerts ──────────────────────────────────────────────────── */
   const delayedOrders = (() => {
     const now = Date.now();
     return data.orders.filter((o) => {
@@ -264,44 +347,67 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
   );
 
   return {
-    data, loading, error, refetch: fetchAll,
+    data,
+    loading,
+    error,
+    refetch: fetchAll,
     derived: {
-      cash, orderBook, pipeline, stockHealth, revenueSeries,
-      delayedOrders, unpaidOrders, stuckEnquiries,
-      overdueFollowups, todayFollowups, readyForDispatch,
+      cash,
+      orderBook,
+      pipeline,
+      stockHealth,
+      revenueSeries,
+      delayedOrders,
+      unpaidOrders,
+      stuckEnquiries,
+      overdueFollowups,
+      todayFollowups,
+      readyForDispatch,
+      stockItems,
+      criticalStock,
+      lowStock,
     },
   };
 }
 
-/* ══════════════════════════════════════════════════════════════════
-   ZONE 1 — CONTROL STRIP
-   ══════════════════════════════════════════════════════════════════ */
-
-function HeroMetric({ label, value, context, icon: Icon, tint, sparkValues, loading }) {
+function HeroMetric({
+  label,
+  value,
+  context,
+  icon: Icon,
+  tint,
+  loading,
+}) {
   return (
-    <div className="group rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-      <div className="mb-5 flex items-start justify-between">
-        <div className={`flex h-9 w-9 items-center justify-center rounded-lg border ${tint}`}>
-          <Icon size={17} />
+    <div className="group relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-lg hover:shadow-slate-200/60">
+      {/* soft accent on hover */}
+      <div className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-gradient-to-br from-slate-100 via-slate-50 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+
+      {/* header row — icon + label only */}
+      <div className="relative flex min-w-0 items-center gap-2.5">
+        <div
+          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${tint}`}
+        >
+          <Icon size={16} strokeWidth={2.2} />
         </div>
+        <span className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+          {label}
+        </span>
       </div>
-      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-black">
-        {label}
-      </p>
+
       {loading ? (
-        <div className="mt-2 space-y-2">
+        <div className="relative mt-5 space-y-2">
           <div className="shimmer h-7 w-32 rounded-md" />
           <div className="shimmer h-3 w-24 rounded-md" />
         </div>
       ) : (
         <>
-          <p className="mt-1.5 text-[26px] font-bold tracking-tight text-black">
+          <p className="relative mt-5 text-[28px] font-bold leading-none tracking-tight text-slate-900 tabular-nums">
             {value}
           </p>
-          <div className="mt-2 flex items-center justify-between gap-2">
-            <p className="truncate text-[11px] text-slate-500">{context}</p>
-            <Sparkline values={sparkValues} />
-          </div>
+          <p className="relative mt-2 truncate text-[11.5px] font-medium text-slate-500">
+            {context}
+          </p>
         </>
       )}
     </div>
@@ -378,17 +484,17 @@ function buildActionQueue(d) {
   const items = [];
 
   if (d.criticalStock.length > 0) {
-    const names = d.criticalStock
-      .slice(0, 2)
-      .map((c) => c.materialName || c.product?.name)
-      .filter(Boolean);
+    const names = d.criticalStock.slice(0, 2).map((c) => c.name).filter(Boolean);
     items.push({
-      id: "critical-stock", severity: "critical", icon: AlertTriangle,
-      title: `${d.criticalStock.length} material${d.criticalStock.length !== 1 ? "s" : ""} at critical stock`,
+      id: "critical-stock",
+      severity: "critical",
+      icon: AlertTriangle,
+      title: `${d.criticalStock.length} item${d.criticalStock.length !== 1 ? "s" : ""} at critical stock`,
       detail: names.length > 0
         ? `${names.join(", ")}${d.criticalStock.length > 2 ? ` +${d.criticalStock.length - 2} more` : ""}`
         : "Production may stop",
-      action: "Order now", route: "/inventory",
+      action: "Order now",
+      route: "/inventory",
     });
   }
 
@@ -398,10 +504,13 @@ function buildActionQueue(d) {
     const customer = first.contact?.company || first.contact?.name || "";
     const late = daysAgo(first.expectedDeliveryDate);
     items.push({
-      id: "delayed-orders", severity: "critical", icon: Truck,
+      id: "delayed-orders",
+      severity: "critical",
+      icon: Truck,
       title: `${d.delayedOrders.length} order${d.delayedOrders.length !== 1 ? "s" : ""} past delivery date`,
       detail: `${formatINR(value)} at risk · ${customer ? `${customer} ${late}d late` : "Reschedule"}`,
-      action: "Dispatch", route: "/orders",
+      action: "Dispatch",
+      route: "/orders",
     });
   }
 
@@ -409,34 +518,41 @@ function buildActionQueue(d) {
     const oldest = d.overdueFollowups[0];
     const late = daysAgo(oldest.scheduledAt);
     items.push({
-      id: "overdue-followups", severity: "critical", icon: Clock,
+      id: "overdue-followups",
+      severity: "critical",
+      icon: Clock,
       title: `${d.overdueFollowups.length} overdue follow-up${d.overdueFollowups.length !== 1 ? "s" : ""}`,
       detail: oldest.contact?.name ? `${oldest.contact.name} · ${late}d late` : `${late}d late`,
-      action: "Call", route: "/follow-ups",
+      action: "Call",
+      route: "/follow-ups",
     });
   }
 
   if (d.unpaidOrders.length > 0) {
     const due = d.unpaidOrders.reduce(
-      (s, o) => s + Math.max(num(o.grandTotal) - num(o.amountPaid), 0), 0
+      (s, o) => s + Math.max(num(o.grandTotal) - num(o.amountPaid), 0),
+      0
     );
     items.push({
-      id: "unpaid-orders", severity: "warning", icon: IndianRupee,
+      id: "unpaid-orders",
+      severity: "warning",
+      icon: IndianRupee,
       title: `${d.unpaidOrders.length} order${d.unpaidOrders.length !== 1 ? "s" : ""} with balance past delivery`,
       detail: `${formatINR(due)} receivable at risk`,
-      action: "Collect", route: "/payments",
+      action: "Collect",
+      route: "/payments",
     });
   }
 
-  const lowOnly = d.lowStock.filter(
-    (l) => !d.criticalStock.some((c) => c._id === l._id)
-  );
-  if (lowOnly.length > 0) {
+  if (d.lowStock.length > 0) {
     items.push({
-      id: "low-stock", severity: "warning", icon: AlertTriangle,
-      title: `${lowOnly.length} item${lowOnly.length !== 1 ? "s" : ""} below reorder`,
+      id: "low-stock",
+      severity: "warning",
+      icon: AlertTriangle,
+      title: `${d.lowStock.length} item${d.lowStock.length !== 1 ? "s" : ""} below reorder`,
       detail: "Purchase or reorder recommended",
-      action: "Review", route: "/inventory",
+      action: "Review",
+      route: "/inventory",
     });
   }
 
@@ -444,38 +560,38 @@ function buildActionQueue(d) {
     const oldest = d.stuckEnquiries[0];
     const stuck = daysAgo(oldest.updatedAt || oldest.createdAt);
     items.push({
-      id: "stuck-enquiries", severity: "warning", icon: PauseCircle,
+      id: "stuck-enquiries",
+      severity: "warning",
+      icon: PauseCircle,
       title: `${d.stuckEnquiries.length} enquir${d.stuckEnquiries.length !== 1 ? "ies" : "y"} stuck 7d+`,
       detail: `Oldest: ${oldest.customerName || "—"} (${stuck}d)`,
-      action: "Follow up", route: "/enquiries",
+      action: "Follow up",
+      route: "/enquiries",
     });
   }
 
   if (d.readyForDispatch.length > 0) {
     items.push({
-      id: "ready-to-dispatch", severity: "warning", icon: Package,
+      id: "ready-to-dispatch",
+      severity: "warning",
+      icon: Package,
       title: `${d.readyForDispatch.length} order${d.readyForDispatch.length !== 1 ? "s" : ""} ready for dispatch`,
       detail: "Awaiting pickup or invoice",
-      action: "Dispatch", route: "/orders",
+      action: "Dispatch",
+      route: "/orders",
     });
   }
 
   if (d.todayFollowups.length > 0) {
     const names = d.todayFollowups.slice(0, 2).map((f) => f.contact?.name).filter(Boolean);
     items.push({
-      id: "today-followups", severity: "neutral", icon: Clock,
+      id: "today-followups",
+      severity: "neutral",
+      icon: Clock,
       title: `${d.todayFollowups.length} follow-up${d.todayFollowups.length !== 1 ? "s" : ""} today`,
       detail: names.length > 0 ? names.join(", ") : "Open schedule",
-      action: "Open", route: "/follow-ups",
-    });
-  }
-
-  if (d.deadStock.length > 0) {
-    items.push({
-      id: "dead-stock", severity: "neutral", icon: Package,
-      title: `${d.deadStock.length} item${d.deadStock.length !== 1 ? "s" : ""} idle 30d+`,
-      detail: "Consider discounting or repurposing",
-      action: "Review", route: "/inventory",
+      action: "Open",
+      route: "/follow-ups",
     });
   }
 
@@ -596,25 +712,26 @@ function ActionQueue({ loading, ...d }) {
   );
 }
 
-/* ══════════════════════════════════════════════════════════════════
-   ZONE 3 — FINANCIAL SNAPSHOT
-   ══════════════════════════════════════════════════════════════════ */
-
 function StatTile({ label, value, sub, icon: Icon, tint }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <div className="flex items-start justify-between">
-        <div className={`flex h-9 w-9 items-center justify-center rounded-lg border ${tint}`}>
-          <Icon size={16} />
+    <div className="group relative overflow-hidden rounded-xl border border-slate-200 bg-white p-4 transition duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md hover:shadow-slate-200/50">
+      <div className="flex items-center justify-between">
+        <div
+          className={`flex h-9 w-9 items-center justify-center rounded-xl border ${tint}`}
+        >
+          <Icon size={15} strokeWidth={2.2} />
         </div>
       </div>
-      <p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.08em] text-black">
+
+      <p className="mt-3.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
         {label}
       </p>
-      <p className="mt-1.5 text-[20px] font-bold tracking-tight text-black">
+      <p className="mt-1.5 text-[21px] font-bold leading-none tracking-tight text-slate-900 tabular-nums">
         {value}
       </p>
-      <p className="mt-1 text-[11px] text-slate-500">{sub}</p>
+      <p className="mt-2 truncate text-[11px] font-medium text-slate-500">
+        {sub}
+      </p>
     </div>
   );
 }
@@ -657,16 +774,17 @@ function FinancialSnapshot({ loading, accounting }) {
       </div>
 
       {loading ? (
-        <div className="grid grid-cols-2 gap-3 p-4">
-          {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="rounded-xl border border-slate-200 bg-white p-4">
-              <div className="shimmer h-9 w-9 rounded-lg" />
-              <div className="shimmer mt-3 h-3 w-20 rounded" />
-              <div className="shimmer mt-2 h-5 w-24 rounded" />
-            </div>
-          ))}
-        </div>
-      ) : (
+          <div className="grid grid-cols-2 gap-3 p-4">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="rounded-xl border border-slate-200 bg-white p-4">
+                <div className="shimmer h-9 w-9 rounded-xl" />
+                <div className="shimmer mt-3.5 h-2.5 w-20 rounded" />
+                <div className="shimmer mt-2 h-5 w-24 rounded" />
+                <div className="shimmer mt-2 h-2.5 w-28 rounded" />
+              </div>
+            ))}
+          </div>
+        ) : (
         <>
           <div className="grid grid-cols-2 gap-3 p-4">
             <StatTile
@@ -742,49 +860,35 @@ function FinancialSnapshot({ loading, accounting }) {
    ZONE 4 — PIPELINE VELOCITY
    ══════════════════════════════════════════════════════════════════ */
 
-function PipelineVelocity({ loading, enquiries, quotations, orders }) {
-  const STAGES = ["Enquiry", "Quotation", "Order", "Delivered"];
+function PipelineVelocity({ loading, enquiries, orders }) {
+  const STAGES = ["Enquiry", "Order", "Delivered"];
+
   const enqCount = enquiries.length;
-  const quoteCount = quotations.length;
   const orderCount = orders.length;
   const delivered = orders.filter((o) =>
     ["delivered", "Delivered"].includes(o.status)
   ).length;
-  const counts = [enqCount, quoteCount, orderCount, delivered];
+
+  const counts = [enqCount, orderCount, delivered];
   const conv = [
     null,
-    enqCount > 0 ? Math.round((quoteCount / enqCount) * 100) : 0,
-    quoteCount > 0 ? Math.round((orderCount / quoteCount) * 100) : 0,
+    enqCount > 0 ? Math.round((orderCount / enqCount) * 100) : 0,
     orderCount > 0 ? Math.round((delivered / orderCount) * 100) : 0,
   ];
   const max = Math.max(...counts, 1);
 
-  const stuck = [
-    ...quotations
-      .filter(
-        (q) =>
-          ["sent", "Sent", "negotiating"].includes(q.status) &&
-          daysAgo(q.updatedAt || q.createdAt) >= 7
-      )
-      .map((q) => ({
-        id: q._id,
-        name: q.customer?.name || q.customerName || "Unknown",
-        stage: "Quotation",
-        days: daysAgo(q.updatedAt || q.createdAt),
-      })),
-    ...enquiries
-      .filter(
-        (e) =>
-          !["converted", "lost", "Converted", "Lost"].includes(e.status) &&
-          daysAgo(e.updatedAt || e.createdAt) >= 7
-      )
-      .map((e) => ({
-        id: e._id,
-        name: e.customerName || "Unknown",
-        stage: "Enquiry",
-        days: daysAgo(e.updatedAt || e.createdAt),
-      })),
-  ]
+  const stuck = enquiries
+    .filter(
+      (e) =>
+        !["converted", "lost", "Converted", "Lost"].includes(e.status) &&
+        daysAgo(e.updatedAt || e.createdAt) >= 7
+    )
+    .map((e) => ({
+      id: e._id,
+      name: e.customerName || "Unknown",
+      stage: "Enquiry",
+      days: daysAgo(e.updatedAt || e.createdAt),
+    }))
     .sort((a, b) => b.days - a.days)
     .slice(0, 4);
 
@@ -795,7 +899,7 @@ function PipelineVelocity({ loading, enquiries, quotations, orders }) {
           Pipeline Velocity
         </h2>
         <p className="mt-1 text-xs text-slate-500">
-          Enquiry → Quote → Order → Delivered
+          Enquiry → Order → Delivered
         </p>
       </div>
 
@@ -882,11 +986,10 @@ function PipelineVelocity({ loading, enquiries, quotations, orders }) {
 const TONE_TILE = {
   blue: "bg-blue-50 text-blue-600 border-blue-100",
   emerald: "bg-emerald-50 text-emerald-600 border-emerald-100",
-  indigo: "bg-indigo-50 text-indigo-600 border-indigo-100",
   amber: "bg-amber-50 text-amber-600 border-amber-100",
 };
 
-function buildFeed({ orders, payments, quotations, enquiries }) {
+function buildFeed({ orders, payments, enquiries }) {
   const feed = [];
   orders.slice(0, 8).forEach((o) => {
     feed.push({
@@ -906,14 +1009,6 @@ function buildFeed({ orders, payments, quotations, enquiries }) {
       at: p.updatedAt || p.createdAt,
     });
   });
-  quotations.slice(0, 6).forEach((q) => {
-    feed.push({
-      id: `q-${q._id}`, icon: FileText, tone: "indigo",
-      text: `Quotation · ${q.status || "draft"}`,
-      meta: `${q.customer?.name || q.customerName || "Customer"} · ${formatINR(q.amount || q.total)}`,
-      at: q.updatedAt || q.createdAt,
-    });
-  });
   (enquiries || []).slice(0, 8).forEach((e) => {
     feed.push({
       id: `e-${e._id}`, icon: Inbox, tone: "amber",
@@ -928,8 +1023,8 @@ function buildFeed({ orders, payments, quotations, enquiries }) {
     .slice(0, 12);
 }
 
-function ActivityStream({ loading, orders, payments, quotations, enquiries }) {
-  const feed = buildFeed({ orders, payments, quotations, enquiries });
+function ActivityStream({ loading, orders, payments, enquiries }) {
+  const feed = buildFeed({ orders, payments, enquiries });
 
   return (
     <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -997,15 +1092,8 @@ function ActivityStream({ loading, orders, payments, quotations, enquiries }) {
 
 /* ══════════════════════════════════════════════════════════════════
    ZONE 6 — LOW STOCK ALERT
+   Now merges raw-material + product rows into one table.
    ══════════════════════════════════════════════════════════════════ */
-
-function getSeverity(item) {
-  const q = num(item.quantity);
-  const c = num(item.criticalLevel);
-  if (q === 0) return "out";
-  if (c > 0 && q <= c) return "critical";
-  return "low";
-}
 
 const SEV_BADGE = {
   out: "bg-red-50 text-red-700 border-red-100",
@@ -1015,32 +1103,25 @@ const SEV_BADGE = {
 
 const SEV_LABEL = { out: "Out", critical: "Critical", low: "Low" };
 
-function LowStockPanel({ loading, lowStock, criticalStock }) {
+const SEV_ORDER = { out: 0, critical: 1, low: 2 };
+
+function LowStockPanel({ loading, stockItems }) {
   const [filter, setFilter] = useState("all");
 
-  const allItems = (() => {
-    const seen = new Set();
-    const merged = [];
-    [...criticalStock, ...lowStock].forEach((it) => {
-      if (!seen.has(it._id)) {
-        seen.add(it._id);
-        merged.push(it);
-      }
-    });
-    const order = { out: 0, critical: 1, low: 2 };
-    return merged.sort((a, b) => order[getSeverity(a)] - order[getSeverity(b)]);
-  })();
+  const alertItems = stockItems
+    .filter((i) => i.severity !== "ok")
+    .sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity]);
 
-  const filtered = allItems.filter((it) => {
+  const filtered = alertItems.filter((it) => {
     if (filter === "all") return true;
-    if (filter === "raw") return it.inventoryType === "Raw Material";
-    if (filter === "product") return it.inventoryType === "Product";
+    if (filter === "raw") return it.source === "raw";
+    if (filter === "product") return it.source === "product";
     return true;
   });
 
-  const rawCount = allItems.filter((i) => i.inventoryType === "Raw Material").length;
-  const prodCount = allItems.filter((i) => i.inventoryType === "Product").length;
-  const criticalCount = allItems.filter((i) => getSeverity(i) !== "low").length;
+  const rawCount = alertItems.filter((i) => i.source === "raw").length;
+  const prodCount = alertItems.filter((i) => i.source === "product").length;
+  const criticalCount = alertItems.filter((i) => i.severity !== "low").length;
 
   return (
     <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -1056,16 +1137,16 @@ function LowStockPanel({ loading, lowStock, criticalStock }) {
             <p className="mt-0.5 text-xs text-slate-500">
               {loading
                 ? "Scanning…"
-                : allItems.length === 0
+                : alertItems.length === 0
                 ? "All items above reorder level"
-                : `${allItems.length} item${allItems.length !== 1 ? "s" : ""} need${allItems.length === 1 ? "s" : ""} attention`}
+                : `${alertItems.length} item${alertItems.length !== 1 ? "s" : ""} need${alertItems.length === 1 ? "s" : ""} attention`}
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5">
           {[
-            ["all", `All · ${allItems.length}`],
+            ["all", `All · ${alertItems.length}`],
             ["raw", `Raw · ${rawCount}`],
             ["product", `Product · ${prodCount}`],
           ].map(([id, label]) => (
@@ -1137,76 +1218,69 @@ function LowStockPanel({ loading, lowStock, criticalStock }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.map((item) => {
-                const sev = getSeverity(item);
-                const qty = num(item.quantity);
-                const reorder = num(item.reorderLevel);
-                const shortfall = Math.max(reorder - qty, 0);
-                const unit = item.unit || "t";
-                const isRaw = item.inventoryType === "Raw Material";
-
-                return (
-                  <tr key={item._id} className="transition hover:bg-slate-50">
-                    <td className="px-5 py-3">
-                      <div className="flex items-center gap-2.5">
-                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600">
-                          <Package size={14} />
-                        </div>
-                        <div className="min-w-0">
-                          <p className="truncate text-xs font-semibold text-black">
-                            {item.materialName || item.product?.name || "—"}
-                          </p>
-                          {item.batchNumber && (
-                            <p className="mt-0.5 truncate text-[10px] text-slate-400">
-                              Batch {item.batchNumber}
-                            </p>
-                          )}
-                        </div>
+              {filtered.map((item) => (
+                <tr key={item._id} className="transition hover:bg-slate-50">
+                  <td className="px-5 py-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600">
+                        <Package size={14} />
                       </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">
-                        {isRaw ? "Raw" : "Product"}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-xs text-slate-600">
-                      {item.warehouse || "Main"}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <span className="text-xs font-semibold tabular-nums text-black">
-                        {qty.toFixed(2)}
-                      </span>
-                      <span className="ml-1 text-[10px] text-slate-400">
-                        {unit}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <span className="text-xs font-medium tabular-nums text-slate-600">
-                        {reorder.toFixed(2)}
-                      </span>
-                      <span className="ml-1 text-[10px] text-slate-400">
-                        {unit}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <span className="text-xs font-bold tabular-nums text-red-600">
-                        −{shortfall.toFixed(2)}
-                      </span>
-                      <span className="ml-1 text-[10px] text-slate-400">
-                        {unit}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span
-                        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold ${SEV_BADGE[sev]}`}
-                      >
-                        <span className="h-1.5 w-1.5 rounded-full bg-current" />
-                        {SEV_LABEL[sev]}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-semibold text-black">
+                          {item.name}
+                        </p>
+                        {(item.category || item.sizeKg) && (
+                          <p className="mt-0.5 truncate text-[10px] text-slate-400">
+                            {item.category || ""}
+                            {item.category && item.sizeKg ? " · " : ""}
+                            {item.sizeKg ? `${item.sizeKg} kg` : ""}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">
+                      {item.source === "raw" ? "Raw" : "Product"}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-xs text-slate-600">
+                    {item.warehouse}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <span className="text-xs font-semibold tabular-nums text-black">
+                      {item.quantity.toFixed(2)}
+                    </span>
+                    <span className="ml-1 text-[10px] text-slate-400">
+                      {item.unit}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <span className="text-xs font-medium tabular-nums text-slate-600">
+                      {item.reorderLevel.toFixed(2)}
+                    </span>
+                    <span className="ml-1 text-[10px] text-slate-400">
+                      {item.unit}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <span className="text-xs font-bold tabular-nums text-red-600">
+                      −{item.shortfall.toFixed(2)}
+                    </span>
+                    <span className="ml-1 text-[10px] text-slate-400">
+                      {item.unit}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span
+                      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold ${SEV_BADGE[item.severity]}`}
+                    >
+                      <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                      {SEV_LABEL[item.severity]}
+                    </span>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -1216,8 +1290,8 @@ function LowStockPanel({ loading, lowStock, criticalStock }) {
         <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50/50 px-5 py-2.5">
           <span className="text-[10px] text-slate-500">
             {criticalCount > 0
-              ? `${criticalCount} critical · ${allItems.length - criticalCount} low`
-              : `${allItems.length} low`}
+              ? `${criticalCount} critical · ${alertItems.length - criticalCount} low`
+              : `${alertItems.length} low`}
           </span>
           <button
             onClick={() => (window.location.href = "/inventory")}
@@ -1236,7 +1310,6 @@ function LowStockPanel({ loading, lowStock, criticalStock }) {
    ══════════════════════════════════════════════════════════════════ */
 
 export default function Dashboard() {
-  
   const { data, loading, error, refetch, derived } = useDashboardData({
     autoRefreshMs: 60_000,
   });
@@ -1270,33 +1343,6 @@ export default function Dashboard() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {/* <button
-            className="inline-flex h-10 items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-500 shadow-sm transition hover:border-slate-300"
-            onClick={() => {}}
-          >
-            <Search size={14} />
-            <span>Search…</span>
-            <kbd className="hidden rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[10px] text-slate-400 sm:inline-flex">
-              <Command size={9} className="mr-0.5" />K
-            </kbd>
-          </button> */}
-
-          {/* <div className="relative">
-            <select
-              value={viewMode}
-              onChange={(e) => setViewMode(e.target.value)}
-              className="h-10 appearance-none rounded-lg border border-slate-200 bg-white pl-3 pr-9 text-xs font-semibold text-black shadow-sm outline-none transition hover:border-slate-300"
-            >
-              <option value="Owner">View: Owner</option>
-              <option value="Sales">View: Sales</option>
-              <option value="Operations">View: Operations</option>
-            </select>
-            <ChevronDown
-              size={13}
-              className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"
-            />
-          </div> */}
-
           <button
             onClick={refetch}
             className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900"
@@ -1329,9 +1375,8 @@ export default function Dashboard() {
       <div className="mb-6 grid grid-cols-1 gap-5 xl:grid-cols-[1fr_1.65fr]">
         <ActionQueue
           loading={loading}
-          lowStock={data.lowStock}
-          criticalStock={data.criticalStock}
-          deadStock={data.deadStock}
+          criticalStock={derived.criticalStock}
+          lowStock={derived.lowStock}
           delayedOrders={derived.delayedOrders}
           unpaidOrders={derived.unpaidOrders}
           stuckEnquiries={derived.stuckEnquiries}
@@ -1342,20 +1387,13 @@ export default function Dashboard() {
         <FinancialSnapshot loading={loading} accounting={data.accounting} />
       </div>
 
-            {/* ZONE 6 — LOW STOCK ALERT */}
       <div className="mb-6">
-        <LowStockPanel
-          loading={loading}
-          lowStock={data.lowStock}
-          criticalStock={data.criticalStock}
-        />
+        <LowStockPanel loading={loading} stockItems={derived.stockItems} />
       </div>
 
-      {/* ZONES 4 + 5 */}
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+]      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
         <PipelineVelocity
           loading={loading}
-          quotations={data.quotations}
           enquiries={data.enquiries}
           orders={data.orders}
         />
@@ -1363,7 +1401,6 @@ export default function Dashboard() {
           loading={loading}
           orders={data.orders}
           payments={data.payments}
-          quotations={data.quotations}
           enquiries={data.enquiries}
         />
       </div>
