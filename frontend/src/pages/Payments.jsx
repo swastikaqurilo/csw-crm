@@ -164,17 +164,18 @@ function getModeIcon(mode) {
   }
 }
 
+/* ---------- DESIGN TOKENS (unchanged class strings, refined) ---------- */
 const inputClass =
-  "h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-[#0f172a] focus:ring-2 focus:ring-slate-900/10 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400";
+  "h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800 shadow-[0_1px_2px_rgba(15,23,42,0.03)] outline-none transition-all placeholder:text-slate-400 hover:border-slate-300 focus:border-[#0f172a] focus:ring-4 focus:ring-slate-900/5 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400";
 
 const labelClass =
-  "mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.04em] text-slate-600";
+  "mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500";
 
 const secondaryButtonClass =
-  "inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50";
 
 const primaryButtonClass =
-  "inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-[#0f172a] px-4 text-sm font-medium text-white shadow-sm transition-all hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-[#0f172a] px-4 text-sm font-medium text-white shadow-[0_1px_2px_rgba(15,23,42,0.15),inset_0_1px_0_rgba(255,255,255,0.08)] transition-all hover:bg-slate-800 hover:shadow-[0_4px_10px_rgba(15,23,42,0.15)] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50";
 
 function Payments() {
   const [payments, setPayments] = useState([]);
@@ -747,17 +748,18 @@ function Payments() {
   }, [splitOrder]);
 
   return (
-    <div className="w-full space-y-5 pb-6">
+    <div className="w-full space-y-5 pb-8">
       {/* ============ HEADER ============ */}
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
-          <div className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
+          {/* <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
             Treasury & Settlements · Ledger Gateway
-          </div>
-          <h1 className="text-[26px] font-semibold tracking-tight text-slate-900">
+          </div> */}
+          <h1 className="text-[28px] font-semibold leading-tight tracking-tight text-slate-900">
             Payments & Settlements
           </h1>
-          <p className="mt-1.5 max-w-2xl text-sm leading-6 text-slate-500">
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
             Track customer receivables, banking reconciliations, and real-time
             receivables across commercial contracts.
           </p>
@@ -796,9 +798,9 @@ function Payments() {
 
       {/* ============ ERROR ============ */}
       {error && (
-        <div className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          <div className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-red-500" />
-          <span>{error}</span>
+        <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50/80 px-4 py-3 text-sm text-red-700 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+          <div className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-red-500 ring-4 ring-red-500/15" />
+          <span className="leading-5">{error}</span>
         </div>
       )}
 
@@ -850,7 +852,7 @@ function Payments() {
       </div>
 
       {/* ============ FILTER BAR ============ */}
-      <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-[0_1px_2px_rgba(15,23,42,0.03)] lg:flex-row lg:items-center">
+      <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_1px_2px_rgba(15,23,42,0.03),0_1px_3px_rgba(15,23,42,0.02)] lg:flex-row lg:items-center">
         <div className="relative min-w-0 flex-1">
           <Search
             size={15}
@@ -862,78 +864,74 @@ function Payments() {
               setSearch(e.target.value);
             }}
             placeholder="Search by payment ID, transaction ID, cheque..."
-            className="h-10 w-full rounded-lg border border-slate-200 bg-slate-50/50 pl-9 pr-3 text-sm text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-[#0f172a] focus:bg-white focus:ring-2 focus:ring-slate-900/10"
+            className="h-10 w-full rounded-lg border border-slate-200 bg-slate-50/60 pl-9 pr-3 text-sm text-slate-800 outline-none transition-all placeholder:text-slate-400 hover:border-slate-300 focus:border-[#0f172a] focus:bg-white focus:ring-4 focus:ring-slate-900/5"
           />
         </div>
 
-        <select
-          className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition-all focus:border-[#0f172a] focus:ring-2 focus:ring-slate-900/10"
-          value={methodFilter}
-          onChange={(e) => {
-            setMethodFilter(e.target.value);
-          }}
-        >
-          <option>All Methods</option>
-          {PAYMENT_MODES.map((mode) => (
-            <option key={mode} value={mode}>
-              {mode}
-            </option>
-          ))}
-        </select>
+        <div className="flex flex-wrap items-center gap-2 lg:flex-nowrap">
+          <select
+            className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.03)] outline-none transition-all hover:border-slate-300 focus:border-[#0f172a] focus:ring-4 focus:ring-slate-900/5"
+            value={methodFilter}
+            onChange={(e) => {
+              setMethodFilter(e.target.value);
+            }}
+          >
+            <option>All Methods</option>
+            {PAYMENT_MODES.map((mode) => (
+              <option key={mode} value={mode}>
+                {mode}
+              </option>
+            ))}
+          </select>
 
-        <select
-          className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition-all focus:border-[#0f172a] focus:ring-2 focus:ring-slate-900/10"
-          value={statusFilter}
-          onChange={(e) => {
-            setStatusFilter(e.target.value);
-          }}
-        >
-          <option>All Records</option>
-          {PAYMENT_STATUSES.map((status) => (
-            <option key={status} value={status}>
-              {status}
-            </option>
-          ))}
-        </select>
+          <select
+            className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.03)] outline-none transition-all hover:border-slate-300 focus:border-[#0f172a] focus:ring-4 focus:ring-slate-900/5"
+            value={statusFilter}
+            onChange={(e) => {
+              setStatusFilter(e.target.value);
+            }}
+          >
+            <option>All Records</option>
+            {PAYMENT_STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ))}
+          </select>
 
-        <DateFilter
-          from={dateFrom}
-          to={dateTo}
-          accent="#0f172a"
-          onChange={({ from, to }) => {
-            setDateFrom(from);
-            setDateTo(to);
-          }}
-        />
+          <DateFilter
+            from={dateFrom}
+            to={dateTo}
+            accent="#0f172a"
+            onChange={({ from, to }) => {
+              setDateFrom(from);
+              setDateTo(to);
+            }}
+          />
+        </div>
       </div>
 
       {/* ============ LEDGER TABLE (GROUPED BY ORDER) ============ */}
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03),0_1px_3px_rgba(15,23,42,0.02)]">
         {/* Table Header Actions */}
-        <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 border-b border-slate-200 bg-gradient-to-b from-white to-slate-50/40 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-sm font-semibold text-slate-900">
               Payment Ledger by Order
             </h2>
             <p className="mt-0.5 text-[11px] text-slate-500">
-              Orders with payments - expand a row to see every payment (LIFO)
+              Orders with payments — expand a row to see every payment (LIFO)
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {/* <button
-              onClick={expandAll}
-              className="h-8 rounded-md border border-slate-200 bg-white px-3 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
-            >
-              Expand all
-            </button> */}
             <button
               onClick={collapseAll}
-              className="h-8 rounded-md border border-slate-200 bg-white px-3 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+              className="h-8 rounded-md border border-slate-200 bg-white px-3 text-[11px] font-medium text-slate-600 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900"
             >
               Collapse all
             </button>
-            <div className="flex h-8 items-center gap-1.5 rounded-md bg-slate-100 px-2.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-              <ReceiptText size={13} />
+            <div className="flex h-8 items-center gap-1.5 rounded-md border border-slate-200/70 bg-slate-50 px-2.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+              <ReceiptText size={13} className="text-slate-400" />
               {totalOrders} ORDERS · {payments.length} PAYMENTS
             </div>
           </div>
@@ -942,29 +940,29 @@ function Payments() {
         <div className="overflow-x-auto">
           <table className="w-full min-w-[1050px] text-left">
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50/70">
-                <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
+              <tr className="border-b border-slate-200 bg-slate-50/80">
+                <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
                   Order
                 </th>
-                <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
+                <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
                   Customer
                 </th>
-                <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
+                <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
                   Payments
                 </th>
-                <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
+                <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
                   Completed
                 </th>
-                <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
+                <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
                   Pending
                 </th>
-                <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
+                <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
                   Latest
                 </th>
-                <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
+                <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
                   Status
                 </th>
-                <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-[0.06em] text-slate-500">
+                <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
                   Actions
                 </th>
               </tr>
@@ -976,7 +974,7 @@ function Payments() {
                   <td colSpan="8" className="px-4 py-16 text-center">
                     <div className="flex flex-col items-center gap-3">
                       <div className="h-7 w-7 animate-spin rounded-full border-2 border-slate-200 border-t-[#0f172a]" />
-                      <span className="text-xs text-slate-500">
+                      <span className="text-xs font-medium text-slate-500">
                         Loading payments…
                       </span>
                     </div>
@@ -986,7 +984,7 @@ function Payments() {
                 <tr>
                   <td colSpan="8" className="px-4 py-16 text-center">
                     <div className="flex flex-col items-center">
-                      <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 text-slate-400">
+                      <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-400 ring-1 ring-slate-200/70">
                         <Inbox size={22} />
                       </div>
                       <p className="text-sm font-semibold text-slate-700">
@@ -1020,13 +1018,19 @@ function Payments() {
                       {/* PARENT ROW (ORDER) */}
                       <tr
                         className={`group cursor-pointer border-b border-slate-100 transition-colors last:border-b-0 ${
-                          isExpanded ? "bg-slate-50" : "hover:bg-slate-50/70"
+                          isExpanded ? "bg-slate-50/80" : "hover:bg-slate-50/70"
                         }`}
                         onClick={() => toggleExpand(orderId)}
                       >
                         <td className="px-4 py-3.5">
                           <div className="flex items-center gap-3">
-                            <button className="flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-slate-200 hover:text-slate-700">
+                            <button
+                              className={`flex h-6 w-6 items-center justify-center rounded-md text-slate-400 transition-colors ${
+                                isExpanded
+                                  ? "bg-slate-200 text-slate-700"
+                                  : "group-hover:bg-slate-200 group-hover:text-slate-700"
+                              }`}
+                            >
                               {isExpanded ? (
                                 <ChevronDown size={16} />
                               ) : (
@@ -1034,10 +1038,10 @@ function Payments() {
                               )}
                             </button>
                             <div>
-                              <p className="font-mono text-xs font-semibold text-[#0f172a]">
+                              <p className="font-mono text-xs font-semibold tracking-tight text-[#0f172a]">
                                 {group.order.orderNumber || "—"}
                               </p>
-                              <p className="mt-0.5 text-[10px] text-slate-400">
+                              <p className="mt-0.5 text-[10px] font-medium text-slate-400">
                                 {group.payments.length} payments
                               </p>
                             </div>
@@ -1046,7 +1050,7 @@ function Payments() {
 
                         <td className="px-4 py-3.5">
                           <div className="flex items-center gap-2.5">
-                            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-slate-200 text-[11px] font-bold text-slate-600">
+                            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-slate-200 to-slate-100 text-[11px] font-bold text-slate-600 ring-1 ring-slate-200">
                               {customerName.charAt(0).toUpperCase()}
                             </div>
                             <div className="min-w-0">
@@ -1102,7 +1106,7 @@ function Payments() {
                         <td className="px-4 py-3.5">
                           <div className="flex items-center justify-end gap-1">
                             <button
-                              className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
+                              className="flex h-7 w-7 items-center justify-center rounded-md border border-transparent text-slate-500 transition-all hover:border-slate-200 hover:bg-white hover:text-slate-900 hover:shadow-sm"
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -1127,14 +1131,15 @@ function Payments() {
                           return (
                             <tr
                               key={payment._id}
-                              className="border-b border-slate-100 bg-slate-50/50 transition-colors last:border-b-0"
+                              className="border-b border-slate-100 bg-slate-50/60 transition-colors last:border-b-0 hover:bg-slate-100/60"
                             >
                               <td className="px-4 py-3 pl-14">
-                                <div className="flex items-center gap-2">
-                                  <span className="font-mono text-[11px] font-semibold text-slate-500">
+                                <div className="relative flex items-center gap-2">
+                                  <span className="absolute -left-5 top-1/2 h-px w-3 -translate-y-1/2 bg-slate-300" />
+                                  <span className="font-mono text-[11px] font-semibold text-slate-600">
                                     {payment.paymentNumber}
                                   </span>
-                                  <div className="flex items-center gap-1 text-[10px] text-slate-400">
+                                  <div className="flex items-center gap-1 rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
                                     <ModeIcon size={10} />
                                     <span>{payment.paymentMode}</span>
                                   </div>
@@ -1190,7 +1195,7 @@ function Payments() {
                               <td className="px-4 py-3">
                                 <div className="flex items-center justify-end gap-1">
                                   <button
-                                    className="flex h-6 w-6 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700"
+                                    className="flex h-6 w-6 items-center justify-center rounded-md border border-transparent text-slate-400 transition-all hover:border-slate-200 hover:bg-white hover:text-slate-700 hover:shadow-sm"
                                     type="button"
                                     onClick={(e) => {
                                       e.stopPropagation();
@@ -1201,7 +1206,7 @@ function Payments() {
                                     <Eye size={13} />
                                   </button>
                                   <button
-                                    className="flex h-6 w-6 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-200 hover:text-slate-700"
+                                    className="flex h-6 w-6 items-center justify-center rounded-md border border-transparent text-slate-400 transition-all hover:border-slate-200 hover:bg-white hover:text-slate-700 hover:shadow-sm"
                                     type="button"
                                     onClick={(e) => {
                                       e.stopPropagation();
@@ -1212,7 +1217,7 @@ function Payments() {
                                     <Pencil size={13} />
                                   </button>
                                   <button
-                                    className="flex h-6 w-6 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
+                                    className="flex h-6 w-6 items-center justify-center rounded-md border border-transparent text-slate-400 transition-all hover:border-red-200 hover:bg-red-50 hover:text-red-600 hover:shadow-sm"
                                     type="button"
                                     onClick={(e) => {
                                       e.stopPropagation();
@@ -1237,7 +1242,7 @@ function Payments() {
         </div>
 
         {/* ============ PAGINATION ============ */}
-        <div className="flex flex-col gap-3 border-t border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <span className="text-[11px] text-slate-500">
             Showing{" "}
             <span className="font-semibold text-slate-700">
@@ -1256,7 +1261,7 @@ function Payments() {
               type="button"
               disabled={page <= 1}
               onClick={() => goToPage(page - 1)}
-              className="h-8 rounded-md border border-slate-200 bg-white px-3 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+              className="h-8 rounded-md border border-slate-200 bg-white px-3 text-[11px] font-medium text-slate-600 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
             >
               Previous
             </button>
@@ -1267,9 +1272,9 @@ function Payments() {
                   key={pageNumber}
                   type="button"
                   onClick={() => goToPage(pageNumber)}
-                  className={`flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-[11px] font-semibold transition-colors ${
+                  className={`flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-[11px] font-semibold transition-all ${
                     page === pageNumber
-                      ? "bg-[#0f172a] text-white"
+                      ? "bg-[#0f172a] text-white shadow-[0_1px_2px_rgba(15,23,42,0.15)]"
                       : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
                   }`}
                 >
@@ -1282,7 +1287,7 @@ function Payments() {
               type="button"
               disabled={page >= totalPages}
               onClick={() => goToPage(page + 1)}
-              className="h-8 rounded-md border border-slate-200 bg-white px-3 text-[11px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+              className="h-8 rounded-md border border-slate-200 bg-white px-3 text-[11px] font-medium text-slate-600 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
             >
               Next
             </button>
@@ -1291,9 +1296,9 @@ function Payments() {
       </div>
 
       {/* ============ POLICY NOTE ============ */}
-      <div className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-3 sm:flex-row sm:items-start sm:gap-4">
+      <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-gradient-to-r from-slate-50 to-white px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)] sm:flex-row sm:items-center sm:gap-4">
         <div className="flex shrink-0 items-center gap-2">
-          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-white text-slate-700 shadow-sm">
+          <div className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
             <ReceiptText size={14} />
           </div>
           <strong className="text-xs font-semibold text-slate-800">
@@ -1310,16 +1315,17 @@ function Payments() {
       {/* ============ ADD / EDIT MODAL ============ */}
       {modalOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[2px]"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm"
           onClick={closeModal}
         >
           <div
-            className="w-full max-w-[600px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl"
+            className="w-full max-w-[600px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_20px_60px_-12px_rgba(15,23,42,0.35)]"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
+            <div className="relative flex items-start justify-between border-b border-slate-200 bg-gradient-to-b from-slate-50/80 to-white px-5 py-4">
+              <div className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-[#0f172a] via-slate-500 to-transparent" />
               <div>
-                <div className="text-[9px] font-bold uppercase tracking-[0.1em] text-slate-400">
+                <div className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-400">
                   Treasury Entry
                 </div>
                 <h3 className="mt-1 text-base font-semibold text-slate-900">
@@ -1338,7 +1344,7 @@ function Payments() {
                 </p>
               </div>
               <button
-                className="flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-900"
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-900"
                 type="button"
                 onClick={closeModal}
               >
@@ -1373,7 +1379,7 @@ function Payments() {
                   </div>
 
                   {selectedOrder && (
-                    <div className="sm:col-span-2 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                    <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-gradient-to-b from-slate-50 to-white p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
                       <div className="mb-3 flex items-center gap-2">
                         <CircleDollarSign size={15} className="text-slate-600" />
                         <span className="text-xs font-semibold text-slate-800">
@@ -1527,7 +1533,7 @@ function Payments() {
                   <div className="sm:col-span-2">
                     <label className={labelClass}>Notes</label>
                     <textarea
-                      className="min-h-[90px] w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-[#0f172a] focus:ring-2 focus:ring-slate-900/10"
+                      className="min-h-[90px] w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 shadow-[0_1px_2px_rgba(15,23,42,0.03)] outline-none transition-all placeholder:text-slate-400 hover:border-slate-300 focus:border-[#0f172a] focus:ring-4 focus:ring-slate-900/5"
                       name="notes"
                       value={form.notes}
                       onChange={handleChange}
@@ -1549,7 +1555,7 @@ function Payments() {
                 </div>
               </div>
 
-              <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50/50 px-5 py-3">
+              <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50/60 px-5 py-3">
                 <button
                   type="button"
                   className={secondaryButtonClass}
@@ -1578,21 +1584,22 @@ function Payments() {
       {/* ============ VIEW MODAL (ENHANCED WITH SPLITS) ============ */}
       {viewPayment && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[2px]"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm"
           onClick={() => setViewPayment(null)}
         >
           <div
-            className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
+            className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_20px_60px_-12px_rgba(15,23,42,0.4)]"
             onClick={(e) => e.stopPropagation()}
           >
             {/* HEADER */}
-            <div className="flex items-start justify-between border-b border-slate-200 px-6 py-5">
+            <div className="relative flex items-start justify-between border-b border-slate-200 bg-gradient-to-b from-slate-50/80 to-white px-6 py-5">
+              <div className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-[#0f172a] via-slate-500 to-transparent" />
               <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
                   Active Reconciliation
                 </p>
-                <div className="mt-1 flex items-center gap-3">
-                  <h2 className="text-lg font-semibold text-slate-900">
+                <div className="mt-1.5 flex items-center gap-3">
+                  <h2 className="font-mono text-lg font-semibold tracking-tight text-slate-900">
                     {viewPayment.paymentNumber}
                   </h2>
                   <span
@@ -1661,7 +1668,7 @@ function Payments() {
                 </div>
 
                 {/* Right: order position */}
-                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+                <div className="rounded-xl border border-slate-200 bg-gradient-to-b from-slate-50 to-white p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
                   <div className="mb-3 flex items-center gap-2">
                     <Layers size={15} className="text-slate-600" />
                     <span className="text-xs font-semibold text-slate-800">
@@ -1681,7 +1688,7 @@ function Payments() {
                           <span className="text-[11px] text-slate-500">
                             Order Value
                           </span>
-                          <span className="text-sm font-semibold text-slate-900">
+                          <span className="text-sm font-semibold text-slate-900 tabular-nums">
                             {formatCurrency(splitTotals.value)}
                           </span>
                         </div>
@@ -1689,7 +1696,7 @@ function Payments() {
                           <span className="text-[11px] text-slate-500">
                             Paid so far
                           </span>
-                          <span className="text-sm font-semibold text-emerald-700">
+                          <span className="text-sm font-semibold text-emerald-700 tabular-nums">
                             {formatCurrency(splitTotals.paid)}
                           </span>
                         </div>
@@ -1697,7 +1704,7 @@ function Payments() {
                           <span className="text-[11px] text-slate-500">
                             Remaining
                           </span>
-                          <span className="text-sm font-semibold text-amber-700">
+                          <span className="text-sm font-semibold text-amber-700 tabular-nums">
                             {formatCurrency(splitTotals.remaining)}
                           </span>
                         </div>
@@ -1707,11 +1714,11 @@ function Payments() {
                       <div className="mt-4">
                         <div className="mb-1.5 flex items-center justify-between text-[10px] font-medium text-slate-400">
                           <span>Progress</span>
-                          <span>{splitTotals.percent.toFixed(1)}%</span>
+                          <span className="tabular-nums">{splitTotals.percent.toFixed(1)}%</span>
                         </div>
                         <div className="h-2 overflow-hidden rounded-full bg-slate-200">
                           <div
-                            className="h-full rounded-full bg-emerald-500 transition-all"
+                            className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-emerald-500 transition-all"
                             style={{ width: `${splitTotals.percent}%` }}
                           />
                         </div>
@@ -1745,7 +1752,7 @@ function Payments() {
                       Split Transactions
                     </h3>
                     {splitPayments.length > 0 && (
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                      <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600 tabular-nums">
                         {splitPayments.length}
                       </span>
                     )}
@@ -1762,7 +1769,7 @@ function Payments() {
                     Loading split history…
                   </div>
                 ) : splitPayments.length === 0 ? (
-                  <div className="rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-6 text-center">
+                  <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/50 px-4 py-6 text-center">
                     <History size={20} className="mx-auto text-slate-300" />
                     <p className="mt-2 text-xs font-medium text-slate-500">
                       No other payments on this order
@@ -1780,15 +1787,15 @@ function Payments() {
                           className={`flex items-start gap-3 rounded-xl border px-4 py-3 transition-colors ${
                             isCurrent
                               ? "border-[#0f172a] bg-slate-50 ring-1 ring-[#0f172a]/10"
-                              : "border-slate-200 bg-white"
+                              : "border-slate-200 bg-white hover:border-slate-300"
                           }`}
                         >
                           {/* Index badge */}
                           <div
                             className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[11px] font-bold ${
                               isCurrent
-                                ? "bg-[#0f172a] text-white"
-                                : "bg-slate-100 text-slate-600"
+                                ? "bg-[#0f172a] text-white shadow-[0_1px_2px_rgba(15,23,42,0.2)]"
+                                : "bg-slate-100 text-slate-600 ring-1 ring-slate-200"
                             }`}
                           >
                             #{index + 1}
@@ -1797,7 +1804,7 @@ function Payments() {
                           {/* Details */}
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-sm font-semibold text-slate-900">
+                              <span className="text-sm font-semibold text-slate-900 tabular-nums">
                                 {formatCurrency(split.amount)}
                               </span>
                               <span
@@ -1846,7 +1853,7 @@ function Payments() {
               {viewPayment.notes && (
                 <div className="mt-6">
                   <p className="text-xs font-semibold text-slate-900">Notes</p>
-                  <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-3">
+                  <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-3">
                     <p className="text-sm leading-6 text-slate-600">
                       {viewPayment.notes}
                     </p>
@@ -1920,14 +1927,25 @@ function KpiCard({
     slate: "text-slate-500",
   };
 
+  const accents = {
+    emerald: "from-emerald-400 to-emerald-500",
+    amber: "from-amber-400 to-amber-500",
+    slate: "from-slate-400 to-slate-500",
+  };
+
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-shadow hover:shadow-[0_2px_8px_rgba(15,23,42,0.05)]">
+    <div className="group relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.03),0_1px_3px_rgba(15,23,42,0.02)] transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_8px_24px_-8px_rgba(15,23,42,0.12)]">
+      <div
+        className={`absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r ${
+          accents[hintTone] || accents.slate
+        }`}
+      />
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-slate-400">
+          <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-slate-400">
             {label}
           </span>
-          <div className="mt-2 truncate text-2xl font-semibold tracking-tight text-slate-900">
+          <div className="mt-2 truncate text-2xl font-semibold tracking-tight text-slate-900 tabular-nums">
             {loading ? "—" : value}
           </div>
           {hint && (
@@ -1941,7 +1959,7 @@ function KpiCard({
           )}
         </div>
         <div
-          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${iconBg} ${iconColor}`}
+          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ring-1 ring-slate-200/70 ${iconBg} ${iconColor} transition-transform group-hover:scale-105`}
         >
           <Icon size={17} />
         </div>
@@ -1960,7 +1978,7 @@ function DetailItem({ label, value, emphasize = false }) {
       <p
         className={`mt-1 text-sm ${
           emphasize
-            ? "font-semibold text-slate-900"
+            ? "font-semibold text-slate-900 tabular-nums"
             : "font-medium text-slate-800"
         }`}
       >
