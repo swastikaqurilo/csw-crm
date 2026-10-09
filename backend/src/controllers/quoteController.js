@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const Quotation = require("../models/Quotation");
+const Quotation = require("../models/Quote");
 const Enquiry = require("../models/Enquiry");
 
 const GST_RATE = 0.09; 

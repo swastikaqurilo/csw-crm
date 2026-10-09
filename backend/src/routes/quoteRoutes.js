@@ -10,7 +10,7 @@ const {
   sendQuotation,
   updateQuotationStatus,
   deleteQuotation,
-} = require("../controllers/quotationController");
+} = require("../controllers/quoteController");
 
 router.get("/", getQuotations);
 router.get("/enquiry/:enquiryId", getQuotationsByEnquiry);

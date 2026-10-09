@@ -23,6 +23,7 @@ const rawMaterialRoutes = require("./routes/rawMaterialRoutes");
 const settingRoutes = require("./routes/settingRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const salaryRoutes = require("./routes/salaryRoutes");
+const quoteRoutes = require("./routes/quoteRoutes");
 
 const authRoutes = require("./routes/authRoutes");
 const { protect } = require("./middleware/auth");
@@ -66,6 +67,7 @@ app.use("/api/raw-material", protect, rawMaterialRoutes);
 app.use("/api/settings", protect, settingRoutes);
 app.use("/api/notifications", protect, notificationRoutes);
 app.use("/api/salaries", protect, salaryRoutes);
+app.use("/api/quotes", protect, quoteRoutes);
 
 // 404 handler
 app.use((req, res) => {

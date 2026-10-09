@@ -108,7 +108,8 @@ const createRawStock = async (req, res) => {
       unit,
       sizeKg,
       quantity,
-      minStockLevel,
+      reorderLevel,
+      criticalLevel,
       notes,
     } = req.body;
 
@@ -121,10 +122,10 @@ const createRawStock = async (req, res) => {
         message: "category must be Steel, Tape, or Reel",
       });
     }
-    if (!["kg", "pcs", "rolls", "meters"].includes(unit)) {
+    if (!["Kg", "Box", "Piece"].includes(unit)) {
       return res.status(400).json({
         success: false,
-        message: "unit must be kg, pcs, rolls, or meters",
+        message: "unit must be Kg, Box, or Piece",
       });
     }
 
@@ -136,12 +137,26 @@ const createRawStock = async (req, res) => {
       });
     }
 
-    const minLevel =
-      minStockLevel !== undefined ? Number(minStockLevel) : 0;
-    if (isNaN(minLevel) || minLevel < 0) {
+    const reorder =
+      reorderLevel !== undefined ? Number(reorderLevel) : 0;
+    if (isNaN(reorder) || reorder < 0) {
       return res.status(400).json({
         success: false,
-        message: "minStockLevel must be >= 0",
+        message: "reorderLevel must be >= 0",
+      });
+    }
+    const critical =
+      criticalLevel !== undefined ? Number(criticalLevel) : 0;
+    if (isNaN(critical) || critical < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "criticalLevel must be >= 0",
+      });
+    }
+    if (critical > reorder) {
+      return res.status(400).json({
+        success: false,
+        message: "criticalLevel cannot be greater than reorderLevel",
       });
     }
 
@@ -157,14 +172,15 @@ const createRawStock = async (req, res) => {
     }
 
     const item = await RawStock.create({
-      name: name.trim().slice(0, 200),
+      name: name.trim().slice(0, 80),
       category,
       unit,
       sizeKg: size,
       quantity: qty,
       reservedQty: 0,
-      minStockLevel: minLevel,
-      notes: safeString(notes, 1000) || "",
+      reorderLevel: reorder,
+      criticalLevel: critical,
+      notes: safeString(notes, 5000) || "",
       isActive: true,
       createdBy: req.user?._id || null,
       updatedBy: req.user?._id || null,
@@ -210,7 +226,8 @@ const updateRawStock = async (req, res) => {
       category,
       unit,
       sizeKg,
-      minStockLevel,
+      reorderLevel,
+      criticalLevel,
       notes,
       isActive,
     } = req.body;
@@ -219,7 +236,7 @@ const updateRawStock = async (req, res) => {
       if (typeof name !== "string" || !name.trim()) {
         return res.status(400).json({ success: false, message: "name cannot be empty" });
       }
-      item.name = name.trim().slice(0, 200);
+      item.name = name.trim().slice(0, 80);
     }
     if (category !== undefined) {
       if (!["Steel", "Tape", "Reel"].includes(category)) {
@@ -231,10 +248,10 @@ const updateRawStock = async (req, res) => {
       item.category = category;
     }
     if (unit !== undefined) {
-      if (!["kg", "pcs", "rolls", "meters"].includes(unit)) {
+      if (!["Kg", "Box", "Piece"].includes(unit)) {
         return res.status(400).json({
           success: false,
-          message: "unit must be kg, pcs, rolls, or meters",
+          message: "unit must be Kg, Box, or Piece",
         });
       }
       item.unit = unit;
@@ -253,18 +270,36 @@ const updateRawStock = async (req, res) => {
         item.sizeKg = size;
       }
     }
-    if (minStockLevel !== undefined) {
-      const minLevel = Number(minStockLevel);
-      if (isNaN(minLevel) || minLevel < 0) {
+    if (reorderLevel !== undefined) {
+      const reorder = Number(reorderLevel);
+      if (isNaN(reorder) || reorder < 0) {
         return res.status(400).json({
           success: false,
-          message: "minStockLevel must be >= 0",
+          message: "reorderLevel must be >= 0",
         });
       }
-      item.minStockLevel = minLevel;
+      item.reorderLevel = reorder;
+    }
+    if (criticalLevel !== undefined) {
+      const critical = Number(criticalLevel);
+      if (isNaN(critical) || critical < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "criticalLevel must be >= 0",
+        });
+      }
+      item.criticalLevel = critical;
+    }
+    const finalReorder = item.reorderLevel ?? 0;
+    const finalCritical = item.criticalLevel ?? 0;
+    if (finalCritical > finalReorder) {
+      return res.status(400).json({
+        success: false,
+        message: "criticalLevel cannot be greater than reorderLevel",
+      });
     }
     if (notes !== undefined) {
-      item.notes = safeString(notes, 1000) || "";
+      item.notes = safeString(notes, 5000) || "";
     }
     if (isActive !== undefined) {
       item.isActive = Boolean(isActive);
@@ -466,11 +501,12 @@ const getRawStockMovements = async (req, res) => {
 const seedDefaultMaterials = async (req, res) => {
   try {
     const defaults = [
-      { name: "Steel Wire 0.5mm", category: "Steel", unit: "kg", sizeKg: 0.5, minStockLevel: 50 },
-      { name: "Steel Wire 0.7mm", category: "Steel", unit: "kg", sizeKg: 0.7, minStockLevel: 50 },
-      { name: "Steel Wire 1.0mm", category: "Steel", unit: "kg", sizeKg: 1.0, minStockLevel: 30 },
-      { name: "Binding Tape", category: "Tape", unit: "rolls", sizeKg: null, minStockLevel: 20 },
-      { name: "Wooden Reel", category: "Reel", unit: "pcs", sizeKg: null, minStockLevel: 10 },
+      { name: "Steel Wire", category: "Steel", unit: "Kg", sizeKg: null, reorderLevel: 50, criticalLevel: 10 },
+      { name: "Binding Tape", category: "Tape", unit: "Box", sizeKg: null, reorderLevel: 20, criticalLevel: 5 },
+      { name: "Wooden Reel 2kg", category: "Reel", unit: "Piece", sizeKg: 2, reorderLevel: 10, criticalLevel: 3 },
+      { name: "Wooden Reel 5kg", category: "Reel", unit: "Piece", sizeKg: 5, reorderLevel: 10, criticalLevel: 3 },
+      { name: "Wooden Reel 8kg", category: "Reel", unit: "Piece", sizeKg: 8, reorderLevel: 10, criticalLevel: 3 },
+      { name: "Wooden Reel 10kg", category: "Reel", unit: "Piece", sizeKg: 10, reorderLevel: 10, criticalLevel: 3 },
     ];
 
     const created = [];
@@ -509,7 +545,7 @@ const getAllPurchases = async (req, res) => {
     const query = { isActive: true };
 
     if (status) {
-      if (!["Pending", "Received", "Cancelled", "Partial"].includes(status)) {
+      if (!["Pending", "Received", "Cancelled"].includes(status)) {
         return res.status(400).json({
           success: false,
           message: "Invalid status filter",
@@ -577,7 +613,7 @@ const createPurchase = async (req, res) => {
       expectedDate,
       notes,
       paymentMode,
-      paidAmount,
+      amountPaid,
     } = req.body;
 
     if (!isValidId(material)) {
@@ -593,8 +629,8 @@ const createPurchase = async (req, res) => {
     }
 
     const sup = await Contact.findById(supplier);
-    if (!sup || !sup.isActive) {
-      return res.status(404).json({ success: false, message: "Supplier not found" });
+    if (!sup || sup.status !== "active") {
+      return res.status(404).json({ success: false, message: "Supplier not found or inactive" });
     }
 
     const qty = Number(quantity);
@@ -616,16 +652,16 @@ const createPurchase = async (req, res) => {
     }
     total = Math.round(total * 100) / 100;
 
-    const paid = paidAmount !== undefined ? Number(paidAmount) : 0;
+    const paid = amountPaid !== undefined ? Number(amountPaid) : 0;
     if (isNaN(paid) || paid < 0) {
-      return res.status(400).json({ success: false, message: "paidAmount must be >= 0" });
+      return res.status(400).json({ success: false, message: "amountPaid must be >= 0" });
     }
 
     const purchaseUnit = unit || mat.unit;
-    if (!["kg", "pcs", "rolls", "meters"].includes(purchaseUnit)) {
+    if (!["Kg", "Box", "Piece"].includes(purchaseUnit)) {
       return res.status(400).json({
         success: false,
-        message: "unit must be kg, pcs, rolls, or meters",
+        message: "unit must be Kg, Box, or Piece",
       });
     }
 
@@ -643,7 +679,7 @@ const createPurchase = async (req, res) => {
       unit: purchaseUnit,
       unitPrice: price,
       totalAmount: total,
-      paidAmount: Math.min(paid, total),
+      amountPaid: Math.min(paid, total),
       invoiceNumber: safeString(invoiceNumber, 100) || null,
       purchaseDate: purchaseDate ? new Date(purchaseDate) : new Date(),
       expectedDate: expectedDate ? new Date(expectedDate) : null,
@@ -735,15 +771,15 @@ const updatePurchase = async (req, res) => {
       }
       total = Math.round(total * 100) / 100;
       purchase.totalAmount = total;
-      if (purchase.paidAmount > total) {
-        purchase.paidAmount = total;
+      if (purchase.amountPaid > total) {
+        purchase.amountPaid = total;
       }
     } else if (quantity !== undefined || unitPrice !== undefined) {
       const recalc =
         Math.round(purchase.quantity * purchase.unitPrice * 100) / 100;
       purchase.totalAmount = recalc;
-      if (purchase.paidAmount > recalc) {
-        purchase.paidAmount = recalc;
+      if (purchase.amountPaid > recalc) {
+        purchase.amountPaid = recalc;
       }
     }
 
@@ -1007,7 +1043,7 @@ const recordPurchasePayment = async (req, res) => {
       });
     }
 
-    const remaining = Math.round((purchase.totalAmount - purchase.paidAmount) * 100) / 100;
+    const remaining = Math.round((purchase.totalAmount - purchase.amountPaid) * 100) / 100;
     if (numAmount > remaining + 0.01) {
       return res.status(400).json({
         success: false,
@@ -1025,8 +1061,8 @@ const recordPurchasePayment = async (req, res) => {
       by: req.user?._id || null,
     });
 
-    purchase.paidAmount =
-      Math.round((purchase.paidAmount + numAmount) * 100) / 100;
+    purchase.amountPaid =
+      Math.round((purchase.amountPaid + numAmount) * 100) / 100;
     if (req.user?._id) purchase.updatedBy = req.user._id;
     await purchase.save();
 
@@ -1049,14 +1085,8 @@ const deletePurchasePayment = async (req, res) => {
     if (!isValidId(req.params.id)) {
       return res.status(400).json({ success: false, message: "Invalid ID" });
     }
-
-    const { paymentIndex } = req.body;
-    const idx = Number(paymentIndex);
-    if (isNaN(idx) || idx < 0 || !Number.isInteger(idx)) {
-      return res.status(400).json({
-        success: false,
-        message: "paymentIndex must be a non-negative integer",
-      });
+    if (!isValidId(req.params.paymentId)) {
+      return res.status(400).json({ success: false, message: "Invalid payment ID" });
     }
 
     const purchase = await RawPurchase.findById(req.params.id);
@@ -1064,19 +1094,18 @@ const deletePurchasePayment = async (req, res) => {
       return res.status(404).json({ success: false, message: "Not found" });
     }
 
-    if (!Array.isArray(purchase.payments) || idx >= purchase.payments.length) {
-      return res.status(400).json({
+    const beforeLen = (purchase.payments || []).length;
+    purchase.payments = (purchase.payments || []).filter(
+      (p) => String(p._id) !== String(req.params.paymentId)
+    );
+    if (purchase.payments.length === beforeLen) {
+      return res.status(404).json({
         success: false,
-        message: "Invalid payment index",
+        message: "Payment not found on this purchase",
       });
     }
 
-    const removed = purchase.payments[idx];
-    purchase.payments.splice(idx, 1);
-    purchase.paidAmount =
-      Math.round((purchase.paidAmount - removed.amount) * 100) / 100;
-    if (purchase.paidAmount < 0) purchase.paidAmount = 0;
-
+    // amountPaid / paymentStatus recomputed by model pre-save from payments[]
     if (req.user?._id) purchase.updatedBy = req.user._id;
     await purchase.save();
 
