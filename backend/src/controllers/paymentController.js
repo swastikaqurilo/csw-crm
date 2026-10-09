@@ -28,7 +28,7 @@ const safeString = (v, max = 500) => {
 };
 
 const escapeRegex = (str) =>
-  String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const parseDate = (v) => {
   if (!v) return null;
@@ -380,7 +380,6 @@ const createPayment = async (req, res) => {
       ? cleanCurrency.toUpperCase()
       : 'INR';
 
-    /* ---------- find order ---------- */
     const order = await Order.findOne({
       _id: orderId,
       isActive: true,
@@ -390,7 +389,7 @@ const createPayment = async (req, res) => {
         .status(404)
         .json({ success: false, message: 'Order not found' });
     }
-    
+
     if (['Draft', 'Cancelled'].includes(order.status)) {
       return res.status(400).json({
         success: false,
@@ -521,6 +520,47 @@ const updatePayment = async (req, res) => {
         .json({ success: false, message: 'Invalid status' });
     }
 
+    // Resolve final values that will be saved (merge body over existing)
+    const finalMode =
+      paymentMode !== undefined ? paymentMode : existing.paymentMode;
+    const finalTxnId =
+      transactionId !== undefined
+        ? safeString(transactionId, 100)
+        : existing.transactionId;
+    const finalCheque =
+      chequeNumber !== undefined
+        ? safeString(chequeNumber, 50)
+        : existing.chequeNumber;
+    const finalBank =
+      bankName !== undefined
+        ? safeString(bankName, 150)
+        : existing.bankName;
+
+    if (finalMode === 'Cheque') {
+      if (!finalCheque) {
+        return res.status(400).json({
+          success: false,
+          code: 'CHEQUE_DETAILS_REQUIRED',
+          message: 'Cheque number is required for cheque payments.',
+        });
+      }
+      if (!finalBank) {
+        return res.status(400).json({
+          success: false,
+          code: 'CHEQUE_DETAILS_REQUIRED',
+          message: 'Bank name is required for cheque payments.',
+        });
+      }
+    }
+
+    if (NEEDS_TXN_ID.includes(finalMode) && !finalTxnId) {
+      return res.status(400).json({
+        success: false,
+        code: 'TRANSACTION_ID_REQUIRED',
+        message: `Transaction ID is required for ${finalMode}.`,
+      });
+    }
+
     let cleanPaymentDate;
     if (paymentDate !== undefined) {
       if (paymentDate === null || paymentDate === '') {
@@ -551,10 +591,31 @@ const updatePayment = async (req, res) => {
       }
     }
 
+    // Coerce isReconciled to a real boolean before the transaction
+    let cleanIsReconciled;
+    if (isReconciled !== undefined) {
+      if (typeof isReconciled === 'boolean') {
+        cleanIsReconciled = isReconciled;
+      } else if (isReconciled === 'true' || isReconciled === 'false') {
+        cleanIsReconciled = isReconciled === 'true';
+      } else {
+        return res.status(400).json({
+          success: false,
+          code: 'INVALID_RECONCILIATION_STATUS',
+          message: 'isReconciled must be a boolean.',
+        });
+      }
+    }
+
     let updatedPayment;
 
     await session.withTransaction(async () => {
       const payment = await Payment.findById(req.params.id).session(session);
+      if (!payment || !payment.isActive) {
+        const err = new Error('Payment not found');
+        err.status = 404;
+        throw err;
+      }
 
       const wasApplied = payment.appliedToOrder;
 
@@ -579,20 +640,14 @@ const updatePayment = async (req, res) => {
       if (attachmentUrl !== undefined) {
         payment.attachmentUrl = safeString(attachmentUrl, 500) || undefined;
       }
-      if (isReconciled !== undefined) {
-        if (typeof isReconciled === "boolean") {
-          payment.isReconciled = isReconciled;
-        } else if (isReconciled === "true" || isReconciled === "false") {
-          payment.isReconciled = isReconciled === "true";
-        } else {
-          return res.status(400).json({
-            success: false,
-            code: "INVALID_RECONCILIATION_STATUS",
-            message: "isReconciled must be a boolean.",
-          });
-        }
-        if (isReconciled && !payment.reconciledDate && cleanReconciledDate === undefined) {
+
+      if (cleanIsReconciled !== undefined) {
+        payment.isReconciled = cleanIsReconciled;
+        if (cleanIsReconciled && !payment.reconciledDate && cleanReconciledDate === undefined) {
           payment.reconciledDate = new Date();
+        }
+        if (!cleanIsReconciled) {
+          payment.reconciledDate = null;
         }
       }
       if (cleanReconciledDate !== undefined) {
@@ -661,28 +716,12 @@ const updatePayment = async (req, res) => {
       data: populated,
     });
   } catch (error) {
-    if (error.status === 400) {
-      return res.status(400).json({
+    if (error.status === 400 || error.status === 404) {
+      return res.status(error.status).json({
         success: false,
         message: error.message,
+        ...(error.code && { code: error.code }),
       });
-    }
-    if (NEEDS_TXN_ID.includes(payment.paymentMode) && !payment.transactionId?.trim()) {
-      return res.status(400).json({
-        success: false,
-        code: "TRANSACTION_ID_REQUIRED",
-        message: `Transaction ID is required for ${payment.paymentMode}.`,
-      });
-    }
-
-    if (payment.paymentMode === "Cheque") {
-      if (!payment.chequeNumber?.trim() || !payment.bankName?.trim()) {
-        return res.status(400).json({
-          success: false,
-          code: "CHEQUE_DETAILS_REQUIRED",
-          message: "Cheque number and bank name are required for cheque payments.",
-        });
-      }
     }
     handleError(res, error, 'Server error while updating payment');
   } finally {
