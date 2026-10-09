@@ -821,8 +821,8 @@ const createOrder = async (req, res) => {
     const { items: processedItems, subTotal } = await buildItems(items);
 
     const taxableAmount = Math.max(0, subTotal - orderDiscount);
-    const taxAmount = (taxableAmount * numericTaxPercent) / 100;
-    const grandTotal = taxableAmount + taxAmount;
+    const taxAmount = round2((taxableAmount * numericTaxPercent) / 100);
+    const grandTotal = round2(taxableAmount + taxAmount);
 
     const orderPayload = {
       enquiry: cleanEnquiry,
@@ -1106,6 +1106,18 @@ const updateOrderStatus = async (req, res) => {
       }
 
       const currentStockStatus = order.stockStatus || "Pending";
+
+      const activePayments = await Payment.countDocuments({
+        order: order._id,
+        isActive: true,
+      });
+
+      if (activePayments > 0) {
+        return res.status(400).json({
+          success: false,
+          message: "This order has payment records. Delete or reverse those payments first.",
+        });
+      }
 
       if (status === "Confirmed" && currentStockStatus === "Pending") {
         await deductOrderStock(order, req.user, allowReservedStock, session);
