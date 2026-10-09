@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const { Worker, Attendance } = require("../models/Worker");
+const Salary = require("../models/Salary");
 
 const isValidId = (id) => mongoose.isValidObjectId(id);
 
@@ -8,6 +9,9 @@ const safeString = (value, max = 150) => {
   if (typeof value !== "string") return "";
   return value.trim().slice(0, max);
 };
+
+const escapeRegex = (str) =>
+  String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const validatePayConfiguration = ({ payType, fixedPay, variablePay }) => {
   const errors = [];
@@ -226,8 +230,9 @@ const getWorkers = async (req, res) => {
       filter.department = department.trim();
     }
 
-    if (search.trim()) {
-      const regex = new RegExp(search.trim(), "i");
+    if (search && String(search).trim()) {
+      const safe = escapeRegex(String(search).trim().slice(0, 100));
+      const regex = new RegExp(safe, "i");
       filter.$or = [
         { name: regex },
         { phone: regex },
@@ -255,7 +260,7 @@ const getWorkers = async (req, res) => {
         page: pageNumber,
         limit: limitNumber,
         total,
-        totalPages: Math.ceil(total / limitNumber),
+        totalPages: Math.ceil(total / limitNumber) || 1,
       },
     });
   } catch (error) {
@@ -474,11 +479,30 @@ const deleteWorker = async (req, res) => {
       });
     }
 
-    await worker.deleteOne();
+    // Soft-delete: mark Inactive so salaries / production history stay intact
+    if (worker.status === "Inactive") {
+      return res.status(200).json({
+        success: true,
+        message: "Worker is already inactive",
+        data: worker,
+      });
+    }
+
+    const salaryCount = await Salary.countDocuments({
+      worker: worker._id,
+      isDeleted: false,
+    });
+
+    worker.status = "Inactive";
+    await worker.save();
 
     return res.status(200).json({
       success: true,
-      message: "Worker deleted successfully",
+      message:
+        salaryCount > 0
+          ? "Worker deactivated (has salary history — record kept inactive)"
+          : "Worker deactivated successfully",
+      data: worker,
     });
   } catch (error) {
     console.error("[deleteWorker]", error);
@@ -584,19 +608,15 @@ const saveAttendance = async (req, res) => {
   }
 };
 
-// ---------------------------------------------------------------------------
-// GET /attendance/history?page=1&limit=10
-// Lists every saved attendance record, newest first, with counts.
-// ---------------------------------------------------------------------------
 const getAttendanceHistory = async (req, res) => {
   try {
-    const page  = Math.max(Number(req.query.page)  || 1, 1);
+    const page = Math.max(Number(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 100);
-    const skip  = (page - 1) * limit;
+    const skip = (page - 1) * limit;
 
     const [records, total] = await Promise.all([
       Attendance.find({})
-        .sort({ date: -1 })                       // ISO strings sort chronologically
+        .sort({ date: -1 })
         .skip(skip)
         .limit(limit)
         .populate("absentWorkers", "name workerId role")
@@ -618,10 +638,10 @@ const getAttendanceHistory = async (req, res) => {
     const data = records.map((r) => {
       const eligible = activeWorkers.filter((w) => {
         const j = toISO(w.joiningDate);
-        return !j || j <= r.date;                 // joined on/before that day
+        return !j || j <= r.date;
       }).length;
 
-      const absentN  = Array.isArray(r.absentWorkers) ? r.absentWorkers.length : 0;
+      const absentN = Array.isArray(r.absentWorkers) ? r.absentWorkers.length : 0;
       const presentN = r.allPresent ? eligible : Math.max(0, eligible - absentN);
 
       return {
