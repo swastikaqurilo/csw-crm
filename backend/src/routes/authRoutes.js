@@ -72,7 +72,7 @@ router.post("/login", async (req, res) => {
 
 router.post("/register", async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
+    const { name, email, password } = req.body;
 
     if (!name || !email || !password) {
       return res.status(400).json({
@@ -102,7 +102,7 @@ router.post("/register", async (req, res) => {
       name: name.trim(),
       email: email.toLowerCase().trim(),
       password,
-      role: role || "Sales Executive",
+      role:"Sales Executive",
     });
 
     const token = signToken(user._id);

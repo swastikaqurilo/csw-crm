@@ -52,7 +52,8 @@ const safeString = (v, max = 500) => {
   return t ? t.slice(0, max) : "";
 };
 
-const escapeRegex = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escapeRegex = (str) =>
+  String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const parseDate = (v) => {
   if (!v) return null;
@@ -151,170 +152,308 @@ const amountInWords = (amount) => {
 const resolveStockId = (item) =>
   item.productStock?._id || item.productStock || null;
 
-const deductOrderStock = async (order, user, allowReserved = false) => {
-  const completed = []; 
-  try {
-    for (const item of order.items) {
-      const stockId = resolveStockId(item);
-      const qty = Number(item.quantity);
-      const size = item.size;
-
-      if (!stockId) {
-        throw { status: 400, message: `Item ${size} has no stock reference.` };
-      }
-
-      const stock = await ProductStock.findOne({ _id: stockId, isActive: true });
-      if (!stock) {
-        throw { status: 404, message: `No active stock found for ${size} reel.` };
-      }
-
-      const before = Number(stock.quantity || 0);
-      const reservedBefore = Number(stock.reservedQty || 0);
-      const freeBefore = Math.max(before - reservedBefore, 0);
-
-      if (qty > before) {
-        throw {
-          status: 400,
-          message: `Insufficient ${size} stock. Available: ${before} ${stock.unit}, required: ${qty}.`,
-        };
-      }
-
-      const usedFromReserved = Math.max(qty - freeBefore, 0);
-
-      if (usedFromReserved > 0 && !allowReserved) {
-        throw {
-          status: 409,
-          code: "RESERVED_CONFLICT",
-          message: `This order needs ${usedFromReserved} ${stock.unit} from reserved ${size} stock. Continue?`,
-          data: {
-            material: "product",
-            size,
-            name: stock.name,
-            unit: stock.unit,
-            totalQty: before,
-            reservedQty: reservedBefore,
-            freeQty: freeBefore,
-            requested: qty,
-            usedFromReserved,
-          },
-        };
-      }
-
-      const reservedAfter =
-        usedFromReserved > 0
-          ? Math.max(reservedBefore - usedFromReserved, 0)
-          : reservedBefore;
-
-      const after = before - qty;
-
-      await ProductStock.findByIdAndUpdate(
-        stockId,
-        [
-          {
-            $set: {
-              quantity: after,
-              reservedQty: reservedAfter,
-              lastIssuedAt: "$$NOW",
-              movementLog: {
-                $slice: [
-                  {
-                    $concatArrays: [
-                      { $ifNull: ["$movementLog", []] },
-                      [
-                        {
-                          type: "out",
-                          quantity: qty,
-                          unitAtTime: stock.unit,
-                          beforeQty: before,
-                          afterQty: after,
-                          reason:
-                            usedFromReserved > 0
-                              ? `Order ${order.orderNumber} confirmed (used ${usedFromReserved} from reserved)`
-                              : `Order ${order.orderNumber} confirmed`,
-                          notes: null,
-                          refType: "Dispatch",
-                          refId: order._id,
-                          refLabel: order.orderNumber,
-                          by: user?._id || null,
-                          at: "$$NOW",
-                        },
-                      ],
-                    ],
-                  },
-                  -MAX_MOVEMENT_LOG,
-                ],
-              },
-            },
-          },
-        ],
-        { updatePipeline: true }
-      );
-
-      completed.push({ stockId, qty, usedFromReserved });
-    }
-  } catch (err) {
-    for (const c of completed) {
-      try {
-        await ProductStock.findByIdAndUpdate(
-          c.stockId,
-          [
-            {
-              $set: {
-                quantity: { $add: ["$quantity", c.qty] },
-                reservedQty: {
-                  $add: [{ $ifNull: ["$reservedQty", 0] }, c.usedFromReserved],
-                },
-                movementLog: {
-                  $slice: [
-                    {
-                      $concatArrays: [
-                        { $ifNull: ["$movementLog", []] },
-                        [
-                          {
-                            type: "in",
-                            quantity: c.qty,
-                            unitAtTime: "$unit",
-                            beforeQty: "$quantity",
-                            afterQty: { $add: ["$quantity", c.qty] },
-                            reason: `Rollback: order ${order.orderNumber} confirmation failed`,
-                            notes: null,
-                            refType: "Manual",
-                            refId: order._id,
-                            refLabel: order.orderNumber,
-                            by: user?._id || null,
-                            at: "$$NOW",
-                          },
-                        ],
-                      ],
-                    },
-                    -MAX_MOVEMENT_LOG,
-                  ],
-                },
-              },
-            },
-          ],
-          { updatePipeline: true }
-        );
-      } catch (rbErr) {
-        console.error(`[deductOrderStock] Rollback failed for ${c.stockId}:`, rbErr);
-      }
-    }
-    throw err;
-  }
-};
-
-const restoreOrderStock = async (order, user) => {
+const deductOrderStock = async (
+  order,
+  user,
+  allowReserved = false,
+  session
+) => {
   for (const item of order.items) {
     const stockId = resolveStockId(item);
     const qty = Number(item.quantity);
-    if (!stockId) continue;
+    const size = item.size;
 
-    await ProductStock.findByIdAndUpdate(
-      stockId,
+    if (!Number.isFinite(qty) || qty <= 0 || qty > MAX_QTY) {
+      throw {
+        status: 400,
+        message: `Invalid quantity for ${size}.`,
+      };
+    }
+
+    if (!stockId) {
+      throw {
+        status: 400,
+        message: `Item ${size} has no stock reference.`,
+      };
+    }
+
+    const stock = await ProductStock.findOne({
+      _id: stockId,
+      isActive: true,
+    }).session(session);
+
+    if (!stock) {
+      throw {
+        status: 404,
+        message: `No active stock found for ${size} reel.`,
+      };
+    }
+
+    const before = Number(stock.quantity || 0);
+    const reservedBefore = Number(stock.reservedQty || 0);
+    const freeBefore = before - reservedBefore;
+
+    if (
+      !Number.isFinite(before) ||
+      !Number.isFinite(reservedBefore) ||
+      before < 0 ||
+      reservedBefore < 0 ||
+      reservedBefore > before
+    ) {
+      throw {
+        status: 409,
+        message: `Invalid inventory reservation for ${size}. Correct the stock record before confirming this order.`,
+      };
+    }
+
+    if (qty > before) {
+      throw {
+        status: 400,
+        message: `Insufficient ${size} stock. Available: ${before} ${stock.unit}, required: ${qty}.`,
+      };
+    }
+
+    const usedFromReserved = Math.max(qty - freeBefore, 0);
+
+    if (usedFromReserved > 0 && !allowReserved) {
+      throw {
+        status: 409,
+        code: "RESERVED_CONFLICT",
+        message: `This order needs ${usedFromReserved} ${stock.unit} from reserved ${size} stock. Continue?`,
+        data: {
+          material: "product",
+          size,
+          name: stock.name,
+          unit: stock.unit,
+          totalQty: before,
+          reservedQty: reservedBefore,
+          freeQty: freeBefore,
+          requested: qty,
+          usedFromReserved,
+        },
+      };
+    }
+
+    const after = before - qty;
+    const reservedAfter = reservedBefore - usedFromReserved;
+
+    // Conditional update prevents silently overwriting a concurrent change.
+    const result = await ProductStock.updateOne(
+      {
+        _id: stockId,
+        isActive: true,
+        quantity: before,
+        reservedQty: reservedBefore,
+      },
       [
         {
           $set: {
-            quantity: { $add: ["$quantity", qty] },
+            quantity: after,
+            reservedQty: reservedAfter,
+            lastIssuedAt: "$$NOW",
+            movementLog: {
+              $slice: [
+                {
+                  $concatArrays: [
+                    { $ifNull: ["$movementLog", []] },
+                    [
+                      {
+                        type: "out",
+                        quantity: qty,
+                        unitAtTime: stock.unit,
+                        beforeQty: before,
+                        afterQty: after,
+                        reason:
+                          usedFromReserved > 0
+                            ? `Order ${order.orderNumber} confirmed (used ${usedFromReserved} from reserved)`
+                            : `Order ${order.orderNumber} confirmed`,
+                        notes: null,
+                        refType: "Dispatch",
+                        refId: order._id,
+                        refLabel: order.orderNumber,
+                        by: user?._id || null,
+                        at: "$$NOW",
+                      },
+                    ],
+                  ],
+                },
+                -MAX_MOVEMENT_LOG,
+              ],
+            },
+          },
+        },
+      ],
+      { session, updatePipeline: true } 
+    );
+
+    if (result.modifiedCount !== 1) {
+      throw {
+        status: 409,
+        code: "STOCK_CHANGED",
+        message: `Stock for ${size} changed while confirming this order. Please retry.`,
+      };
+    }
+
+    item.reservedQtyUsed = usedFromReserved;
+  }
+};
+
+// Consume a reservation owned by an order whose stockStatus is Reserved.
+// This assumes the reservation workflow reserves each order item's full quantity.
+const deductReservedOrderStock = async (order, user, session) => {
+  for (const item of order.items) {
+    const stockId = resolveStockId(item);
+    const qty = Number(item.quantity);
+    if (!stockId || !Number.isFinite(qty) || qty <= 0 || qty > MAX_QTY) {
+      throw { status: 400, message: `Invalid reserved quantity for ${item.size}.` };
+    }
+
+    const stock = await ProductStock.findOne({ _id: stockId, isActive: true }).session(session);
+    if (!stock) {
+      throw { status: 404, message: `No active stock found for ${item.size} reel.` };
+    }
+
+    const before = Number(stock.quantity || 0);
+    const reservedBefore = Number(stock.reservedQty || 0);
+    if (
+      !Number.isFinite(before) || !Number.isFinite(reservedBefore) ||
+      before < qty || reservedBefore < qty || reservedBefore > before
+    ) {
+      throw {
+        status: 409,
+        code: "RESERVATION_INCONSISTENT",
+        message: `The reserved stock for ${item.size} is insufficient or inconsistent. Verify this order's reservation before confirming it.`,
+      };
+    }
+
+    const after = before - qty;
+    const reservedAfter = reservedBefore - qty;
+    const result = await ProductStock.updateOne(
+      { _id: stockId, isActive: true, quantity: before, reservedQty: reservedBefore },
+      [{
+        $set: {
+          quantity: after,
+          reservedQty: reservedAfter,
+          lastIssuedAt: "$$NOW",
+          movementLog: {
+            $slice: [
+              {
+                $concatArrays: [
+                  { $ifNull: ["$movementLog", []] },
+                  [{
+                    type: "out",
+                    quantity: qty,
+                    unitAtTime: stock.unit,
+                    beforeQty: before,
+                    afterQty: after,
+                    reason: `Reserved stock consumed for order ${order.orderNumber}`,
+                    notes: null,
+                    refType: "Dispatch",
+                    refId: order._id,
+                    refLabel: order.orderNumber,
+                    by: user?._id || null,
+                    at: "$$NOW",
+                  }],
+                ],
+              },
+              -MAX_MOVEMENT_LOG,
+            ],
+          },
+        },
+      }],
+      {
+        session,
+        updatePipeline: true,
+      }
+    );
+
+    if (result.modifiedCount !== 1) {
+      throw {
+        status: 409,
+        code: "STOCK_CHANGED",
+        message: `Reserved stock for ${item.size} changed while confirming this order. Please retry.`,
+      };
+    }
+    item.reservedQtyUsed = qty;
+  }
+};
+
+
+const restoreOrderStock = async (order, user, session) => {
+  for (const item of order.items) {
+    const stockId = resolveStockId(item);
+    const qty = Number(item.quantity);
+
+    if (!stockId || !Number.isFinite(qty) || qty <= 0 || qty > MAX_QTY) {
+      throw {
+        status: 400,
+        message: `Invalid stock restoration data for ${item.size}.`,
+      };
+    }
+
+    const stock = await ProductStock.findOne({
+      _id: stockId,
+      isActive: true,
+    }).session(session);
+
+    if (!stock) {
+      throw {
+        status: 409,
+        message: `Cannot restore ${item.size}: active stock record not found.`,
+      };
+    }
+
+    const before = Number(stock.quantity || 0);
+    const reservedBefore = Number(stock.reservedQty || 0);
+
+    // Restore only the portion that this order originally consumed
+    // from reserved stock.
+    const reservedQtyUsed = Number(item.reservedQtyUsed || 0);
+
+    if (
+      !Number.isFinite(before) ||
+      before < 0 ||
+      !Number.isFinite(reservedBefore) ||
+      reservedBefore < 0 ||
+      reservedBefore > before ||
+      !Number.isFinite(reservedQtyUsed) ||
+      reservedQtyUsed < 0 ||
+      reservedQtyUsed > qty
+    ) {
+      throw {
+        status: 409,
+        code: "RESERVATION_INCONSISTENT",
+        message: `Cannot safely restore ${item.size}: stock or reservation quantities are inconsistent.`,
+      };
+    }
+
+    const after = before + qty;
+    const reservedAfter = reservedBefore + reservedQtyUsed;
+
+    if (
+      !Number.isFinite(after) ||
+      after > MAX_QTY ||
+      reservedAfter > after
+    ) {
+      throw {
+        status: 409,
+        code: "RESERVATION_INCONSISTENT",
+        message: `Restoring ${item.size} would create an invalid stock reservation.`,
+      };
+    }
+
+    const result = await ProductStock.updateOne(
+      {
+        _id: stockId,
+        isActive: true,
+        quantity: before,
+        reservedQty: reservedBefore,
+      },
+      [
+        {
+          $set: {
+            quantity: after,
+            reservedQty: reservedAfter,
             lastReceivedAt: "$$NOW",
             movementLog: {
               $slice: [
@@ -325,10 +464,13 @@ const restoreOrderStock = async (order, user) => {
                       {
                         type: "in",
                         quantity: qty,
-                        unitAtTime: "$unit",
-                        beforeQty: "$quantity",
-                        afterQty: { $add: ["$quantity", qty] },
-                        reason: `Order cancelled (${order.orderNumber})`,
+                        unitAtTime: stock.unit,
+                        beforeQty: before,
+                        afterQty: after,
+                        reason:
+                          reservedQtyUsed > 0
+                            ? `Cancelled order ${order.orderNumber}: restored ${qty} stock, including ${reservedQtyUsed} reserved`
+                            : `Cancelled order ${order.orderNumber} stock restored`,
                         notes: null,
                         refType: "Manual",
                         refId: order._id,
@@ -345,8 +487,105 @@ const restoreOrderStock = async (order, user) => {
           },
         },
       ],
-      { updatePipeline: true }
+      {
+        session,
+        updatePipeline: true,
+      }
     );
+
+    if (result.modifiedCount !== 1) {
+      throw {
+        status: 409,
+        code: "STOCK_CHANGED",
+        message: `Stock for ${item.size} changed during restoration. Please retry.`,
+      };
+    }
+  }
+};
+
+const releaseOrderReservation = async (order, user, session) => {
+  for (const item of order.items) {
+    const stockId = resolveStockId(item);
+    const qty = Number(item.quantity);
+    if (!stockId || !Number.isFinite(qty) || qty <= 0 || qty > MAX_QTY) {
+      throw {
+        status: 400,
+        message: `Invalid reservation release data for ${item.size}.`,
+      };
+    }
+
+    const stock = await ProductStock.findOne({ _id: stockId, isActive: true }).session(session);
+    if (!stock) {
+      throw {
+        status: 409,
+        message: `Cannot release ${item.size} reservation: active stock record not found.`,
+      };
+    }
+
+    const before = Number(stock.quantity || 0);
+    const reservedBefore = Number(stock.reservedQty || 0);
+    if (!Number.isFinite(before) || before < 0 || !Number.isFinite(reservedBefore) || reservedBefore < qty || reservedBefore > before) {
+      throw {
+        status: 409,
+        code: "RESERVATION_INCONSISTENT",
+        message: `Cannot safely release ${item.size} reservation. Verify the order reservation and stock record before retrying.`,
+      };
+    }
+
+    const reservedAfter = reservedBefore - qty;
+    const result = await ProductStock.updateOne(
+      {
+        _id: stockId,
+        isActive: true,
+        quantity: before,
+        reservedQty: reservedBefore,
+      },
+      [
+        {
+          $set: {
+            reservedQty: reservedAfter,
+            movementLog: {
+              $slice: [
+                {
+                  $concatArrays: [
+                    { $ifNull: ["$movementLog", []] },
+                    [
+                      {
+                        type: "adjustment",
+                        quantity: qty,
+                        unitAtTime: stock.unit,
+                        beforeQty: before,
+                        afterQty: before,
+                        reason: `Reservation released for cancelled order ${order.orderNumber}`,
+                        notes: null,
+                        refType: "Manual",
+                        refId: order._id,
+                        refLabel: order.orderNumber,
+                        by: user?._id || null,
+                        at: "$$NOW",
+                      },
+                    ],
+                  ],
+                },
+                -MAX_MOVEMENT_LOG,
+              ],
+            },
+          },
+        },
+      ],
+      {
+        session,
+        updatePipeline: true,
+      }
+    );
+
+    if (result.modifiedCount !== 1) {
+      throw {
+        status: 409,
+        code: "STOCK_CHANGED",
+        message: `Reservation for ${item.size} changed during cancellation. Please retry.`,
+      };
+    }
   }
 };
 
@@ -508,6 +747,14 @@ const createOrder = async (req, res) => {
       allowReserved = false,
     } = req.body;
 
+    if (
+      typeof allowReserved !== "boolean" &&
+      allowReserved !== "true" &&
+      allowReserved !== "false"
+    ) {
+      return res.status(400).json({ success: false, message: "allowReserved must be a boolean" });
+    }
+
     let contactDoc = null;
     let finalContactId = null;
 
@@ -557,8 +804,11 @@ const createOrder = async (req, res) => {
       return res.status(400).json({ success: false, message: "Tax percent must be between 0 and 100" });
     }
 
-    if (!VALID_STATUSES.includes(status)) {
-      return res.status(400).json({ success: false, message: "Invalid status" });
+    if (!["Draft", "Confirmed"].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: "New orders can only be created as Draft or Confirmed.",
+      });
     }
 
     let cleanExpectedDelivery;
@@ -599,44 +849,26 @@ const createOrder = async (req, res) => {
       createdBy: req.user?._id || null,
     };
 
-    let order = null;
-    for (let attempt = 0; attempt < 3 && !order; attempt++) {
-      try {
-        const orderNumber = await generateOrderNumber();
-        order = await Order.create({ ...orderPayload, orderNumber });
-      } catch (err) {
-        if (err.code === 11000 && attempt < 2) continue;
-        throw err;
-      }
-    }
+    let order;
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        const orderNumber = await generateOrderNumber(session);
+        [order] = await Order.create(
+          [{ ...orderPayload, orderNumber }],
+          { session }
+        );
 
-    if (order.status === "Confirmed") {
-      try {
-        await deductOrderStock(order, req.user, !!allowReserved);
-        order.stockStatus = "Deducted";
-        order.stockDeductedAt = new Date();
-        await order.save();
-      } catch (err) {
-        order.status = "Draft";
-        order.stockStatus = "Pending";
-        await order.save();
-
-        if (err.code === "RESERVED_CONFLICT") {
-          return res.status(409).json({
-            success: false,
-            code: "RESERVED_CONFLICT",
-            message: err.message,
-            data: err.data,
-            order,
-          });
+        if (order.status === "Confirmed") {
+          await deductOrderStock(order, req.user, allowReserved === true || allowReserved === "true", session);
+          order.stockStatus = "Deducted";
+          order.stockDeductedAt = new Date();
+          order.updatedBy = req.user?._id || null;
+          await order.save({ session });
         }
-
-        return res.status(err.status || 400).json({
-          success: false,
-          message: err.message || "Stock deduction failed — order saved as Draft.",
-          data: order,
-        });
-      }
+      });
+    } finally {
+      await session.endSession();
     }
 
     const populated = await Order.findById(order._id)
@@ -649,6 +881,24 @@ const createOrder = async (req, res) => {
       data: populated,
     });
   } catch (error) {
+    if (error?.code === "RESERVED_CONFLICT") {
+      return res.status(409).json({
+        success: false,
+        code: error.code,
+        message: error.message,
+        data: error.data,
+      });
+    }
+    if (error?.code === "STOCK_CHANGED") {
+      return res.status(409).json({ success: false, code: error.code, message: error.message });
+    }
+    if (error?.status) {
+      return res.status(error.status).json({
+        success: false,
+        ...(error.code ? { code: error.code } : {}),
+        message: error.message || "Failed to create order",
+      });
+    }
     handleError(res, error, "Server error while creating order");
   }
 };
@@ -664,10 +914,10 @@ const updateOrder = async (req, res) => {
       return res.status(404).json({ success: false, message: "Order not found" });
     }
 
-    if (order.status !== "Draft" && req.body.items) {
+    if (req.body.items !== undefined && (order.status !== "Draft" || (order.stockStatus || "Pending") !== "Pending")) {
       return res.status(400).json({
         success: false,
-        message: "Cannot edit items after order is confirmed. Create a new order or cancel this one.",
+        message: "Order items can only be edited while the order is Draft and has no stock reservation or deduction.",
       });
     }
 
@@ -725,10 +975,39 @@ const updateOrder = async (req, res) => {
     }
 
     if (totalsChanged) {
-      const taxableAmount = Math.max(0, Number(order.subTotal || 0) - Number(order.discount || 0));
-      order.taxAmount = (taxableAmount * Number(order.taxPercent || 0)) / 100;
-      order.grandTotal = taxableAmount + order.taxAmount;
-    }
+  const taxableAmount = Math.max(
+    0,
+    Number(order.subTotal || 0) - Number(order.discount || 0)
+  );
+
+  const taxAmount =
+    (taxableAmount * Number(order.taxPercent || 0)) / 100;
+
+  const grandTotal = round2(taxableAmount + taxAmount);
+  const amountPaid = round2(Number(order.amountPaid || 0));
+
+  if (amountPaid > grandTotal + 0.01) {
+    return res.status(400).json({
+      success: false,
+      code: "ORDER_TOTAL_BELOW_PAID_AMOUNT",
+      message:
+        "The new order total cannot be lower than the amount already paid.",
+    });
+  }
+
+  order.taxAmount = round2(taxAmount);
+  order.grandTotal = grandTotal;
+
+  if (amountPaid >= grandTotal) {
+    order.paymentStatus = "Paid";
+  } else if (order.paymentStatus === "Overdue") {
+    order.paymentStatus = "Overdue";
+  } else if (amountPaid > 0) {
+    order.paymentStatus = "Partial";
+  } else {
+    order.paymentStatus = "Pending";
+  }
+}
 
     order.updatedBy = req.user?._id || null;
     await order.save();
@@ -748,84 +1027,128 @@ const updateOrder = async (req, res) => {
 };
 
 const updateOrderStatus = async (req, res) => {
+  if (!isValidId(req.params.id)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid order ID",
+    });
+  }
+
+  const { status, allowReserved = false } = req.body;
+
+  if (!VALID_STATUSES.includes(status)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid order status",
+    });
+  }
+
+  // Accept only actual booleans or their explicit string equivalents.
+  if (
+    typeof allowReserved !== "boolean" &&
+    allowReserved !== "true" &&
+    allowReserved !== "false"
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: "allowReserved must be a boolean",
+    });
+  }
+
+  const allowReservedStock = allowReserved === true || allowReserved === "true";
+  const session = await mongoose.startSession();
+
   try {
-    if (!isValidId(req.params.id)) {
-      return res.status(400).json({ success: false, message: "Invalid order ID" });
-    }
+    await session.withTransaction(async () => {
+      const order = await Order.findOne({
+        _id: req.params.id,
+        isActive: true,
+      }).session(session);
 
-    const { status, allowReserved = false } = req.body;
-    if (!VALID_STATUSES.includes(status)) {
-      return res.status(400).json({ success: false, message: "Invalid order status" });
-    }
-
-    const order = await Order.findById(req.params.id);
-    if (!order || !order.isActive) {
-      return res.status(404).json({ success: false, message: "Order not found" });
-    }
-
-    const fromStatus = order.status;
-
-    if (fromStatus === status) {
-      const populated = await Order.findById(order._id)
-        .populate("contact", CONTACT_FIELDS)
-        .populate("enquiry", "enquiryNumber customerName company subject");
-      return res.status(200).json({
-        success: true,
-        message: `Order is already in status ${status}`,
-        data: populated,
-      });
-    }
-
-    if (fromStatus === "Delivered" && status !== "Delivered") {
-      return res.status(400).json({ success: false, message: "Cannot change status of a Delivered order." });
-    }
-
-    if (status === "Cancelled" && ["Dispatched", "Delivered"].includes(fromStatus)) {
-      return res.status(400).json({
-        success: false,
-        message: `Cannot cancel an order that is already ${fromStatus}.`,
-      });
-    }
-
-    const currentStockStatus = order.stockStatus || "Pending";
-
-    const shouldDeduct = status === "Confirmed" && currentStockStatus === "Pending";
-    const shouldRestore =
-      status === "Cancelled" && currentStockStatus === "Deducted";
-
-    if (shouldDeduct) {
-      try {
-        await deductOrderStock(order, req.user, !!allowReserved);
-      } catch (err) {
-        if (err.code === "RESERVED_CONFLICT") {
-          return res.status(409).json({
-            success: false,
-            code: "RESERVED_CONFLICT",
-            message: err.message,
-            data: err.data,
-          });
-        }
-        throw err;
+      if (!order) {
+        throw {
+          status: 404,
+          message: "Order not found",
+        };
       }
-      order.stockStatus = "Deducted";
-      order.stockDeductedAt = new Date();
-    }
 
-    if (shouldRestore) {
-      await restoreOrderStock(order, req.user);
-      order.stockStatus = "Restored";
-      order.stockRestoredAt = new Date();
-    }
+      const fromStatus = order.status;
 
-    if (status === "Dispatched" && !order.dispatchedDate) order.dispatchedDate = new Date();
-    if (status === "Delivered" && !order.deliveredDate) order.deliveredDate = new Date();
-    if (status === "Cancelled" && !order.cancelledDate) order.cancelledDate = new Date();
+      if (fromStatus === status) {
+        return;
+      }
 
-    order.status = status;
-    order.updatedBy = req.user?._id || null;
-    await order.save();
+      const allowedTransitions = {
+        Draft: ["Confirmed", "Cancelled"],
+        Confirmed: ["In Production", "Cancelled"],
+        "In Production": ["Ready for Dispatch", "Cancelled"],
+        "Ready for Dispatch": ["Dispatched", "Cancelled"],
+        Dispatched: ["Delivered"],
+        Delivered: [],
+        Cancelled: [],
+      };
 
-    const populated = await Order.findById(order._id)
+      if (!allowedTransitions[fromStatus]?.includes(status)) {
+        throw {
+          status: 400,
+          code: "INVALID_STATUS_TRANSITION",
+          message: `Cannot change order status from ${fromStatus} to ${status}.`,
+        };
+      }
+
+      if (fromStatus === "Cancelled") {
+        throw {
+          status: 400,
+          code: "ORDER_ALREADY_CANCELLED",
+          message:
+            "A cancelled order cannot be reactivated. Please create a new order instead.",
+        };
+      }
+
+      const currentStockStatus = order.stockStatus || "Pending";
+
+      if (status === "Confirmed" && currentStockStatus === "Pending") {
+        await deductOrderStock(order, req.user, allowReservedStock, session);
+        order.stockStatus = "Deducted";
+        order.stockDeductedAt = new Date();
+      } else if (status === "Confirmed" && currentStockStatus === "Reserved") {
+        await deductReservedOrderStock(order, req.user, session);
+        order.stockStatus = "Deducted";
+        order.stockDeductedAt = new Date();
+      }
+
+      if (status === "Cancelled" && currentStockStatus === "Deducted") {
+        await restoreOrderStock(order, req.user, session);
+        order.stockStatus = "Restored";
+        order.stockRestoredAt = new Date();
+      } else if (status === "Cancelled" && currentStockStatus === "Reserved") {
+        await releaseOrderReservation(order, req.user, session);
+        order.stockStatus = "Restored";
+        order.stockRestoredAt = new Date();
+      }
+
+      if (status === "Dispatched" && !order.dispatchedDate) {
+        order.dispatchedDate = new Date();
+      }
+
+      if (status === "Delivered" && !order.deliveredDate) {
+        order.deliveredDate = new Date();
+      }
+
+      if (status === "Cancelled" && !order.cancelledDate) {
+        order.cancelledDate = new Date();
+      }
+
+      order.status = status;
+      order.updatedBy = req.user?._id || null;
+
+      await order.save({ session });
+    });
+
+    const populated = await Order.findOne({
+      _id: req.params.id,
+      isActive: true,
+    })
       .populate("contact", CONTACT_FIELDS)
       .populate("enquiry", "enquiryNumber customerName company subject");
 
@@ -835,53 +1158,49 @@ const updateOrderStatus = async (req, res) => {
       data: populated,
     });
   } catch (error) {
-    if (error.status === 400) {
-      return res.status(400).json({ success: false, message: error.message });
+    if (error.code === "RESERVED_CONFLICT") {
+      return res.status(409).json({
+        success: false,
+        code: error.code,
+        message: error.message,
+        data: error.data,
+      });
     }
-    if (error.status === 404) {
-      return res.status(404).json({ success: false, message: error.message });
+
+    if (error.code === "STOCK_CHANGED" || error.code === "RESERVATION_INCONSISTENT") {
+      return res.status(409).json({
+        success: false,
+        code: error.code,
+        message: error.message,
+      });
     }
-    handleError(res, error, "Server error while updating status");
+
+    if (error.status === 400 || error.status === 404) {
+      return res.status(error.status).json({
+        success: false,
+        ...(error.code ? { code: error.code } : {}),
+        message: error.message,
+      });
+    }
+
+    return handleError(
+      res,
+      error,
+      "Server error while updating order status"
+    );
+  } finally {
+    await session.endSession();
   }
 };
 
+
 const updatePayment = async (req, res) => {
-  try {
-    if (!isValidId(req.params.id)) {
-      return res.status(400).json({ success: false, message: "Invalid order ID" });
-    }
-    const order = await Order.findById(req.params.id);
-    if (!order || !order.isActive) {
-      return res.status(404).json({ success: false, message: "Order not found" });
-    }
-
-    const { paymentStatus, amountPaid } = req.body;
-
-    if (paymentStatus !== undefined) {
-      if (!VALID_PAYMENT_STATUSES.includes(paymentStatus)) {
-        return res.status(400).json({ success: false, message: "Invalid payment status" });
-      }
-      order.paymentStatus = paymentStatus;
-    }
-
-    if (amountPaid !== undefined) {
-      const n = Number(amountPaid);
-      if (!Number.isFinite(n) || n < 0 || n > MAX_AMOUNT) {
-        return res.status(400).json({ success: false, message: "Invalid amount paid" });
-      }
-      order.amountPaid = n;
-    }
-
-    order.updatedBy = req.user?._id || null;
-    await order.save();
-
-    const populated = await Order.findById(order._id)
-      .populate("contact", CONTACT_FIELDS);
-
-    return res.status(200).json({ success: true, message: "Payment updated", data: populated });
-  } catch (error) {
-    handleError(res, error, "Server error while updating payment");
-  }
+  return res.status(400).json({
+    success: false,
+    code: "PAYMENT_RECORD_REQUIRED",
+    message:
+      "Manage payments through the Payments module. Order payment totals are calculated from payment records.",
+  });
 };
 
 /* ======================================================
@@ -905,10 +1224,10 @@ const deleteOrder = async (req, res) => {
       });
     }
 
-    if (order.stockStatus === "Deducted") {
+    if (["Reserved", "Deducted"].includes(order.stockStatus)) {
       return res.status(400).json({
         success: false,
-        message: "This order is still holding stock. Cancel the order first, then delete.",
+        message: "This order still holds or reserves stock. Cancel it first so inventory is safely released, then delete.",
       });
     }
 

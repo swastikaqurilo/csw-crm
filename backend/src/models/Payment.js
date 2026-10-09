@@ -79,7 +79,7 @@ const paymentSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: {
-        values: ['Pending', 'Completed', 'Failed', 'Bounced', 'Cancelled'],
+        values: ['Pending', 'Completed', 'Cancelled'],
         message: '{VALUE} is not a valid status',
       },
       default: 'Completed',
@@ -100,8 +100,7 @@ const paymentSchema = new mongoose.Schema(
       type: String,
       trim: true,
       maxlength: [500, 'Attachment URL too long'],
-      // only http(s), or empty — blocks javascript:, data:, etc.
-      match: [/^https?:\/\/|^$/, 'Attachment URL must be a valid http(s) URL'],
+      match: [/^https?:\/\/\S+$|^$/, 'Attachment URL must be a valid http(s) URL'],
     },
 
     isReconciled: {
@@ -135,6 +134,13 @@ const paymentSchema = new mongoose.Schema(
 );
 
 paymentSchema.pre('validate', function () {
+  if (this.isReconciled && !this.reconciledDate) {
+    this.reconciledDate = new Date();
+  }
+
+  if (!this.isReconciled) {
+    this.reconciledDate = null;
+  }
   if (this.paymentMode === 'Cheque') {
     if (!this.chequeNumber) {
       this.invalidate('chequeNumber', 'Cheque number is required for Cheque payments');
@@ -161,6 +167,13 @@ paymentSchema.index({ contact: 1 });
 paymentSchema.index({ paymentDate: -1 });
 paymentSchema.index({ status: 1 });
 paymentSchema.index({ paymentMode: 1 });
-paymentSchema.index({ transactionId: 1 }, { unique: true, sparse: true });
-
+paymentSchema.index(
+  { transactionId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      transactionId: { $type: "string", $gt: "" },
+    },
+  }
+);
 module.exports = mongoose.model('Payment', paymentSchema);

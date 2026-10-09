@@ -1,8 +1,11 @@
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 
-const JWT_SECRET =
-  process.env.JWT_SECRET || "csw-enquiries-secret-change-in-production";
+const JWT_SECRET = process.env.JWT_SECRET;
+
+if (!JWT_SECRET) {
+  throw new Error("JWT_SECRET must be configured in the environment");
+}
 
 const protect = async (req, res, next) => {
   try {

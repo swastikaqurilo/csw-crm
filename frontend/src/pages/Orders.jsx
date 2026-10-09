@@ -233,7 +233,14 @@ function ConfirmDialog({ title, message, confirmLabel, tone = "primary", onConfi
       </div>
       <div className="flex shrink-0 flex-col-reverse gap-2 px-4 py-4 sm:flex-row sm:justify-end sm:px-5">
         <button type="button" onClick={onClose} className={`${BTN_SECONDARY} h-9 sm:w-auto`}>Cancel</button>
-        <button type="button" onClick={onConfirm} className={`${BTN} ${toneMap[2]} h-9 px-4 text-xs text-white`}>
+        <button
+          type="button"
+          onClick={async () => {
+            onClose();
+            await onConfirm?.();
+          }}
+          className={`${BTN} ${toneMap[2]} h-9 px-4 text-xs text-white`}
+        >
           <CheckCircle2 size={14} />{confirmLabel}
         </button>
       </div>

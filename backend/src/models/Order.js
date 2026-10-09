@@ -31,6 +31,18 @@ const orderItemSchema = new mongoose.Schema({
     max: [1000000, "Quantity too large"],
   },
 
+  reservedQtyUsed: {
+    type: Number,
+    default: 0,
+    min: [0, "Reserved quantity used cannot be negative"],
+    validate: {
+      validator: function (value) {
+        return value <= this.quantity;
+      },
+      message: "Reserved quantity used cannot exceed ordered quantity",
+    },
+  },
+
   unit: {
     type: String,
     enum: {
@@ -57,7 +69,7 @@ const orderItemSchema = new mongoose.Schema({
 
   amount: {
     type: Number,
-    required: true,
+    required: [true, "Amount is required"],
     min: [0, "Amount cannot be negative"],
     max: [1e12, "Amount too large"],
   },
@@ -85,20 +97,33 @@ const orderSchema = new mongoose.Schema(
       required: [true, "Contact is required"],
     },
 
-    // Snapshot fields (in case contact is edited later)
-    customerName: { type: String, trim: true, maxlength: 150, default: "" },
-    customerPhone: { type: String, trim: true, maxlength: 30, default: "" },
+    // Snapshot fields preserve customer details if the contact changes.
+    customerName: {
+      type: String,
+      trim: true,
+      maxlength: [150, "Customer name too long"],
+      default: "",
+    },
+
+    customerPhone: {
+      type: String,
+      trim: true,
+      maxlength: [30, "Customer phone too long"],
+      default: "",
+    },
 
     items: {
       type: [orderItemSchema],
       required: true,
       validate: [
         {
-          validator: (items) => Array.isArray(items) && items.length > 0,
+          validator: (items) =>
+            Array.isArray(items) && items.length > 0,
           message: "Order must contain at least one item",
         },
         {
-          validator: (items) => !Array.isArray(items) || items.length <= 100,
+          validator: (items) =>
+            Array.isArray(items) && items.length <= 100,
           message: "Order cannot contain more than 100 items",
         },
       ],
@@ -158,11 +183,35 @@ const orderSchema = new mongoose.Schema(
       default: "Draft",
     },
 
-    orderDate: { type: Date, default: Date.now },
-    expectedDeliveryDate: { type: Date, default: null },
-    dispatchedDate: { type: Date, default: null },
-    deliveredDate: { type: Date, default: null },
-    cancelledDate: { type: Date, default: null },
+    orderDate: {
+      type: Date,
+      default: Date.now,
+    },
+
+    expectedDeliveryDate: {
+      type: Date,
+      default: null,
+    },
+
+    paymentDueDate: {
+      type: Date,
+      default: null,
+    },
+
+    dispatchedDate: {
+      type: Date,
+      default: null,
+    },
+
+    deliveredDate: {
+      type: Date,
+      default: null,
+    },
+
+    cancelledDate: {
+      type: Date,
+      default: null,
+    },
 
     shippingAddress: {
       type: String,
@@ -203,9 +252,20 @@ const orderSchema = new mongoose.Schema(
       default: "Pending",
     },
 
-    stockReservedAt: { type: Date, default: null },
-    stockDeductedAt: { type: Date, default: null },
-    stockRestoredAt: { type: Date, default: null },
+    stockReservedAt: {
+      type: Date,
+      default: null,
+    },
+
+    stockDeductedAt: {
+      type: Date,
+      default: null,
+    },
+
+    stockRestoredAt: {
+      type: Date,
+      default: null,
+    },
 
     notes: {
       type: String,
@@ -214,7 +274,10 @@ const orderSchema = new mongoose.Schema(
       default: "",
     },
 
-    isActive: { type: Boolean, default: true },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
 
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
@@ -231,8 +294,20 @@ const orderSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+orderSchema.pre("validate", function () {
+  if (this.amountPaid > this.grandTotal + 0.01) {
+    this.invalidate(
+      "amountPaid",
+      "Amount paid cannot exceed the order grand total."
+    );
+  }
+});
+
 orderSchema.virtual("totalQuantity").get(function () {
-  return (this.items || []).reduce((s, i) => s + Number(i.quantity || 0), 0);
+  return (this.items || []).reduce(
+    (sum, item) => sum + Number(item.quantity || 0),
+    0
+  );
 });
 
 orderSchema.set("toJSON", { virtuals: true });
@@ -242,6 +317,7 @@ orderSchema.index({ contact: 1 });
 orderSchema.index({ status: 1 });
 orderSchema.index({ paymentStatus: 1 });
 orderSchema.index({ orderDate: -1 });
+orderSchema.index({ isActive: 1, orderDate: -1 });
 
 module.exports = mongoose.model("Order", orderSchema);
 module.exports.REEL_SIZES = REEL_SIZES;

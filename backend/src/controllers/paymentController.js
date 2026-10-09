@@ -28,7 +28,7 @@ const safeString = (v, max = 500) => {
 };
 
 const escapeRegex = (str) =>
-  String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const parseDate = (v) => {
   if (!v) return null;
@@ -191,25 +191,7 @@ const getAllPayments = async (req, res) => {
           .json({ success: false, message: 'Invalid status filter' });
       }
 
-      if (status === 'Pending') {
-        const unpaidOrders = await Order.find({
-          isActive: true,
-          paymentStatus: { $in: ['Pending', 'Partial'] },
-        })
-          .select('_id')
-          .lean();
-
-        const unpaidOrderIds = unpaidOrders.map((o) => o._id);
-
-        andConditions.push({
-          $or: [
-            { status: 'Pending' },
-            { order: { $in: unpaidOrderIds } },
-          ],
-        });
-      } else {
-        query.status = status;
-      }
+      query.status = status;
     }
 
     if (paymentMode) {
@@ -399,11 +381,22 @@ const createPayment = async (req, res) => {
       : 'INR';
 
     /* ---------- find order ---------- */
-    const order = await Order.findById(orderId);
+    const order = await Order.findOne({
+      _id: orderId,
+      isActive: true,
+    });
     if (!order || !order.isActive) {
       return res
         .status(404)
         .json({ success: false, message: 'Order not found' });
+    }
+    
+    if (['Draft', 'Cancelled'].includes(order.status)) {
+      return res.status(400).json({
+        success: false,
+        code: 'ORDER_NOT_PAYABLE',
+        message: `Cannot record a payment for a ${order.status} order.`,
+      });
     }
 
     if (!order.contact) {
@@ -587,7 +580,17 @@ const updatePayment = async (req, res) => {
         payment.attachmentUrl = safeString(attachmentUrl, 500) || undefined;
       }
       if (isReconciled !== undefined) {
-        payment.isReconciled = Boolean(isReconciled);
+        if (typeof isReconciled === "boolean") {
+          payment.isReconciled = isReconciled;
+        } else if (isReconciled === "true" || isReconciled === "false") {
+          payment.isReconciled = isReconciled === "true";
+        } else {
+          return res.status(400).json({
+            success: false,
+            code: "INVALID_RECONCILIATION_STATUS",
+            message: "isReconciled must be a boolean.",
+          });
+        }
         if (isReconciled && !payment.reconciledDate && cleanReconciledDate === undefined) {
           payment.reconciledDate = new Date();
         }
@@ -602,6 +605,22 @@ const updatePayment = async (req, res) => {
 
       if (wasApplied !== isCompletedNow) {
         if (isCompletedNow) {
+          const order = await Order.findById(payment.order).session(session);
+
+          if (!order || !order.isActive) {
+            const err = new Error('Order not found or inactive');
+            err.status = 400;
+            throw err;
+          }
+
+          if (['Draft', 'Cancelled'].includes(order.status)) {
+            const err = new Error(
+              `Cannot complete a payment for a ${order.status} order.`
+            );
+            err.status = 400;
+            throw err;
+          }
+
           const updatedOrder = await applyToOrder({
             orderId: payment.order,
             amount: payment.amount,
@@ -647,6 +666,23 @@ const updatePayment = async (req, res) => {
         success: false,
         message: error.message,
       });
+    }
+    if (NEEDS_TXN_ID.includes(payment.paymentMode) && !payment.transactionId?.trim()) {
+      return res.status(400).json({
+        success: false,
+        code: "TRANSACTION_ID_REQUIRED",
+        message: `Transaction ID is required for ${payment.paymentMode}.`,
+      });
+    }
+
+    if (payment.paymentMode === "Cheque") {
+      if (!payment.chequeNumber?.trim() || !payment.bankName?.trim()) {
+        return res.status(400).json({
+          success: false,
+          code: "CHEQUE_DETAILS_REQUIRED",
+          message: "Cheque number and bank name are required for cheque payments.",
+        });
+      }
     }
     handleError(res, error, 'Server error while updating payment');
   } finally {
