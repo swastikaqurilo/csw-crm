@@ -1,5 +1,7 @@
 const mongoose = require("mongoose");
 const Contact = require("../models/Contacts");
+const Order = require("../models/Order");
+const Payment = require("../models/Payment");
 
 const isValidId = (v) => mongoose.isValidObjectId(v);
 
@@ -28,9 +30,9 @@ const createContact = async (req, res) => {
       role,
       email,
       phone,
-      address,            
-      billingAddress,      
-      shippingAddress,     
+      address,
+      billingAddress,
+      shippingAddress,
       gstin,
       state,
       stateCode,
@@ -39,17 +41,23 @@ const createContact = async (req, res) => {
     } = req.body;
 
     const cleanName = safeString(name, 150);
-    const cleanCompany = safeString(company, 200);
-    const cleanEmail = safeString(email, 200);
-
     if (!cleanName) {
       return res.status(400).json({ success: false, message: "Name is required" });
     }
-    if (!cleanCompany) {
-      return res.status(400).json({ success: false, message: "Company is required" });
-    }
-    if (!cleanEmail) {
-      return res.status(400).json({ success: false, message: "Email is required" });
+
+    // company & email optional (aligns with order-created contacts)
+    const cleanCompany = safeString(company, 200) || "";
+    const cleanEmail = safeString(email, 200) || "";
+
+    let cleanPhone = "";
+    if (phone !== undefined && phone !== null && String(phone).trim() !== "") {
+      cleanPhone = normalizePhone(phone);
+      if (cleanPhone && !/^[6-9]\d{9}$/.test(cleanPhone)) {
+        return res.status(400).json({
+          success: false,
+          message: "Enter a valid 10-digit Indian mobile number",
+        });
+      }
     }
 
     let cleanEnquiry = null;
@@ -61,19 +69,15 @@ const createContact = async (req, res) => {
     }
 
     const cleanAddress = safeString(address, 500) || "";
-    const cleanBilling =
-      safeString(billingAddress, 500) || cleanAddress;
-    const cleanShipping =
-      safeString(shippingAddress, 500) || cleanAddress;
+    const cleanBilling = safeString(billingAddress, 500) || cleanAddress;
+    const cleanShipping = safeString(shippingAddress, 500) || cleanAddress;
 
-    // Explicit whitelist — nothing from req.body flows raw.
-    // `contactId` and `enquiries` are NOT in this list → client can't set them.
     const payload = {
       name: cleanName,
       company: cleanCompany,
       role: safeString(role, 100) || "",
       email: cleanEmail,
-      phone: safeString(phone, 20) || "",
+      phone: cleanPhone,
 
       address: cleanAddress,
       billingAddress: cleanBilling,
@@ -169,7 +173,7 @@ const getContacts = async (req, res) => {
         total,
         page: pageNum,
         limit: limitNum,
-        totalPages: Math.ceil(total / limitNum),
+        totalPages: Math.ceil(total / limitNum) || 1,
       },
     });
   } catch (error) {
@@ -233,17 +237,26 @@ const updateContact = async (req, res) => {
       contact.name = v;
     }
     if (company !== undefined) {
-      const v = safeString(company, 200);
-      if (!v) return res.status(400).json({ success: false, message: "Invalid company" });
-      contact.company = v;
+      contact.company = safeString(company, 200) || "";
     }
     if (role !== undefined) contact.role = safeString(role, 100) || "";
     if (email !== undefined) {
-      const v = safeString(email, 200);
-      if (!v) return res.status(400).json({ success: false, message: "Invalid email" });
-      contact.email = v;
+      contact.email = safeString(email, 200) || "";
     }
-    if (phone !== undefined) contact.phone = safeString(phone, 20) || "";
+    if (phone !== undefined) {
+      if (phone === null || String(phone).trim() === "") {
+        contact.phone = "";
+      } else {
+        const p = normalizePhone(phone);
+        if (p && !/^[6-9]\d{9}$/.test(p)) {
+          return res.status(400).json({
+            success: false,
+            message: "Enter a valid 10-digit Indian mobile number",
+          });
+        }
+        contact.phone = p || "";
+      }
+    }
 
     if (address !== undefined) {
       const a = safeString(address, 500) || "";
@@ -282,7 +295,7 @@ const updateContact = async (req, res) => {
       contact.status = status;
     }
 
-    await contact.save(); 
+    await contact.save();
 
     const updated = await Contact.findById(contact._id).populate("enquiry");
 
@@ -328,11 +341,30 @@ const deleteContact = async (req, res) => {
       return res.status(404).json({ success: false, message: "Contact not found" });
     }
 
-    await contact.deleteOne();
+    // Soft-delete: keep history for orders / payments
+    const [orderCount, paymentCount] = await Promise.all([
+      Order.countDocuments({ contact: contact._id, isActive: true }),
+      Payment.countDocuments({ contact: contact._id, isActive: true }),
+    ]);
 
-    res.status(200).json({
+    if (contact.status === "inactive") {
+      return res.status(200).json({
+        success: true,
+        message: "Contact is already inactive",
+        data: contact,
+      });
+    }
+
+    contact.status = "inactive";
+    await contact.save();
+
+    return res.status(200).json({
       success: true,
-      message: "Contact deleted successfully",
+      message:
+        orderCount + paymentCount > 0
+          ? "Contact deactivated (linked orders/payments preserved)"
+          : "Contact deactivated successfully",
+      data: contact,
     });
   } catch (error) {
     console.error("[deleteContact]", error);
