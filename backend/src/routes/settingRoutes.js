@@ -1,8 +1,9 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const { getSettings, updateSettings } = require('../controllers/settingsController');
+const { restrictTo } = require("../middleware/auth");
+const { getSettings, updateSettings } = require("../controllers/settingsController");
 
-router.get('/', getSettings);
-router.put('/', updateSettings);
+router.get("/", getSettings);
+router.put("/", restrictTo("Admin"), updateSettings);
 
 module.exports = router;

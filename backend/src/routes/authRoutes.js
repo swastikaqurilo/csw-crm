@@ -1,9 +1,14 @@
 const express = require("express");
+const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const { protect, JWT_SECRET } = require("../middleware/auth");
 
 const router = express.Router();
+
+// Dummy hash so missing-user path takes similar time as a real bcrypt compare
+const DUMMY_HASH =
+  "$2a$12$C6UzMDM.H6dfI/f/IKcEe.9w3z6Oa4q0qLZf1J0q4x6YvGKzS5w8u";
 
 const signToken = (id) => {
   return jwt.sign({ id }, JWT_SECRET, {
@@ -22,11 +27,30 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    const user = await User.findOne({ email: email.toLowerCase().trim() }).select(
-      "+password"
-    );
+    if (typeof email !== "string" || typeof password !== "string") {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide email and password.",
+      });
+    }
 
-    if (!user || !(await user.comparePassword(password))) {
+    if (password.length > 128) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid email or password.",
+      });
+    }
+
+    const user = await User.findOne({
+      email: email.toLowerCase().trim(),
+    }).select("+password");
+
+    // Always run a bcrypt compare (dummy hash when user missing)
+    const passwordOk = user
+      ? await user.comparePassword(password)
+      : await bcrypt.compare(password, DUMMY_HASH);
+
+    if (!user || !passwordOk) {
       return res.status(401).json({
         success: false,
         message: "Invalid email or password.",
@@ -40,12 +64,10 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    // Update lastLogin
     user.lastLogin = new Date();
     await user.save({ validateBeforeSave: false });
 
     const token = signToken(user._id);
-
     user.password = undefined;
 
     res.status(200).json({
@@ -102,7 +124,7 @@ router.post("/register", async (req, res) => {
       name: name.trim(),
       email: email.toLowerCase().trim(),
       password,
-      role:"Sales Executive",
+      role: "Sales Executive",
     });
 
     const token = signToken(user._id);

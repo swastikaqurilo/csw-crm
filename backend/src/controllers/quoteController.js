@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const Quotation = require("../models/Quote");
 const Enquiry = require("../models/Enquiry");
+const { getNextSequence } = require("../models/Counter");
 
 const GST_RATE = 0.09; 
 
@@ -264,10 +265,9 @@ exports.createQuotation = async (req, res) => {
 
     const totals = computeTotals(cleanItems);
 
-    const existingCount = await Quotation.countDocuments({ enquiry: enquiry._id });
-    const quotationNumber = `QT-${enquiry.enquiryNumber}-${String(
-      existingCount + 1
-    ).padStart(2, "0")}`;
+    // Atomic sequence per enquiry — safe under concurrent creates
+    const seq = await getNextSequence(`quote-${enquiry._id}`);
+    const quotationNumber = `QT-${enquiry.enquiryNumber}-${String(seq).padStart(2, "0")}`;
 
     const quotation = await Quotation.create({
       quotationNumber,
@@ -314,6 +314,12 @@ exports.createQuotation = async (req, res) => {
           field: e.path,
           message: e.message,
         })),
+      });
+    }
+    if (err.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: "Quotation number conflict. Please retry.",
       });
     }
     res.status(500).json({ success: false, message: "Failed to create quotation." });

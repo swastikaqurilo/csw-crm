@@ -796,33 +796,36 @@ const updateProductReserved = async (req, res) => {
       return res.status(404).json({ success: false, message: "Not found" });
     }
 
-    /* ── Reserved quantity (optional) ────────────────────── */
+    const qtyBefore = Number(doc.quantity || 0);
+    const reservedBefore = Number(doc.reservedQty || 0);
+    let reservedAfter = reservedBefore;
+    let reorderLevel = doc.reorderLevel;
+    let criticalLevel = doc.criticalLevel;
+    let logEntry = null;
+
     if (req.body.reservedQty !== undefined) {
       const n = Number(req.body.reservedQty);
       if (!Number.isFinite(n) || n < 0 || n > MAX_QTY) {
         return res.status(400).json({ success: false, message: "Invalid reservedQty" });
       }
-      if (n > Number(doc.quantity || 0)) {
+      if (n > qtyBefore) {
         return res.status(400).json({
           success: false,
-          message: `Cannot reserve more than available (${doc.quantity} ${doc.unit})`,
+          message: `Cannot reserve more than available (${qtyBefore} ${doc.unit})`,
         });
       }
-
-      const before = Number(doc.reservedQty || 0);
-      doc.reservedQty = n;
-
-      pushProductMovement(doc, {
+      reservedAfter = n;
+      logEntry = {
         type: "adjustment",
-        quantity: Math.abs(n - before),
+        quantity: Math.abs(n - reservedBefore),
         unitAtTime: doc.unit,
-        beforeQty: Number(doc.quantity || 0),
-        afterQty: Number(doc.quantity || 0),
+        beforeQty: qtyBefore,
+        afterQty: qtyBefore,
         reason:
-          n > before
-            ? `Reserved increased by ${n - before}`
-            : n < before
-            ? `Reserved released by ${before - n}`
+          n > reservedBefore
+            ? `Reserved increased by ${n - reservedBefore}`
+            : n < reservedBefore
+            ? `Reserved released by ${reservedBefore - n}`
             : "Reserved updated (no change)",
         notes: safeString(req.body.notes, 500) || null,
         refType: "Manual",
@@ -830,41 +833,78 @@ const updateProductReserved = async (req, res) => {
         refLabel: "reserved-change",
         by: req.user?._id || null,
         at: new Date(),
-      });
+      };
     }
 
-    /* ── Reorder level (optional) ────────────────────────── */
     if (req.body.reorderLevel !== undefined) {
       const r = Number(req.body.reorderLevel);
       if (!Number.isFinite(r) || r < 0 || r > MAX_QTY) {
         return res.status(400).json({ success: false, message: "Invalid reorderLevel" });
       }
-      doc.reorderLevel = r;
+      reorderLevel = r;
     }
 
-    /* ── Critical level (optional) ───────────────────────── */
     if (req.body.criticalLevel !== undefined) {
       const c = Number(req.body.criticalLevel);
       if (!Number.isFinite(c) || c < 0 || c > MAX_QTY) {
         return res.status(400).json({ success: false, message: "Invalid criticalLevel" });
       }
-      doc.criticalLevel = c;
+      criticalLevel = c;
     }
 
-    if (Number(doc.criticalLevel) > Number(doc.reorderLevel)) {
+    if (Number(criticalLevel) > Number(reorderLevel)) {
       return res.status(400).json({
         success: false,
         message: "Critical level cannot be higher than reorder level",
       });
     }
 
-    doc.updatedBy = req.user?._id || null;
-    await doc.save();
+    const setFields = {
+      reservedQty: reservedAfter,
+      reorderLevel,
+      criticalLevel,
+      updatedBy: req.user?._id || null,
+    };
 
+    const pipeline = [{ $set: setFields }];
+    if (logEntry) {
+      pipeline[0].$set.movementLog = {
+        $slice: [
+          {
+            $concatArrays: [
+              { $ifNull: ["$movementLog", []] },
+              [logEntry],
+            ],
+          },
+          -MAX_MOVEMENT_LOG,
+        ],
+      };
+    }
+
+    const result = await ProductStock.updateOne(
+      {
+        _id: doc._id,
+        isActive: true,
+        quantity: qtyBefore,
+        reservedQty: reservedBefore,
+      },
+      pipeline,
+      { updatePipeline: true }
+    );
+
+    if (result.modifiedCount !== 1) {
+      return res.status(409).json({
+        success: false,
+        code: "STOCK_CHANGED",
+        message: "Stock changed while updating. Please retry.",
+      });
+    }
+
+    const updated = await ProductStock.findById(doc._id);
     return res.status(200).json({
       success: true,
       message: "Stock settings updated",
-      data: doc,
+      data: updated,
     });
   } catch (error) {
     handleError(res, error, "Failed to update stock settings");
@@ -957,14 +997,7 @@ const adjustProductStock = async (req, res) => {
       return res.status(400).json({ success: false, message: "Resulting quantity out of range" });
     }
 
-    doc.quantity = after;
-    if (type === "out" && overrideReserved) doc.reservedQty = reservedAfter;
-    else if (type === "adjustment") doc.reservedQty = reservedAfter;
-
-    if (type === "in") doc.lastReceivedAt = new Date();
-    if (type === "out") doc.lastIssuedAt = new Date();
-
-    pushProductMovement(doc, {
+    const logEntry = {
       type,
       quantity: type === "adjustment" ? Math.abs(after - before) : numQty,
       unitAtTime: doc.unit,
@@ -979,17 +1012,53 @@ const adjustProductStock = async (req, res) => {
       refLabel: overrideReserved ? `reserved-override:${usedFromReserved}${doc.unit}` : null,
       by: req.user?._id || null,
       at: new Date(),
-    });
+    };
 
-    doc.updatedBy = req.user?._id || null;
-    await doc.save();
+    const setFields = {
+      quantity: after,
+      reservedQty: reservedAfter,
+      updatedBy: req.user?._id || null,
+      movementLog: {
+        $slice: [
+          {
+            $concatArrays: [
+              { $ifNull: ["$movementLog", []] },
+              [logEntry],
+            ],
+          },
+          -MAX_MOVEMENT_LOG,
+        ],
+      },
+    };
+    if (type === "in") setFields.lastReceivedAt = new Date();
+    if (type === "out") setFields.lastIssuedAt = new Date();
 
+    const result = await ProductStock.updateOne(
+      {
+        _id: doc._id,
+        isActive: true,
+        quantity: before,
+        reservedQty: reservedBefore,
+      },
+      [{ $set: setFields }],
+      { updatePipeline: true }
+    );
+
+    if (result.modifiedCount !== 1) {
+      return res.status(409).json({
+        success: false,
+        code: "STOCK_CHANGED",
+        message: "Stock changed while adjusting. Please retry.",
+      });
+    }
+
+    const updated = await ProductStock.findById(doc._id);
     return res.status(200).json({
       success: true,
       message: overrideReserved
         ? `Stock out recorded (used ${usedFromReserved} ${doc.unit} from reserved)`
         : `Stock ${type} recorded`,
-      data: doc,
+      data: updated,
     });
   } catch (error) {
     handleError(res, error, "Failed to adjust product stock");
@@ -1020,6 +1089,7 @@ const recordProductScrap = async (req, res) => {
 
     const reelsToScrap = scrapKg / reelWeight;
     const before = Number(doc.quantity || 0);
+    const reservedBefore = Number(doc.reservedQty || 0);
 
     if (reelsToScrap > before) {
       return res.status(400).json({
@@ -1028,16 +1098,16 @@ const recordProductScrap = async (req, res) => {
       });
     }
 
-    doc.quantity = before - reelsToScrap;
-    doc.scrapQty = Number(doc.scrapQty || 0) + scrapKg;
-    doc.lastScrapAt = new Date();
+    const after = before - reelsToScrap;
+    // Cap reserved so it never exceeds remaining qty
+    const reservedAfter = Math.min(reservedBefore, after);
 
-    pushProductMovement(doc, {
+    const logEntry = {
       type: "scrap",
       quantity: scrapKg,
       unitAtTime: "Kg",
       beforeQty: before,
-      afterQty: doc.quantity,
+      afterQty: after,
       reason: safeString(req.body.reason, 200) || "Scrapped",
       notes: safeString(req.body.notes, 500) || null,
       refType: "Scrap",
@@ -1045,15 +1115,53 @@ const recordProductScrap = async (req, res) => {
       refLabel: `${reelsToScrap} ${doc.unit}`,
       by: req.user?._id || null,
       at: new Date(),
-    });
+    };
 
-    doc.updatedBy = req.user?._id || null;
-    await doc.save();
+    const result = await ProductStock.updateOne(
+      {
+        _id: doc._id,
+        isActive: true,
+        quantity: before,
+        reservedQty: reservedBefore,
+      },
+      [
+        {
+          $set: {
+            quantity: after,
+            reservedQty: reservedAfter,
+            scrapQty: { $add: [{ $ifNull: ["$scrapQty", 0] }, scrapKg] },
+            lastScrapAt: new Date(),
+            updatedBy: req.user?._id || null,
+            movementLog: {
+              $slice: [
+                {
+                  $concatArrays: [
+                    { $ifNull: ["$movementLog", []] },
+                    [logEntry],
+                  ],
+                },
+                -MAX_MOVEMENT_LOG,
+              ],
+            },
+          },
+        },
+      ],
+      { updatePipeline: true }
+    );
 
+    if (result.modifiedCount !== 1) {
+      return res.status(409).json({
+        success: false,
+        code: "STOCK_CHANGED",
+        message: "Stock changed while recording scrap. Please retry.",
+      });
+    }
+
+    const updated = await ProductStock.findById(doc._id);
     return res.status(200).json({
       success: true,
       message: `Scrapped ${scrapKg} kg (${reelsToScrap} ${doc.unit})`,
-      data: doc,
+      data: updated,
     });
   } catch (error) {
     handleError(res, error, "Failed to record scrap");
