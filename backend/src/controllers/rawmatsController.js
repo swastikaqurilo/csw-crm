@@ -194,7 +194,7 @@ const createRawStock = async (req, res) => {
               afterQty: qty,
               reason: "Initial stock",
               notes: null,
-              refType: null,
+              refType: "Manual",
               refId: null,
               refLabel: null,
               by: req.user?._id || null,
@@ -232,43 +232,17 @@ const updateRawStock = async (req, res) => {
       isActive,
     } = req.body;
 
-    if (name !== undefined) {
-      if (typeof name !== "string" || !name.trim()) {
-        return res.status(400).json({ success: false, message: "name cannot be empty" });
-      }
-      item.name = name.trim().slice(0, 80);
-    }
-    if (category !== undefined) {
-      if (!["Steel", "Tape", "Reel"].includes(category)) {
-        return res.status(400).json({
-          success: false,
-          message: "category must be Steel, Tape, or Reel",
-        });
-      }
-      item.category = category;
-    }
-    if (unit !== undefined) {
-      if (!["Kg", "Box", "Piece"].includes(unit)) {
-        return res.status(400).json({
-          success: false,
-          message: "unit must be Kg, Box, or Piece",
-        });
-      }
-      item.unit = unit;
-    }
-    if (sizeKg !== undefined) {
-      if (sizeKg === null || sizeKg === "") {
-        item.sizeKg = null;
-      } else {
-        const size = Number(sizeKg);
-        if (isNaN(size) || size < 0) {
-          return res.status(400).json({
-            success: false,
-            message: "sizeKg must be a non-negative number",
-          });
-        }
-        item.sizeKg = size;
-      }
+    // name, category, unit, sizeKg are immutable after create (enforced by model)
+    if (
+      name !== undefined ||
+      category !== undefined ||
+      unit !== undefined ||
+      sizeKg !== undefined
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "name, category, unit, and sizeKg cannot be changed after creation",
+      });
     }
     if (reorderLevel !== undefined) {
       const reorder = Number(reorderLevel);
@@ -392,7 +366,7 @@ const adjustRawStock = async (req, res) => {
       afterQty: after,
       reason: safeString(reason, 200) || (type === "adjustment" ? "Manual adjustment" : null),
       notes: safeString(notes, 500) || null,
-      refType: null,
+      refType: "Manual",
       refId: null,
       refLabel: null,
       by: req.user?._id || null,
@@ -609,8 +583,8 @@ const createPurchase = async (req, res) => {
       unitPrice,
       totalAmount,
       invoiceNumber,
-      purchaseDate,
-      expectedDate,
+      orderedAt,
+      expectedAt,
       notes,
       paymentMode,
       amountPaid,
@@ -680,11 +654,10 @@ const createPurchase = async (req, res) => {
       unitPrice: price,
       totalAmount: total,
       amountPaid: Math.min(paid, total),
-      invoiceNumber: safeString(invoiceNumber, 100) || null,
-      purchaseDate: purchaseDate ? new Date(purchaseDate) : new Date(),
-      expectedDate: expectedDate ? new Date(expectedDate) : null,
+      invoiceNumber: safeString(invoiceNumber, 60) || null,
+      orderedAt: orderedAt ? new Date(orderedAt) : new Date(),
+      expectedAt: expectedAt ? new Date(expectedAt) : null,
       notes: safeString(notes, 1000) || "",
-      paymentMode: paymentMode || null,
       status: "Pending",
       isActive: true,
       createdBy: req.user?._id || null,
@@ -693,8 +666,10 @@ const createPurchase = async (req, res) => {
         ? [
             {
               amount: Math.min(paid, total),
-              mode: paymentMode || "Cash",
-              date: new Date(),
+              method: (paymentMode && VALID_PAYMENT_MODES.includes(paymentMode))
+                ? paymentMode
+                : "Cash",
+              paidAt: new Date(),
               notes: "Initial payment",
               by: req.user?._id || null,
             },
@@ -741,10 +716,9 @@ const updatePurchase = async (req, res) => {
       unitPrice,
       totalAmount,
       invoiceNumber,
-      purchaseDate,
-      expectedDate,
+      orderedAt,
+      expectedAt,
       notes,
-      paymentMode,
     } = req.body;
 
     if (quantity !== undefined) {
@@ -784,25 +758,16 @@ const updatePurchase = async (req, res) => {
     }
 
     if (invoiceNumber !== undefined) {
-      purchase.invoiceNumber = safeString(invoiceNumber, 100) || null;
+      purchase.invoiceNumber = safeString(invoiceNumber, 60) || null;
     }
-    if (purchaseDate !== undefined) {
-      purchase.purchaseDate = purchaseDate ? new Date(purchaseDate) : purchase.purchaseDate;
+    if (orderedAt !== undefined) {
+      purchase.orderedAt = orderedAt ? new Date(orderedAt) : purchase.orderedAt;
     }
-    if (expectedDate !== undefined) {
-      purchase.expectedDate = expectedDate ? new Date(expectedDate) : null;
+    if (expectedAt !== undefined) {
+      purchase.expectedAt = expectedAt ? new Date(expectedAt) : null;
     }
     if (notes !== undefined) {
       purchase.notes = safeString(notes, 1000) || "";
-    }
-    if (paymentMode !== undefined) {
-      if (paymentMode && !VALID_PAYMENT_MODES.includes(paymentMode)) {
-        return res.status(400).json({
-          success: false,
-          message: `paymentMode must be one of: ${VALID_PAYMENT_MODES.join(", ")}`,
-        });
-      }
-      purchase.paymentMode = paymentMode || null;
     }
 
     if (req.user?._id) purchase.updatedBy = req.user._id;
@@ -1014,7 +979,8 @@ const recordPurchasePayment = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid ID" });
     }
 
-    const { amount, mode, date, notes } = req.body;
+    const { amount, method, mode, paidAt, date, notes } = req.body;
+    const paymentMethod = method || mode;
 
     const numAmount = Number(amount);
     if (isNaN(numAmount) || numAmount <= 0) {
@@ -1024,10 +990,10 @@ const recordPurchasePayment = async (req, res) => {
       });
     }
 
-    if (!mode || !VALID_PAYMENT_MODES.includes(mode)) {
+    if (!paymentMethod || !VALID_PAYMENT_MODES.includes(paymentMethod)) {
       return res.status(400).json({
         success: false,
-        message: `mode must be one of: ${VALID_PAYMENT_MODES.join(", ")}`,
+        message: `method must be one of: ${VALID_PAYMENT_MODES.join(", ")}`,
       });
     }
 
@@ -1055,14 +1021,13 @@ const recordPurchasePayment = async (req, res) => {
     if (!Array.isArray(purchase.payments)) purchase.payments = [];
     purchase.payments.push({
       amount: numAmount,
-      mode,
-      date: date ? new Date(date) : new Date(),
+      method: paymentMethod,
+      paidAt: (paidAt || date) ? new Date(paidAt || date) : new Date(),
       notes: safeString(notes, 500) || null,
       by: req.user?._id || null,
     });
 
-    purchase.amountPaid =
-      Math.round((purchase.amountPaid + numAmount) * 100) / 100;
+    // amountPaid / paymentStatus recomputed by model pre-save from payments[]
     if (req.user?._id) purchase.updatedBy = req.user._id;
     await purchase.save();
 
