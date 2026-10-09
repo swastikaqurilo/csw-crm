@@ -1,3 +1,10 @@
+/**
+ * NOTE: This file is named Product.js for historical reasons, but it only
+ * defines the *ProductProduction* model (daily production records).
+ * Finished-goods inventory lives in ProductStock.js.
+ * Controllers should import it as:
+ *   const ProductProduction = require("../models/Product");
+ */
 const mongoose = require("mongoose");
 
 const SIZES = ["2kg", "5kg", "8kg", "10kg"];
@@ -36,7 +43,7 @@ const workerProductionSchema = new mongoose.Schema(
       min: 0,
     },
 
-    /* ▼ NEW — snapshot of what this worker earned on this day */
+    /* snapshot of what this worker earned on this day */
     totalEarnings: {
       type: Number,
       default: 0,

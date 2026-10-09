@@ -3,6 +3,7 @@ const cors = require("cors");
 const dotenv = require("dotenv");
 
 const connectDB = require("./config/db");
+const errorHandler = require("./middleware/errorHandler");
 
 dotenv.config();
 
@@ -47,24 +48,26 @@ app.get("/", (req, res) => {
   });
 });
 
+// Public auth routes
+app.use("/api/auth", authRoutes);
 
-app.use("/api/auth", authRoutes); 
-app.use("/api/enquiries", enquiryRoutes);
-app.use("/api/contacts", contactRoutes);
-app.use("/api/follow-ups", followUpRoutes);
-app.use("/api/products", productRoutes);
-// app.use("/api/inventory", inventoryRoutes);
-app.use("/api/order", orderRoutes);
-app.use("/api/payment", paymentRoutes);
-app.use("/api/revenue", revenueRoutes);
-app.use("/api/workers", workerRoutes);
-app.use("/api/expense", expenseRoutes);
-app.use("/api/accounting", accountingRoutes);
-app.use("/api/raw-material", rawMaterialRoutes);
-app.use('/api/settings', settingRoutes);
-app.use("/api/notifications", notificationRoutes);
-app.use("/api/salaries", salaryRoutes);
+// All business routes require authentication
+app.use("/api/enquiries", protect, enquiryRoutes);
+app.use("/api/contacts", protect, contactRoutes);
+app.use("/api/follow-ups", protect, followUpRoutes);
+app.use("/api/products", protect, productRoutes);
+app.use("/api/order", protect, orderRoutes);
+app.use("/api/payment", protect, paymentRoutes);
+app.use("/api/revenue", protect, revenueRoutes);
+app.use("/api/workers", protect, workerRoutes);
+app.use("/api/expense", protect, expenseRoutes);
+app.use("/api/accounting", protect, accountingRoutes);
+app.use("/api/raw-material", protect, rawMaterialRoutes);
+app.use("/api/settings", protect, settingRoutes);
+app.use("/api/notifications", protect, notificationRoutes);
+app.use("/api/salaries", protect, salaryRoutes);
 
+// 404 handler
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -72,23 +75,17 @@ app.use((req, res) => {
   });
 });
 
-app.use((err, req, res, next) => {
-  console.error("SERVER ERROR:", err);
-
-  res.status(err.status || 500).json({
-    success: false,
-    message: err.message || "Internal server error",
-  });
-});
+// Central error handler (ValidationError, CastError, duplicate key, etc.)
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
 
 if (require.main === module) {
   connectDB()
     .then(() => {
-     app.listen(PORT, "0.0.0.0", () => {
-    console.log(`CSW CRM API running on http://0.0.0.0:${PORT}`);
-  });
+      app.listen(PORT, "0.0.0.0", () => {
+        console.log(`CSW CRM API running on http://0.0.0.0:${PORT}`);
+      });
     })
     .catch((error) => {
       console.error("Failed to start server:", error);

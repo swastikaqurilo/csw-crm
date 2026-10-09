@@ -1,11 +1,12 @@
 const mongoose = require("mongoose");
 const { Schema } = mongoose;
+const { getNextSequence } = require("./Counter");
 
 const contactSchema = new Schema(
   {
     contactId: {
       type: String,
-      unique: true,             
+      unique: true,
       trim: true,
       maxlength: 50,
     },
@@ -27,7 +28,7 @@ const contactSchema = new Schema(
     role: {
       type: String,
       trim: true,
-      lowercase: true,                       
+      lowercase: true,
       enum: {
         values: ["customer", "supplier", "partner", "other", ""],
         message: "{VALUE} is not a valid role",
@@ -133,30 +134,16 @@ const contactSchema = new Schema(
     },
     shippingState:     { type: String, trim: true, maxlength: [100, "State name too long"], default: "" },
     shippingStateCode: { type: String, trim: true, maxlength: [5, "State code too long"], default: "" },
-
   },
-  
-  
   { timestamps: true }
 );
 
+// Race-safe contactId generation using atomic Counter (same pattern as orders/invoices)
 contactSchema.pre("save", async function () {
   if (this.contactId) return;
 
-  const Contact = this.constructor;
-
-  const existing = await Contact.find(
-    { contactId: /^CON-\d+$/ },
-    { contactId: 1, _id: 0 }
-  ).lean();
-
-  let maxNumber = 0;
-  for (const doc of existing) {
-    const n = parseInt(doc.contactId.slice(4), 10); // strip "CON-"
-    if (Number.isFinite(n) && n > maxNumber) maxNumber = n;
-  }
-
-  this.contactId = `CON-${String(maxNumber + 1).padStart(3, "0")}`;
+  const seq = await getNextSequence("contact");
+  this.contactId = `CON-${String(seq).padStart(3, "0")}`;
 });
 
 contactSchema.index({

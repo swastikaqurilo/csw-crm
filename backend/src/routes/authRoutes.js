@@ -40,6 +40,10 @@ router.post("/login", async (req, res) => {
       });
     }
 
+    // Update lastLogin
+    user.lastLogin = new Date();
+    await user.save({ validateBeforeSave: false });
+
     const token = signToken(user._id);
 
     user.password = undefined;
@@ -77,10 +81,11 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    if (password.length < 6) {
+    // Must match User model minlength: 8
+    if (password.length < 8) {
       return res.status(400).json({
         success: false,
-        message: "Password must be at least 6 characters.",
+        message: "Password must be at least 8 characters.",
       });
     }
 
