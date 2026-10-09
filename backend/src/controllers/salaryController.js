@@ -18,13 +18,8 @@ const calculateNetSalary = (basicSalary, allowances = 0, deductions = 0) => {
   return Math.max(0, basic + allowance - deduction);
 };
 
-const calculatePaymentStatus = (
-  netSalary,
-  paidAmount,
-  advanceAmount = 0
-) => {
-  const totalPaid =
-    Number(paidAmount || 0) + Number(advanceAmount || 0);
+const calculatePaymentStatus = (netSalary, paidAmount, advanceAmount = 0) => {
+  const totalPaid = Number(paidAmount || 0) + Number(advanceAmount || 0);
 
   if (totalPaid <= 0) return "Pending";
   if (totalPaid >= netSalary) return "Paid";
@@ -45,12 +40,14 @@ const createSalary = async (req, res) => {
 
     if (!isValidId(worker)) {
       return res.status(400).json({
+        success: false,
         message: "Valid worker is required",
       });
     }
 
     if (!periodStart || !periodEnd) {
       return res.status(400).json({
+        success: false,
         message: "Salary period start and end dates are required",
       });
     }
@@ -60,12 +57,14 @@ const createSalary = async (req, res) => {
 
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
       return res.status(400).json({
+        success: false,
         message: "Invalid salary period dates",
       });
     }
 
     if (start > end) {
       return res.status(400).json({
+        success: false,
         message: "Period start date cannot be after period end date",
       });
     }
@@ -74,12 +73,14 @@ const createSalary = async (req, res) => {
 
     if (!selectedWorker) {
       return res.status(404).json({
+        success: false,
         message: "Worker not found",
       });
     }
 
     if (selectedWorker.payType !== "Fixed") {
       return res.status(400).json({
+        success: false,
         message: "Salary records can only be created for Fixed-pay workers",
       });
     }
@@ -88,6 +89,7 @@ const createSalary = async (req, res) => {
 
     if (!Number.isFinite(basic) || basic < 0) {
       return res.status(400).json({
+        success: false,
         message: "Valid basic salary is required",
       });
     }
@@ -97,27 +99,26 @@ const createSalary = async (req, res) => {
 
     if (allowance < 0 || deduction < 0) {
       return res.status(400).json({
+        success: false,
         message: "Allowances and deductions cannot be negative",
       });
     }
 
-    const netSalary = calculateNetSalary(
-      basic,
-      allowance,
-      deduction
-    );
+    const netSalary = calculateNetSalary(basic, allowance, deduction);
 
     const existingSalary = await Salary.findOne({
-        worker,
-        periodStart: start,
-        periodEnd: end,
-        isDeleted: false,
+      worker,
+      periodStart: start,
+      periodEnd: end,
+      isDeleted: false,
     });
-            if (existingSalary) {
-            return res.status(409).json({
-                message: "Salary record already exists for this worker and period",
-            });
-            }
+
+    if (existingSalary) {
+      return res.status(409).json({
+        success: false,
+        message: "Salary record already exists for this worker and period",
+      });
+    }
 
     const salary = await Salary.create({
       worker,
@@ -139,13 +140,15 @@ const createSalary = async (req, res) => {
     );
 
     return res.status(201).json({
+      success: true,
       message: "Salary record created successfully",
-      salary: populatedSalary,
+      data: populatedSalary,
     });
   } catch (error) {
     console.error("[createSalary]", error);
 
     return res.status(500).json({
+      success: false,
       message: "Failed to create salary record",
       error: error.message,
     });
@@ -164,13 +167,12 @@ const getSalaries = async (req, res) => {
       search = "",
     } = req.query;
 
-    const filter = {
-        isDeleted: false,
-    };
+    const filter = { isDeleted: false };
 
     if (worker) {
       if (!isValidId(worker)) {
         return res.status(400).json({
+          success: false,
           message: "Invalid worker ID",
         });
       }
@@ -190,6 +192,7 @@ const getSalaries = async (req, res) => {
 
         if (Number.isNaN(start.getTime())) {
           return res.status(400).json({
+            success: false,
             message: "Invalid fromDate",
           });
         }
@@ -202,6 +205,7 @@ const getSalaries = async (req, res) => {
 
         if (Number.isNaN(end.getTime())) {
           return res.status(400).json({
+            success: false,
             message: "Invalid toDate",
           });
         }
@@ -211,24 +215,39 @@ const getSalaries = async (req, res) => {
     }
 
     const pageNumber = Math.max(Number(page) || 1, 1);
-    const limitNumber = Math.min(
-      Math.max(Number(limit) || 20, 1),
-      100
-    );
-
+    const limitNumber = Math.min(Math.max(Number(limit) || 20, 1), 100);
     const skip = (pageNumber - 1) * limitNumber;
 
-    const workerIds = await Worker.find({
-      name: {
-        $regex: safeString(search, 100),
-        $options: "i",
-      },
-    }).select("_id");
+    if (search && String(search).trim()) {
+      const workerIds = await Worker.find({
+        name: {
+          $regex: safeString(search, 100),
+          $options: "i",
+        },
+      }).select("_id");
 
-    if (search) {
-      filter.worker = {
-        $in: workerIds.map((item) => item._id),
-      };
+      const ids = workerIds.map((item) => item._id);
+
+      if (filter.worker) {
+        const requested = filter.worker;
+        const match = ids.some((id) => String(id) === String(requested));
+
+        // If the requested worker isn't in the search result, no matches.
+        if (!match) {
+          return res.status(200).json({
+            success: true,
+            salaries: [],
+            pagination: {
+              page: pageNumber,
+              limit: limitNumber,
+              total: 0,
+              totalPages: 0,
+            },
+          });
+        }
+      } else {
+        filter.worker = { $in: ids };
+      }
     }
 
     const [salaries, total] = await Promise.all([
@@ -237,10 +256,7 @@ const getSalaries = async (req, res) => {
           "worker",
           "workerId name phone role department payType fixedPay"
         )
-        .sort({
-          periodStart: -1,
-          createdAt: -1,
-        })
+        .sort({ periodStart: -1, createdAt: -1 })
         .skip(skip)
         .limit(limitNumber),
 
@@ -248,18 +264,20 @@ const getSalaries = async (req, res) => {
     ]);
 
     return res.status(200).json({
+      success: true,
       salaries,
       pagination: {
         page: pageNumber,
         limit: limitNumber,
         total,
-        totalPages: Math.ceil(total / limitNumber),
+        totalPages: Math.ceil(total / limitNumber) || 1,
       },
     });
   } catch (error) {
     console.error("[getSalaries]", error);
 
     return res.status(500).json({
+      success: false,
       message: "Failed to fetch salaries",
       error: error.message,
     });
@@ -272,28 +290,35 @@ const getSalary = async (req, res) => {
 
     if (!isValidId(id)) {
       return res.status(400).json({
+        success: false,
         message: "Invalid salary ID",
       });
     }
 
-    const salary = await Salary.findById(id).populate(
+    const salary = await Salary.findOne({
+      _id: id,
+      isDeleted: false,
+    }).populate(
       "worker",
       "workerId name phone role department payType fixedPay"
     );
 
     if (!salary) {
       return res.status(404).json({
+        success: false,
         message: "Salary record not found",
       });
     }
 
     return res.status(200).json({
+      success: true,
       salary,
     });
   } catch (error) {
     console.error("[getSalary]", error);
 
     return res.status(500).json({
+      success: false,
       message: "Failed to fetch salary",
       error: error.message,
     });
@@ -306,6 +331,7 @@ const updateSalary = async (req, res) => {
 
     if (!isValidId(id)) {
       return res.status(400).json({
+        success: false,
         message: "Invalid salary ID",
       });
     }
@@ -314,6 +340,7 @@ const updateSalary = async (req, res) => {
 
     if (!salary) {
       return res.status(404).json({
+        success: false,
         message: "Salary record not found",
       });
     }
@@ -327,46 +354,33 @@ const updateSalary = async (req, res) => {
       notes,
     } = req.body;
 
-    const start = periodStart
-      ? new Date(periodStart)
-      : salary.periodStart;
+    const start = periodStart ? new Date(periodStart) : salary.periodStart;
+    const end = periodEnd ? new Date(periodEnd) : salary.periodEnd;
 
-    const end = periodEnd
-      ? new Date(periodEnd)
-      : salary.periodEnd;
-
-    if (
-      Number.isNaN(start.getTime()) ||
-      Number.isNaN(end.getTime())
-    ) {
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
       return res.status(400).json({
+        success: false,
         message: "Invalid salary period dates",
       });
     }
 
     if (start > end) {
       return res.status(400).json({
+        success: false,
         message: "Period start date cannot be after period end date",
       });
     }
 
     const basic =
-      basicSalary !== undefined
-        ? Number(basicSalary)
-        : salary.basicSalary;
-
+      basicSalary !== undefined ? Number(basicSalary) : salary.basicSalary;
     const allowance =
-      allowances !== undefined
-        ? Number(allowances)
-        : salary.allowances;
-
+      allowances !== undefined ? Number(allowances) : salary.allowances;
     const deduction =
-      deductions !== undefined
-        ? Number(deductions)
-        : salary.deductions;
+      deductions !== undefined ? Number(deductions) : salary.deductions;
 
     if (!Number.isFinite(basic) || basic < 0) {
       return res.status(400).json({
+        success: false,
         message: "Invalid basic salary",
       });
     }
@@ -378,20 +392,17 @@ const updateSalary = async (req, res) => {
       deduction < 0
     ) {
       return res.status(400).json({
+        success: false,
         message: "Allowances and deductions cannot be negative",
       });
     }
 
-    const netSalary = calculateNetSalary(
-      basic,
-      allowance,
-      deduction
-    );
+    const netSalary = calculateNetSalary(basic, allowance, deduction);
 
     if (netSalary < salary.paidAmount) {
       return res.status(400).json({
-        message:
-          "Net salary cannot be lower than the amount already paid",
+        success: false,
+        message: "Net salary cannot be lower than the amount already paid",
       });
     }
 
@@ -414,14 +425,13 @@ const updateSalary = async (req, res) => {
 
     await salary.save();
 
-    const populatedSalary = await Salary.findById(
-      salary._id
-    ).populate(
+    const populatedSalary = await Salary.findById(salary._id).populate(
       "worker",
       "workerId name phone role department payType fixedPay"
     );
 
     return res.status(200).json({
+      success: true,
       message: "Salary updated successfully",
       salary: populatedSalary,
     });
@@ -429,6 +439,7 @@ const updateSalary = async (req, res) => {
     console.error("[updateSalary]", error);
 
     return res.status(500).json({
+      success: false,
       message: "Failed to update salary",
       error: error.message,
     });
@@ -449,6 +460,7 @@ const recordSalaryPayment = async (req, res) => {
 
     if (!isValidId(id)) {
       return res.status(400).json({
+        success: false,
         message: "Invalid salary ID",
       });
     }
@@ -457,6 +469,7 @@ const recordSalaryPayment = async (req, res) => {
 
     if (!salary) {
       return res.status(404).json({
+        success: false,
         message: "Salary record not found",
       });
     }
@@ -465,14 +478,19 @@ const recordSalaryPayment = async (req, res) => {
 
     if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) {
       return res.status(400).json({
+        success: false,
         message: "Payment amount must be greater than zero",
       });
     }
 
-    const remainingAmount = salary.netSalary - salary.paidAmount;
+    const remainingAmount =
+      Number(salary.netSalary || 0) -
+      Number(salary.paidAmount || 0) -
+      Number(salary.advanceAmount || 0);
 
-    if (paymentAmount > remainingAmount) {
+    if (paymentAmount > remainingAmount + 0.001) {
       return res.status(400).json({
+        success: false,
         message: `Payment cannot exceed remaining salary of ₹${remainingAmount}`,
       });
     }
@@ -489,6 +507,7 @@ const recordSalaryPayment = async (req, res) => {
 
     if (!validModes.includes(paymentMode)) {
       return res.status(400).json({
+        success: false,
         message: "Valid payment mode is required",
       });
     }
@@ -502,6 +521,7 @@ const recordSalaryPayment = async (req, res) => {
       !cleanTransactionId
     ) {
       return res.status(400).json({
+        success: false,
         message: `Transaction/reference ID is required for ${paymentMode}`,
       });
     }
@@ -510,11 +530,11 @@ const recordSalaryPayment = async (req, res) => {
 
     if (Number.isNaN(parsedPaymentDate.getTime())) {
       return res.status(400).json({
+        success: false,
         message: "Invalid payment date",
       });
     }
 
-    // Add the individual payment transaction.
     salary.payments.push({
       amount: paymentAmount,
       paymentDate: parsedPaymentDate,
@@ -523,7 +543,6 @@ const recordSalaryPayment = async (req, res) => {
       notes: safeString(notes, 500),
     });
 
-    // Keep summary fields synchronized.
     salary.paidAmount += paymentAmount;
 
     salary.paymentStatus = calculatePaymentStatus(
@@ -536,14 +555,13 @@ const recordSalaryPayment = async (req, res) => {
 
     await salary.save();
 
-    const populatedSalary = await Salary.findById(
-      salary._id
-    ).populate(
+    const populatedSalary = await Salary.findById(salary._id).populate(
       "worker",
       "workerId name phone role department payType fixedPay"
     );
 
     return res.status(200).json({
+      success: true,
       message: "Salary payment recorded successfully",
       salary: populatedSalary,
       payment: salary.payments[salary.payments.length - 1],
@@ -552,6 +570,7 @@ const recordSalaryPayment = async (req, res) => {
     console.error("[recordSalaryPayment]", error);
 
     return res.status(500).json({
+      success: false,
       message: "Failed to record salary payment",
       error: error.message,
     });
@@ -571,7 +590,10 @@ const recordSalaryAdvance = async (req, res) => {
     } = req.body;
 
     if (!isValidId(id)) {
-      return res.status(400).json({ message: "Invalid salary ID" });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid salary ID",
+      });
     }
 
     const salary = await Salary.findOne({
@@ -580,13 +602,17 @@ const recordSalaryAdvance = async (req, res) => {
     });
 
     if (!salary) {
-      return res.status(404).json({ message: "Salary record not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Salary record not found",
+      });
     }
 
     const advanceAmount = Number(amount);
 
     if (!Number.isFinite(advanceAmount) || advanceAmount <= 0) {
       return res.status(400).json({
+        success: false,
         message: "Advance amount must be greater than zero",
       });
     }
@@ -598,17 +624,24 @@ const recordSalaryAdvance = async (req, res) => {
 
     if (advanceAmount > remaining + 0.001) {
       return res.status(400).json({
+        success: false,
         message: `Advance cannot exceed the remaining balance of ₹${remaining}`,
       });
     }
 
     const validModes = [
-      "Cash", "UPI", "Bank Transfer", "Cheque",
-      "NEFT", "RTGS", "Other",
+      "Cash",
+      "UPI",
+      "Bank Transfer",
+      "Cheque",
+      "NEFT",
+      "RTGS",
+      "Other",
     ];
 
     if (!validModes.includes(paymentMode)) {
       return res.status(400).json({
+        success: false,
         message: "Valid payment mode is required",
       });
     }
@@ -620,13 +653,17 @@ const recordSalaryAdvance = async (req, res) => {
       !cleanTransactionId
     ) {
       return res.status(400).json({
+        success: false,
         message: `Transaction/reference ID is required for ${paymentMode}`,
       });
     }
 
     const parsedDate = new Date(date);
     if (Number.isNaN(parsedDate.getTime())) {
-      return res.status(400).json({ message: "Invalid advance date" });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid advance date",
+      });
     }
 
     salary.advances.push({
@@ -638,8 +675,7 @@ const recordSalaryAdvance = async (req, res) => {
       givenBy: req.user?._id || null,
     });
 
-    salary.advanceAmount =
-      Number(salary.advanceAmount || 0) + advanceAmount;
+    salary.advanceAmount = Number(salary.advanceAmount || 0) + advanceAmount;
 
     salary.paymentStatus = calculatePaymentStatus(
       salary.netSalary,
@@ -655,6 +691,7 @@ const recordSalaryAdvance = async (req, res) => {
     );
 
     return res.status(201).json({
+      success: true,
       message: "Advance recorded successfully",
       salary: populated,
       advance: salary.advances[salary.advances.length - 1],
@@ -662,6 +699,7 @@ const recordSalaryAdvance = async (req, res) => {
   } catch (error) {
     console.error("[recordSalaryAdvance]", error);
     return res.status(500).json({
+      success: false,
       message: "Failed to record advance",
       error: error.message,
     });
@@ -672,17 +710,31 @@ const deleteSalaryAdvance = async (req, res) => {
   try {
     const { id, advanceId } = req.params;
     if (!isValidId(id) || !isValidId(advanceId)) {
-      return res.status(400).json({ message: "Invalid ID" });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid ID",
+      });
     }
 
     const salary = await Salary.findOne({ _id: id, isDeleted: false });
-    if (!salary) return res.status(404).json({ message: "Salary record not found" });
+    if (!salary) {
+      return res.status(404).json({
+        success: false,
+        message: "Salary record not found",
+      });
+    }
 
     const adv = salary.advances.id(advanceId);
-    if (!adv) return res.status(404).json({ message: "Advance not found" });
+    if (!adv) {
+      return res.status(404).json({
+        success: false,
+        message: "Advance not found",
+      });
+    }
 
     if (Number(salary.paidAmount) > 0) {
       return res.status(400).json({
+        success: false,
         message: "Cannot delete advance — regular salary payments already exist",
       });
     }
@@ -698,10 +750,18 @@ const deleteSalaryAdvance = async (req, res) => {
     );
 
     await salary.save();
-    return res.status(200).json({ message: "Advance deleted successfully", salary });
+    return res.status(200).json({
+      success: true,
+      message: "Advance deleted successfully",
+      salary,
+    });
   } catch (error) {
     console.error("[deleteSalaryAdvance]", error);
-    return res.status(500).json({ message: "Failed to delete advance", error: error.message });
+    return res.status(500).json({
+      success: false,
+      message: "Failed to delete advance",
+      error: error.message,
+    });
   }
 };
 
@@ -711,6 +771,7 @@ const deleteSalary = async (req, res) => {
 
     if (!isValidId(id)) {
       return res.status(400).json({
+        success: false,
         message: "Invalid salary ID",
       });
     }
@@ -718,15 +779,26 @@ const deleteSalary = async (req, res) => {
     const salary = await Salary.findOne({
       _id: id,
       isDeleted: false,
-    }).select("paidAmount");
+    }).select("paidAmount advanceAmount");
 
     if (!salary) {
-      return res.status(404).json({ message: "Salary record not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Salary record not found",
+      });
     }
 
-    if (salary.paidAmount > 0) {
+    if (Number(salary.paidAmount) > 0) {
       return res.status(400).json({
+        success: false,
         message: "Paid or partially paid salary records cannot be deleted",
+      });
+    }
+
+    if (Number(salary.advanceAmount) > 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Salary records with advances cannot be deleted. Delete the advances first.",
       });
     }
 
@@ -735,11 +807,15 @@ const deleteSalary = async (req, res) => {
       { $set: { isDeleted: true, deletedAt: new Date() } }
     );
 
-    return res.status(200).json({ message: "Salary deleted successfully" });
+    return res.status(200).json({
+      success: true,
+      message: "Salary deleted successfully",
+    });
   } catch (error) {
     console.error("[deleteSalary]", error);
 
     return res.status(500).json({
+      success: false,
       message: "Failed to delete salary",
       error: error.message,
     });
@@ -747,7 +823,6 @@ const deleteSalary = async (req, res) => {
 };
 
 const SALARY_DAY_DIVISOR = 30;
-
 const SIZES = ["2kg", "5kg", "8kg", "10kg"];
 
 const REEL_WEIGHTS = {
@@ -757,8 +832,7 @@ const REEL_WEIGHTS = {
   "10kg": 10,
 };
 
-const roundMoney = (value) =>
-  Math.round((Number(value) || 0) * 100) / 100;
+const roundMoney = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
 const startOfDay = (date) => {
   const d = new Date(date);
@@ -790,30 +864,18 @@ const getDaysBetween = (start, end) => {
 
   while (current <= last) {
     days.push(new Date(current));
-
     current.setDate(current.getDate() + 1);
   }
 
   return days;
 };
 
-const calculateFixedSalary = async ({
-  worker,
-  periodStart,
-  periodEnd,
-}) => {
+const calculateFixedSalary = async ({ worker, periodStart, periodEnd }) => {
   const joiningDate = startOfDay(worker.joiningDate);
 
-  const effectiveStart =
-    joiningDate > periodStart
-      ? joiningDate
-      : periodStart;
+  const effectiveStart = joiningDate > periodStart ? joiningDate : periodStart;
 
-  const dates = getDaysBetween(
-    effectiveStart,
-    periodEnd
-  );
-
+  const dates = getDaysBetween(effectiveStart, periodEnd);
   const workingDays = dates.length;
 
   if (workingDays <= 0) {
@@ -839,10 +901,7 @@ const calculateFixedSalary = async ({
   const attendanceMap = new Map();
 
   for (const attendance of attendanceDocs) {
-    attendanceMap.set(
-      attendance.date,
-      attendance
-    );
+    attendanceMap.set(attendance.date, attendance);
   }
 
   let absentDays = 0;
@@ -851,55 +910,31 @@ const calculateFixedSalary = async ({
     const dateString = getDateString(date);
     const attendance = attendanceMap.get(dateString);
 
-    if (!attendance) {
-      continue;
-    }
-
-    if (attendance.allPresent === true) {
-      continue;
-    }
+    if (!attendance) continue;
+    if (attendance.allPresent === true) continue;
 
     const isAbsent =
       Array.isArray(attendance.absentWorkers) &&
       attendance.absentWorkers.some(
-        (id) =>
-          String(id) === String(worker._id)
+        (id) => String(id) === String(worker._id)
       );
 
-    if (isAbsent) {
-      absentDays++;
-    }
+    if (isAbsent) absentDays++;
   }
 
-  const monthlySalary =
-    Number(worker.fixedPay?.amount) || 0;
-
-  const dailyRate =
-    monthlySalary / SALARY_DAY_DIVISOR;
-
-  const absenceDeduction =
-    dailyRate * absentDays;
-
-  const adjustedBasic =
-    Math.max(
-      0,
-      monthlySalary - absenceDeduction
-    );
+  const monthlySalary = Number(worker.fixedPay?.amount) || 0;
+  const dailyRate = monthlySalary / SALARY_DAY_DIVISOR;
+  const absenceDeduction = dailyRate * absentDays;
+  const adjustedBasic = Math.max(0, monthlySalary - absenceDeduction);
 
   return {
     basicSalary: roundMoney(adjustedBasic),
-
     attendance: {
       workingDays,
-      presentDays: Math.max(
-        workingDays - absentDays,
-        0
-      ),
+      presentDays: Math.max(workingDays - absentDays, 0),
       absentDays,
       dailyRate: roundMoney(dailyRate),
-      absenceDeduction: roundMoney(
-        absenceDeduction
-      ),
+      absenceDeduction: roundMoney(absenceDeduction),
     },
   };
 };
@@ -915,12 +950,12 @@ const calculateVariableSalary = async ({ worker, periodStart, periodEnd }) => {
   }).select("date workers");
 
   const quantities = { "2kg": 0, "5kg": 0, "8kg": 0, "10kg": 0 };
-  const amounts    = { "2kg": 0, "5kg": 0, "8kg": 0, "10kg": 0 };
+  const amounts = { "2kg": 0, "5kg": 0, "8kg": 0, "10kg": 0 };
 
   const rates = {
-    "2kg":  Number(worker.variablePay?.rate2kg)  || 0,
-    "5kg":  Number(worker.variablePay?.rate5kg)  || 0,
-    "8kg":  Number(worker.variablePay?.rate8kg)  || 0,
+    "2kg": Number(worker.variablePay?.rate2kg) || 0,
+    "5kg": Number(worker.variablePay?.rate5kg) || 0,
+    "8kg": Number(worker.variablePay?.rate8kg) || 0,
     "10kg": Number(worker.variablePay?.rate10kg) || 0,
   };
 
@@ -960,7 +995,7 @@ const calculateVariableSalary = async ({ worker, periodStart, periodEnd }) => {
   }
 
   return {
-    basicSalary: roundMoney(totalEarnings),   
+    basicSalary: roundMoney(totalEarnings),
     production: {
       ...production,
       totalReels,
@@ -971,65 +1006,55 @@ const calculateVariableSalary = async ({ worker, periodStart, periodEnd }) => {
 
 const generateSalaries = async (req, res) => {
   try {
-    const {
-      periodStart,
-      periodEnd,
-      workerIds = [],
-    } = req.body;
+    const { periodStart, periodEnd, workerIds = [] } = req.body;
 
     if (!periodStart || !periodEnd) {
       return res.status(400).json({
-        message:
-          "Salary period start and end dates are required",
+        success: false,
+        message: "Salary period start and end dates are required",
       });
     }
 
     const start = startOfDay(periodStart);
     const end = endOfDay(periodEnd);
 
-    if (
-      Number.isNaN(start.getTime()) ||
-      Number.isNaN(end.getTime())
-    ) {
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
       return res.status(400).json({
+        success: false,
         message: "Invalid salary period dates",
       });
     }
 
     if (start > end) {
       return res.status(400).json({
-        message:
-          "Period start date cannot be after period end date",
+        success: false,
+        message: "Period start date cannot be after period end date",
       });
     }
 
     const filter = {
       status: "Active",
-      joiningDate: {
-        $lte: end,
-      },
+      joiningDate: { $lte: end },
     };
 
     if (Array.isArray(workerIds) && workerIds.length) {
-      const invalidId = workerIds.find(
-        (id) => !isValidId(id)
-      );
+      const invalidId = workerIds.find((id) => !isValidId(id));
 
       if (invalidId) {
         return res.status(400).json({
+          success: false,
           message: "Invalid worker ID",
         });
       }
 
-      filter._id = {
-        $in: workerIds,
-      };
+      filter._id = { $in: workerIds };
     }
 
     const workers = await Worker.find(filter);
 
     if (!workers.length) {
       return res.status(200).json({
+        success: true,
         message: "No active workers found",
         salaries: [],
       });
@@ -1041,102 +1066,66 @@ const generateSalaries = async (req, res) => {
       let calculation;
 
       if (worker.payType === "Fixed") {
-        calculation =
-          await calculateFixedSalary({
-            worker,
-            periodStart: start,
-            periodEnd: end,
-          });
-      } else {
-        calculation =
-          await calculateVariableSalary({
-            worker,
-            periodStart: start,
-            periodEnd: end,
-          });
-      }
-
-      const existingSalary =
-        await Salary.findOne({
-          worker: worker._id,
+        calculation = await calculateFixedSalary({
+          worker,
           periodStart: start,
           periodEnd: end,
-          isDeleted: false,
         });
+      } else {
+        calculation = await calculateVariableSalary({
+          worker,
+          periodStart: start,
+          periodEnd: end,
+        });
+      }
 
-      /*
-       * Skip only when regular salary payments have been made.
-       * Advances do NOT block regeneration — they're preserved
-       * in the update branch below.
-       */
-      if (
-        existingSalary &&
-        Number(existingSalary.paidAmount) > 0
-      ) {
+      const existingSalary = await Salary.findOne({
+        worker: worker._id,
+        periodStart: start,
+        periodEnd: end,
+        isDeleted: false,
+      });
+
+      if (existingSalary && Number(existingSalary.paidAmount) > 0) {
         results.push({
           worker: worker._id,
           name: worker.name,
           status: "skipped",
-          reason:
-            "Salary already has payments",
+          reason: "Salary already has payments",
           salary: existingSalary,
         });
 
         continue;
       }
 
-      const basicSalary =
-        Number(calculation.basicSalary) || 0;
+      const basicSalary = Number(calculation.basicSalary) || 0;
+      const allowances = existingSalary?.allowances || 0;
+      const deductions = existingSalary?.deductions || 0;
 
-      const allowances =
-        existingSalary?.allowances || 0;
-
-      const deductions =
-        existingSalary?.deductions || 0;
-
-      const netSalary = calculateNetSalary(
-        basicSalary,
-        allowances,
-        deductions
-      );
+      const netSalary = calculateNetSalary(basicSalary, allowances, deductions);
 
       let salary;
 
       if (existingSalary) {
-        existingSalary.payType =
-          worker.payType;
-
-        existingSalary.basicSalary =
-          basicSalary;
-
-        existingSalary.netSalary =
-          netSalary;
+        existingSalary.payType = worker.payType;
+        existingSalary.basicSalary = basicSalary;
+        existingSalary.netSalary = netSalary;
 
         if (calculation.attendance) {
-          existingSalary.attendance =
-            calculation.attendance;
+          existingSalary.attendance = calculation.attendance;
         }
 
         if (calculation.production) {
-          existingSalary.production =
-            calculation.production;
+          existingSalary.production = calculation.production;
         }
 
-        /* ─────────────────────────────────────────────
-           CHANGED: pass advanceAmount as 3rd argument.
-           `existingSalary.advanceAmount` and
-           `existingSalary.advances` are NOT touched here,
-           so they survive regeneration untouched.
-           ───────────────────────────────────────────── */
-        existingSalary.paymentStatus =
-          calculatePaymentStatus(
-            netSalary,
-            existingSalary.paidAmount,
-            existingSalary.advanceAmount
-          );
+        existingSalary.paymentStatus = calculatePaymentStatus(
+          netSalary,
+          existingSalary.paidAmount,
+          existingSalary.advanceAmount
+        );
 
         await existingSalary.save();
-
         salary = existingSalary;
       } else {
         try {
@@ -1152,7 +1141,6 @@ const generateSalaries = async (req, res) => {
             production: calculation.production || undefined,
             netSalary,
             paidAmount: 0,
-            /* advanceAmount defaults to 0, advances to [] */
             paymentStatus: "Pending",
             notes: "",
           });
@@ -1170,38 +1158,30 @@ const generateSalaries = async (req, res) => {
         }
       }
 
-      const populated =
-        await Salary.findById(
-          salary._id
-        ).populate(
-          "worker",
-          "workerId name phone role department payType fixedPay variablePay"
-        );
+      const populated = await Salary.findById(salary._id).populate(
+        "worker",
+        "workerId name phone role department payType fixedPay variablePay"
+      );
 
       results.push({
         worker: worker._id,
         name: worker.name,
-        status: existingSalary
-          ? "updated"
-          : "created",
+        status: existingSalary ? "updated" : "created",
         salary: populated,
       });
     }
 
     return res.status(200).json({
-      message:
-        "Salary generation completed successfully",
+      success: true,
+      message: "Salary generation completed successfully",
       salaries: results,
     });
   } catch (error) {
-    console.error(
-      "[generateSalaries]",
-      error
-    );
+    console.error("[generateSalaries]", error);
 
     return res.status(500).json({
-      message:
-        "Failed to generate salaries",
+      success: false,
+      message: "Failed to generate salaries",
       error: error.message,
     });
   }
@@ -1213,8 +1193,8 @@ module.exports = {
   getSalaries,
   getSalary,
   updateSalary,
-  recordSalaryAdvance,      
-  deleteSalaryAdvance, 
+  recordSalaryAdvance,
+  deleteSalaryAdvance,
   recordSalaryPayment,
   deleteSalary,
 };

@@ -340,6 +340,7 @@ const refundRawMaterials = async ({ consumed, productionId, userId }) => {
       steel.updatedBy = userId || null;
       await steel.save();
     }
+  }
   if (consumed.tape?.rawStock && consumed.tape.quantity > 0) {
     const tape = await RawStock.findById(consumed.tape.rawStock);
     if (tape) {
@@ -366,7 +367,6 @@ const refundRawMaterials = async ({ consumed, productionId, userId }) => {
       tape.updatedBy = userId || null;
       await tape.save();
     }
-  }
   }
 
   for (const r of consumed.reels || []) {
