@@ -1,15 +1,48 @@
 const mongoose = require("mongoose");
-const { RawStock, RawPurchase } = require("../models/RawMaterial");
+const Order = require("../models/Order");
+const ProductStock = require("../models/ProductStock");
 const Contact = require("../models/Contacts");
+const Invoice = require("../models/Invoice");
+const { getNextSequence } = require("../models/Counter");
 
 const MAX_LIMIT = 200;
+const MAX_ITEMS = 100;
+const MAX_QTY = 1_000_000;
+const MAX_RATE = 100_000_000;
+const MAX_AMOUNT = 1e12;
 const MAX_MOVEMENT_LOG = 200;
-const MAX_QUANTITY = 1e8;
 
-const VALID_PAYMENT_MODES = [
-  "Bank Transfer", "UPI", "Cheque", "Cash", "NEFT", "RTGS", "Other",
+const REEL_SIZES = ["2kg", "5kg", "8kg", "10kg"];
+
+const VALID_STATUSES = [
+  "Draft",
+  "Confirmed",
+  "In Production",
+  "Ready for Dispatch",
+  "Dispatched",
+  "Delivered",
+  "Cancelled",
 ];
 
+const VALID_PAYMENT_STATUSES = ["Pending", "Partial", "Paid", "Overdue"];
+
+const { getGlobalSettings } = require("../utils/getSettings");
+
+const CONTACT_FIELDS =
+  "name company role phone email address billingAddress shippingAddress " +
+  "gstin state stateCode shippingName shippingCompany shippingGstin " +
+  "shippingState shippingStateCode";
+
+const round2 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+
+const normalizePhone = (v) => {
+  let d = String(v || "").replace(/\D/g, "");
+  if (d.length > 10 && d.startsWith("91")) d = d.slice(2);
+  if (d.length > 10 && d.startsWith("0")) d = d.slice(1);
+  return d.slice(0, 10);
+};
+
+/* ---------- helpers ---------- */
 const isValidId = (v) => mongoose.isValidObjectId(v);
 
 const safeString = (v, max = 500) => {
@@ -19,414 +52,229 @@ const safeString = (v, max = 500) => {
   return t ? t.slice(0, max) : "";
 };
 
-const normalizePhone = (v, max = 20) => {
-  const raw = safeString(v, max);
-  if (!raw) return null;
-  const cleaned = raw.replace(/[^\d+]/g, "");
-  if (cleaned.replace(/\D/g, "").length < 7) return { error: true };
-  return cleaned;
+const escapeRegex = (str) =>
+  String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const parseDate = (v) => {
+  if (!v) return null;
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? null : d;
 };
 
-const handleError = (res, error, fallback) => {
-  console.error(`[${fallback}]`, error);
+const endOfDay = (d) => {
+  const x = new Date(d);
+  x.setHours(23, 59, 59, 999);
+  return x;
+};
+
+const handleError = (res, error, fallbackMessage) => {
+  console.error(`[${fallbackMessage}]`, error);
 
   if (error.name === "ValidationError") {
-    const errors = Object.values(error.errors).map((e) => ({
-      field: e.path,
-      message: e.message,
-    }));
-    return res.status(400).json({
-      success: false,
-      message: errors[0]?.message || "Validation failed",
-      errors,
-    });
+    const messages = Object.values(error.errors).map((e) => e.message);
+    return res.status(400).json({ success: false, message: messages.join("; ") });
   }
-
+  if (error.name === "CastError") {
+    return res.status(400).json({ success: false, message: `Invalid value for ${error.path}` });
+  }
   if (error.code === 11000) {
-    return res.status(409).json({
-      success: false,
-      message: "A material with that name already exists.",
-    });
+    return res.status(409).json({ success: false, message: "Duplicate record, please retry" });
   }
-
-  return res.status(500).json({ success: false, message: fallback });
+  if (error.status) {
+    return res.status(error.status).json({ success: false, message: error.message });
+  }
+  return res.status(500).json({ success: false, message: fallbackMessage });
 };
 
-const getAllRawStock = async (req, res) => {
+const generateOrderNumber = async (session = null) => {
+  const year = new Date().getFullYear();
+  const seq = await getNextSequence(`order-${year}`, session);
+
+  let prefix = "ORD";
   try {
-    const { category, search } = req.query;
+    const settings = await getGlobalSettings();
+    if (settings?.numbering?.orderPrefix) prefix = settings.numbering.orderPrefix;
+  } catch (_) { /* fallback */ }
 
-    const query = { isActive: true };
-    if (category) {
-      if (!["Steel", "Tape", "Reel"].includes(category)) {
-        return res.status(400).json({
-          success: false,
-          message: "category must be Steel, Tape, or Reel",
-        });
-      }
-      query.category = category;
-    }
-    if (search && typeof search === "string" && search.trim()) {
-      const safe = search.trim().slice(0, 100).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      query.name = { $regex: safe, $options: "i" };
-    }
-
-    const items = await RawStock.find(query)
-      .sort({ category: 1, sizeKg: 1, name: 1 })
-      .limit(MAX_LIMIT);
-
-    return res.status(200).json({
-      success: true,
-      count: items.length,
-      data: items,
-    });
-  } catch (error) {
-    handleError(res, error, "Failed to fetch raw stock");
-  }
+  return `${prefix}-${year}-${String(seq).padStart(4, "0")}`;
 };
 
-const getRawStockById = async (req, res) => {
+const generateInvoiceNumber = async (session = null) => {
+  const year = new Date().getFullYear();
+  const seq = await getNextSequence(`invoice-${year}`, session);
+
+  let prefix = "INV";
   try {
-    if (!isValidId(req.params.id)) {
-      return res.status(400).json({ success: false, message: "Invalid ID" });
-    }
-    const item = await RawStock.findById(req.params.id);
-    if (!item || !item.isActive) {
-      return res.status(404).json({ success: false, message: "Not found" });
-    }
-    return res.status(200).json({ success: true, data: item });
-  } catch (error) {
-    handleError(res, error, "Failed to fetch raw stock");
+    const settings = await getGlobalSettings();
+    if (settings?.invoice?.prefix) prefix = settings.invoice.prefix;
+  } catch (_) {
   }
+
+  return `${prefix}-${year}-${String(seq).padStart(4, "0")}`;
 };
 
-const createRawStock = async (req, res) => {
-  try {
-    const {
-      name,
-      category,
-      unit,
-      sizeKg,
-      quantity,
-      reorderLevel,
-      criticalLevel,
-      notes,
-    } = req.body;
+const numberToWords = (number) => {
+  const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
+    "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
+    "Seventeen", "Eighteen", "Nineteen"];
+  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
 
-    if (!name || typeof name !== "string" || !name.trim()) {
-      return res.status(400).json({ success: false, message: "name is required" });
-    }
-    if (!["Steel", "Tape", "Reel"].includes(category)) {
-      return res.status(400).json({
-        success: false,
-        message: "category must be Steel, Tape, or Reel",
-      });
-    }
-    if (!["Kg", "Box", "Piece"].includes(unit)) {
-      return res.status(400).json({
-        success: false,
-        message: "unit must be Kg, Box, or Piece",
-      });
-    }
+  const convertBelowThousand = (num) => {
+    let result = "";
+    if (num >= 100) { result += `${ones[Math.floor(num / 100)]} Hundred `; num %= 100; }
+    if (num >= 20) { result += `${tens[Math.floor(num / 10)]} `; num %= 10; }
+    if (num > 0) { result += `${ones[num]} `; }
+    return result.trim();
+  };
 
-    const qty = quantity !== undefined ? Number(quantity) : 0;
-    if (isNaN(qty) || qty < 0 || qty > MAX_QUANTITY) {
-      return res.status(400).json({
-        success: false,
-        message: `quantity must be 0–${MAX_QUANTITY}`,
-      });
-    }
+  if (!Number.isFinite(number)) return "";
+  const value = Math.floor(number);
+  if (value === 0) return "Zero";
 
-    const reorder =
-      reorderLevel !== undefined ? Number(reorderLevel) : 0;
-    if (isNaN(reorder) || reorder < 0) {
-      return res.status(400).json({
-        success: false,
-        message: "reorderLevel must be >= 0",
-      });
-    }
-    const critical =
-      criticalLevel !== undefined ? Number(criticalLevel) : 0;
-    if (isNaN(critical) || critical < 0) {
-      return res.status(400).json({
-        success: false,
-        message: "criticalLevel must be >= 0",
-      });
-    }
-    if (critical > reorder) {
-      return res.status(400).json({
-        success: false,
-        message: "criticalLevel cannot be greater than reorderLevel",
-      });
+  let num = value;
+  let result = "";
+  const crore = Math.floor(num / 10000000); num %= 10000000;
+  const lakh = Math.floor(num / 100000); num %= 100000;
+  const thousand = Math.floor(num / 1000); num %= 1000;
+
+  if (crore) result += `${convertBelowThousand(crore)} Crore `;
+  if (lakh) result += `${convertBelowThousand(lakh)} Lakh `;
+  if (thousand) result += `${convertBelowThousand(thousand)} Thousand `;
+  if (num) result += `${convertBelowThousand(num)} `;
+  return result.trim();
+};
+
+const amountInWords = (amount) => {
+  const rounded = Math.round(Number(amount || 0));
+  return `Rupees ${numberToWords(rounded)} Only`;
+};
+
+const resolveStockId = (item) =>
+  item.productStock?._id || item.productStock || null;
+
+const deductOrderStock = async (
+  order,
+  user,
+  allowReserved = false,
+  session
+) => {
+  for (const item of order.items) {
+    const stockId = resolveStockId(item);
+    const qty = Number(item.quantity);
+    const size = item.size;
+
+    if (!Number.isFinite(qty) || qty <= 0 || qty > MAX_QTY) {
+      throw {
+        status: 400,
+        message: `Invalid quantity for ${size}.`,
+      };
     }
 
-    const size =
-      sizeKg !== undefined && sizeKg !== null && sizeKg !== ""
-        ? Number(sizeKg)
-        : null;
-    if (size !== null && (isNaN(size) || size < 0)) {
-      return res.status(400).json({
-        success: false,
-        message: "sizeKg must be a non-negative number",
-      });
+    if (!stockId) {
+      throw {
+        status: 400,
+        message: `Item ${size} has no stock reference.`,
+      };
     }
 
-    const item = await RawStock.create({
-      name: name.trim().slice(0, 80),
-      category,
-      unit,
-      sizeKg: size,
-      quantity: qty,
-      reservedQty: 0,
-      reorderLevel: reorder,
-      criticalLevel: critical,
-      notes: safeString(notes, 5000) || "",
+    const stock = await ProductStock.findOne({
+      _id: stockId,
       isActive: true,
-      createdBy: req.user?._id || null,
-      updatedBy: req.user?._id || null,
-      movementLog: qty
-        ? [
-            {
-              type: "in",
-              quantity: qty,
-              unitAtTime: unit,
-              beforeQty: 0,
-              afterQty: qty,
-              reason: "Initial stock",
-              notes: null,
-              refType: null,
-              refId: null,
-              refLabel: null,
-              by: req.user?._id || null,
-              at: new Date(),
-            },
-          ]
-        : [],
-    });
+    }).session(session);
 
-    return res.status(201).json({ success: true, data: item });
-  } catch (error) {
-    handleError(res, error, "Failed to create raw stock");
-  }
-};
-
-const updateRawStock = async (req, res) => {
-  try {
-    if (!isValidId(req.params.id)) {
-      return res.status(400).json({ success: false, message: "Invalid ID" });
+    if (!stock) {
+      throw {
+        status: 404,
+        message: `No active stock found for ${size} reel.`,
+      };
     }
 
-    const item = await RawStock.findById(req.params.id);
-    if (!item || !item.isActive) {
-      return res.status(404).json({ success: false, message: "Not found" });
+    const before = Number(stock.quantity || 0);
+    const reservedBefore = Number(stock.reservedQty || 0);
+    const freeBefore = before - reservedBefore;
+
+    if (
+      !Number.isFinite(before) ||
+      !Number.isFinite(reservedBefore) ||
+      before < 0 ||
+      reservedBefore < 0 ||
+      reservedBefore > before
+    ) {
+      throw {
+        status: 409,
+        message: `Invalid inventory reservation for ${size}. Correct the stock record before confirming this order.`,
+      };
     }
 
-    const {
-      name,
-      category,
-      unit,
-      sizeKg,
-      reorderLevel,
-      criticalLevel,
-      notes,
-      isActive,
-    } = req.body;
-
-    if (name !== undefined) {
-      if (typeof name !== "string" || !name.trim()) {
-        return res.status(400).json({ success: false, message: "name cannot be empty" });
-      }
-      item.name = name.trim().slice(0, 80);
-    }
-    if (category !== undefined) {
-      if (!["Steel", "Tape", "Reel"].includes(category)) {
-        return res.status(400).json({
-          success: false,
-          message: "category must be Steel, Tape, or Reel",
-        });
-      }
-      item.category = category;
-    }
-    if (unit !== undefined) {
-      if (!["Kg", "Box", "Piece"].includes(unit)) {
-        return res.status(400).json({
-          success: false,
-          message: "unit must be Kg, Box, or Piece",
-        });
-      }
-      item.unit = unit;
-    }
-    if (sizeKg !== undefined) {
-      if (sizeKg === null || sizeKg === "") {
-        item.sizeKg = null;
-      } else {
-        const size = Number(sizeKg);
-        if (isNaN(size) || size < 0) {
-          return res.status(400).json({
-            success: false,
-            message: "sizeKg must be a non-negative number",
-          });
-        }
-        item.sizeKg = size;
-      }
-    }
-    if (reorderLevel !== undefined) {
-      const reorder = Number(reorderLevel);
-      if (isNaN(reorder) || reorder < 0) {
-        return res.status(400).json({
-          success: false,
-          message: "reorderLevel must be >= 0",
-        });
-      }
-      item.reorderLevel = reorder;
-    }
-    if (criticalLevel !== undefined) {
-      const critical = Number(criticalLevel);
-      if (isNaN(critical) || critical < 0) {
-        return res.status(400).json({
-          success: false,
-          message: "criticalLevel must be >= 0",
-        });
-      }
-      item.criticalLevel = critical;
-    }
-    const finalReorder = item.reorderLevel ?? 0;
-    const finalCritical = item.criticalLevel ?? 0;
-    if (finalCritical > finalReorder) {
-      return res.status(400).json({
-        success: false,
-        message: "criticalLevel cannot be greater than reorderLevel",
-      });
-    }
-    if (notes !== undefined) {
-      item.notes = safeString(notes, 5000) || "";
-    }
-    if (isActive !== undefined) {
-      item.isActive = Boolean(isActive);
+    if (qty > before) {
+      throw {
+        status: 400,
+        message: `Insufficient ${size} stock. Available: ${before} ${stock.unit}, required: ${qty}.`,
+      };
     }
 
-    if (req.user?._id) item.updatedBy = req.user._id;
-    await item.save();
+    const usedFromReserved = Math.max(qty - freeBefore, 0);
 
-    return res.status(200).json({ success: true, data: item });
-  } catch (error) {
-    handleError(res, error, "Failed to update raw stock");
-  }
-};
-
-const adjustRawStock = async (req, res) => {
-  try {
-    if (!isValidId(req.params.id)) {
-      return res.status(400).json({ success: false, message: "Invalid ID" });
+    if (usedFromReserved > 0 && !allowReserved) {
+      throw {
+        status: 409,
+        code: "RESERVED_CONFLICT",
+        message: `This order needs ${usedFromReserved} ${stock.unit} from reserved ${size} stock. Continue?`,
+        data: {
+          material: "product",
+          size,
+          name: stock.name,
+          unit: stock.unit,
+          totalQty: before,
+          reservedQty: reservedBefore,
+          freeQty: freeBefore,
+          requested: qty,
+          usedFromReserved,
+        },
+      };
     }
 
-    const { type, quantity, reason, notes, overrideReserved } = req.body;
+    const after = before - qty;
+    const reservedAfter = reservedBefore - usedFromReserved;
 
-    if (!["in", "out", "adjustment"].includes(type)) {
-      return res.status(400).json({
-        success: false,
-        message: 'type must be "in", "out", or "adjustment"',
-      });
-    }
-
-    const numQty = Number(quantity);
-    if (isNaN(numQty) || numQty <= 0 || numQty > MAX_QUANTITY) {
-      return res.status(400).json({
-        success: false,
-        message: `quantity must be a positive number up to ${MAX_QUANTITY}`,
-      });
-    }
-
-    const item = await RawStock.findById(req.params.id);
-    if (!item || !item.isActive) {
-      return res.status(404).json({ success: false, message: "Not found" });
-    }
-
-    const before = Number(item.quantity) || 0;
-    const reservedBefore = Number(item.reservedQty) || 0;
-    let after = before;
-    let reservedAfter = reservedBefore;
-
-    if (type === "in") {
-      after = before + numQty;
-    } else if (type === "out") {
-      const available = before - reservedBefore;
-      if (!overrideReserved && numQty > available) {
-        return res.status(400).json({
-          success: false,
-          message: `Insufficient available stock. Available: ${available}, requested: ${numQty}`,
-          available,
-          reserved: reservedBefore,
-        });
-      }
-      if (overrideReserved && numQty > before) {
-        return res.status(400).json({
-          success: false,
-          message: `Insufficient total stock. On hand: ${before}, requested: ${numQty}`,
-        });
-      }
-      after = before - numQty;
-      if (overrideReserved && reservedBefore > 0) {
-        const reduceBy = Math.min(reservedBefore, numQty);
-        reservedAfter = reservedBefore - reduceBy;
-      }
-    } else if (type === "adjustment") {
-      after = numQty;
-      if (after < reservedBefore) {
-        reservedAfter = after;
-      }
-    }
-
-    if (after < 0 || after > MAX_QUANTITY) {
-      return res.status(400).json({
-        success: false,
-        message: `Resulting quantity ${after} is out of allowed range`,
-      });
-    }
-
-    const logEntry = {
-      type,
-      quantity: type === "adjustment" ? Math.abs(after - before) : numQty,
-      unitAtTime: item.unit,
-      beforeQty: before,
-      afterQty: after,
-      reason: safeString(reason, 200) || (type === "adjustment" ? "Manual adjustment" : null),
-      notes: safeString(notes, 500) || null,
-      refType: null,
-      refId: null,
-      refLabel: null,
-      by: req.user?._id || null,
-      at: new Date(),
-    };
-
-    // Conditional update — fails if concurrent change modified quantity/reserved
-    const filter = {
-      _id: item._id,
-      isActive: true,
-      quantity: before,
-      reservedQty: reservedBefore,
-    };
-
-    const setFields = {
-      quantity: after,
-      reservedQty: reservedAfter,
-      updatedBy: req.user?._id || null,
-    };
-    if (type === "in") setFields.lastReceivedAt = new Date();
-    if (type === "out") setFields.lastIssuedAt = new Date();
-
-    const result = await RawStock.updateOne(
-      filter,
+    // Conditional update prevents silently overwriting a concurrent change.
+    const result = await ProductStock.updateOne(
+      {
+        _id: stockId,
+        isActive: true,
+        quantity: before,
+        reservedQty: reservedBefore,
+      },
       [
         {
           $set: {
-            ...setFields,
+            quantity: after,
+            reservedQty: reservedAfter,
+            lastIssuedAt: "$$NOW",
             movementLog: {
               $slice: [
                 {
                   $concatArrays: [
                     { $ifNull: ["$movementLog", []] },
-                    [logEntry],
+                    [
+                      {
+                        type: "out",
+                        quantity: qty,
+                        unitAtTime: stock.unit,
+                        beforeQty: before,
+                        afterQty: after,
+                        reason:
+                          usedFromReserved > 0
+                            ? `Order ${order.orderNumber} confirmed (used ${usedFromReserved} from reserved)`
+                            : `Order ${order.orderNumber} confirmed`,
+                        notes: null,
+                        refType: "Dispatch",
+                        refId: order._id,
+                        refLabel: order.orderNumber,
+                        by: user?._id || null,
+                        at: "$$NOW",
+                      },
+                    ],
                   ],
                 },
                 -MAX_MOVEMENT_LOG,
@@ -435,710 +283,1224 @@ const adjustRawStock = async (req, res) => {
           },
         },
       ],
-      { updatePipeline: true }
+      { session, updatePipeline: true } 
     );
 
     if (result.modifiedCount !== 1) {
-      return res.status(409).json({
-        success: false,
+      throw {
+        status: 409,
         code: "STOCK_CHANGED",
-        message: "Stock changed while adjusting. Please retry.",
-      });
+        message: `Stock for ${size} changed while confirming this order. Please retry.`,
+      };
     }
 
-    const updated = await RawStock.findById(item._id);
-
-    return res.status(200).json({
-      success: true,
-      data: updated,
-      adjustment: {
-        type,
-        quantity: numQty,
-        before,
-        after,
-        reservedBefore,
-        reservedAfter,
-      },
-    });
-  } catch (error) {
-    handleError(res, error, "Failed to adjust raw stock");
+    item.reservedQtyUsed = usedFromReserved;
   }
 };
 
-const getRawStockMovements = async (req, res) => {
-  try {
-    if (!isValidId(req.params.id)) {
-      return res.status(400).json({ success: false, message: "Invalid ID" });
+// Consume a reservation owned by an order whose stockStatus is Reserved.
+// This assumes the reservation workflow reserves each order item's full quantity.
+const deductReservedOrderStock = async (order, user, session) => {
+  for (const item of order.items) {
+    const stockId = resolveStockId(item);
+    const qty = Number(item.quantity);
+    if (!stockId || !Number.isFinite(qty) || qty <= 0 || qty > MAX_QTY) {
+      throw { status: 400, message: `Invalid reserved quantity for ${item.size}.` };
     }
 
-    const item = await RawStock.findById(req.params.id)
-      .select("name unit movementLog isActive")
-      .lean();
-
-    if (!item || !item.isActive) {
-      return res.status(404).json({ success: false, message: "Not found" });
+    const stock = await ProductStock.findOne({ _id: stockId, isActive: true }).session(session);
+    if (!stock) {
+      throw { status: 404, message: `No active stock found for ${item.size} reel.` };
     }
 
-    const log = Array.isArray(item.movementLog) ? item.movementLog : [];
-    const limit = Math.min(
-      Number(req.query.limit) || 50,
-      MAX_MOVEMENT_LOG
+    const before = Number(stock.quantity || 0);
+    const reservedBefore = Number(stock.reservedQty || 0);
+    if (
+      !Number.isFinite(before) || !Number.isFinite(reservedBefore) ||
+      before < qty || reservedBefore < qty || reservedBefore > before
+    ) {
+      throw {
+        status: 409,
+        code: "RESERVATION_INCONSISTENT",
+        message: `The reserved stock for ${item.size} is insufficient or inconsistent. Verify this order's reservation before confirming it.`,
+      };
+    }
+
+    const after = before - qty;
+    const reservedAfter = reservedBefore - qty;
+    const result = await ProductStock.updateOne(
+      { _id: stockId, isActive: true, quantity: before, reservedQty: reservedBefore },
+      [{
+        $set: {
+          quantity: after,
+          reservedQty: reservedAfter,
+          lastIssuedAt: "$$NOW",
+          movementLog: {
+            $slice: [
+              {
+                $concatArrays: [
+                  { $ifNull: ["$movementLog", []] },
+                  [{
+                    type: "out",
+                    quantity: qty,
+                    unitAtTime: stock.unit,
+                    beforeQty: before,
+                    afterQty: after,
+                    reason: `Reserved stock consumed for order ${order.orderNumber}`,
+                    notes: null,
+                    refType: "Dispatch",
+                    refId: order._id,
+                    refLabel: order.orderNumber,
+                    by: user?._id || null,
+                    at: "$$NOW",
+                  }],
+                ],
+              },
+              -MAX_MOVEMENT_LOG,
+            ],
+          },
+        },
+      }],
+      {
+        session,
+        updatePipeline: true,
+      }
     );
 
-    return res.status(200).json({
-      success: true,
-      data: {
-        name: item.name,
-        unit: item.unit,
-        movements: log.slice(-limit).reverse(),
-      },
-    });
-  } catch (error) {
-    handleError(res, error, "Failed to fetch movements");
+    if (result.modifiedCount !== 1) {
+      throw {
+        status: 409,
+        code: "STOCK_CHANGED",
+        message: `Reserved stock for ${item.size} changed while confirming this order. Please retry.`,
+      };
+    }
+    item.reservedQtyUsed = qty;
   }
 };
 
-const seedDefaultMaterials = async (req, res) => {
-  try {
-    const defaults = [
-      { name: "Steel Wire", category: "Steel", unit: "Kg", sizeKg: null, reorderLevel: 50, criticalLevel: 10 },
-      { name: "Binding Tape", category: "Tape", unit: "Box", sizeKg: null, reorderLevel: 20, criticalLevel: 5 },
-      { name: "Wooden Reel 2kg", category: "Reel", unit: "Piece", sizeKg: 2, reorderLevel: 10, criticalLevel: 3 },
-      { name: "Wooden Reel 5kg", category: "Reel", unit: "Piece", sizeKg: 5, reorderLevel: 10, criticalLevel: 3 },
-      { name: "Wooden Reel 8kg", category: "Reel", unit: "Piece", sizeKg: 8, reorderLevel: 10, criticalLevel: 3 },
-      { name: "Wooden Reel 10kg", category: "Reel", unit: "Piece", sizeKg: 10, reorderLevel: 10, criticalLevel: 3 },
-    ];
 
-    const created = [];
-    for (const d of defaults) {
-      const exists = await RawStock.findOne({ name: d.name, isActive: true });
-      if (!exists) {
-        const item = await RawStock.create({
-          ...d,
-          quantity: 0,
-          reservedQty: 0,
-          notes: "Seeded default",
-          isActive: true,
-          createdBy: req.user?._id || null,
-          updatedBy: req.user?._id || null,
-          movementLog: [],
-        });
-        created.push(item);
-      }
+const restoreOrderStock = async (order, user, session) => {
+  for (const item of order.items) {
+    const stockId = resolveStockId(item);
+    const qty = Number(item.quantity);
+
+    if (!stockId || !Number.isFinite(qty) || qty <= 0 || qty > MAX_QTY) {
+      throw {
+        status: 400,
+        message: `Invalid stock restoration data for ${item.size}.`,
+      };
     }
 
-    return res.status(200).json({
-      success: true,
-      message: `Seeded ${created.length} materials`,
-      data: created,
-    });
-  } catch (error) {
-    handleError(res, error, "Failed to seed materials");
+    const stock = await ProductStock.findOne({
+      _id: stockId,
+      isActive: true,
+    }).session(session);
+
+    if (!stock) {
+      throw {
+        status: 409,
+        message: `Cannot restore ${item.size}: active stock record not found.`,
+      };
+    }
+
+    const before = Number(stock.quantity || 0);
+    const reservedBefore = Number(stock.reservedQty || 0);
+
+    // Restore only the portion that this order originally consumed
+    // from reserved stock.
+    const reservedQtyUsed = Number(item.reservedQtyUsed || 0);
+
+    if (
+      !Number.isFinite(before) ||
+      before < 0 ||
+      !Number.isFinite(reservedBefore) ||
+      reservedBefore < 0 ||
+      reservedBefore > before ||
+      !Number.isFinite(reservedQtyUsed) ||
+      reservedQtyUsed < 0 ||
+      reservedQtyUsed > qty
+    ) {
+      throw {
+        status: 409,
+        code: "RESERVATION_INCONSISTENT",
+        message: `Cannot safely restore ${item.size}: stock or reservation quantities are inconsistent.`,
+      };
+    }
+
+    const after = before + qty;
+    const reservedAfter = reservedBefore + reservedQtyUsed;
+
+    if (
+      !Number.isFinite(after) ||
+      after > MAX_QTY ||
+      reservedAfter > after
+    ) {
+      throw {
+        status: 409,
+        code: "RESERVATION_INCONSISTENT",
+        message: `Restoring ${item.size} would create an invalid stock reservation.`,
+      };
+    }
+
+    const result = await ProductStock.updateOne(
+      {
+        _id: stockId,
+        isActive: true,
+        quantity: before,
+        reservedQty: reservedBefore,
+      },
+      [
+        {
+          $set: {
+            quantity: after,
+            reservedQty: reservedAfter,
+            lastReceivedAt: "$$NOW",
+            movementLog: {
+              $slice: [
+                {
+                  $concatArrays: [
+                    { $ifNull: ["$movementLog", []] },
+                    [
+                      {
+                        type: "in",
+                        quantity: qty,
+                        unitAtTime: stock.unit,
+                        beforeQty: before,
+                        afterQty: after,
+                        reason:
+                          reservedQtyUsed > 0
+                            ? `Cancelled order ${order.orderNumber}: restored ${qty} stock, including ${reservedQtyUsed} reserved`
+                            : `Cancelled order ${order.orderNumber} stock restored`,
+                        notes: null,
+                        refType: "Manual",
+                        refId: order._id,
+                        refLabel: order.orderNumber,
+                        by: user?._id || null,
+                        at: "$$NOW",
+                      },
+                    ],
+                  ],
+                },
+                -MAX_MOVEMENT_LOG,
+              ],
+            },
+          },
+        },
+      ],
+      {
+        session,
+        updatePipeline: true,
+      }
+    );
+
+    if (result.modifiedCount !== 1) {
+      throw {
+        status: 409,
+        code: "STOCK_CHANGED",
+        message: `Stock for ${item.size} changed during restoration. Please retry.`,
+      };
+    }
   }
 };
 
-// ─── Purchases ───────────────────────────────────────────────────────────────
+const releaseOrderReservation = async (order, user, session) => {
+  for (const item of order.items) {
+    const stockId = resolveStockId(item);
+    const qty = Number(item.quantity);
+    if (!stockId || !Number.isFinite(qty) || qty <= 0 || qty > MAX_QTY) {
+      throw {
+        status: 400,
+        message: `Invalid reservation release data for ${item.size}.`,
+      };
+    }
 
-const getAllPurchases = async (req, res) => {
+    const stock = await ProductStock.findOne({ _id: stockId, isActive: true }).session(session);
+    if (!stock) {
+      throw {
+        status: 409,
+        message: `Cannot release ${item.size} reservation: active stock record not found.`,
+      };
+    }
+
+    const before = Number(stock.quantity || 0);
+    const reservedBefore = Number(stock.reservedQty || 0);
+    if (!Number.isFinite(before) || before < 0 || !Number.isFinite(reservedBefore) || reservedBefore < qty || reservedBefore > before) {
+      throw {
+        status: 409,
+        code: "RESERVATION_INCONSISTENT",
+        message: `Cannot safely release ${item.size} reservation. Verify the order reservation and stock record before retrying.`,
+      };
+    }
+
+    const reservedAfter = reservedBefore - qty;
+    const result = await ProductStock.updateOne(
+      {
+        _id: stockId,
+        isActive: true,
+        quantity: before,
+        reservedQty: reservedBefore,
+      },
+      [
+        {
+          $set: {
+            reservedQty: reservedAfter,
+            movementLog: {
+              $slice: [
+                {
+                  $concatArrays: [
+                    { $ifNull: ["$movementLog", []] },
+                    [
+                      {
+                        type: "adjustment",
+                        quantity: qty,
+                        unitAtTime: stock.unit,
+                        beforeQty: before,
+                        afterQty: before,
+                        reason: `Reservation released for cancelled order ${order.orderNumber}`,
+                        notes: null,
+                        refType: "Manual",
+                        refId: order._id,
+                        refLabel: order.orderNumber,
+                        by: user?._id || null,
+                        at: "$$NOW",
+                      },
+                    ],
+                  ],
+                },
+                -MAX_MOVEMENT_LOG,
+              ],
+            },
+          },
+        },
+      ],
+      {
+        session,
+        updatePipeline: true,
+      }
+    );
+
+    if (result.modifiedCount !== 1) {
+      throw {
+        status: 409,
+        code: "STOCK_CHANGED",
+        message: `Reservation for ${item.size} changed during cancellation. Please retry.`,
+      };
+    }
+  }
+};
+
+const buildItems = async (rawItems) => {
+  if (!Array.isArray(rawItems) || rawItems.length === 0) {
+    throw { status: 400, message: "Order must have at least one item" };
+  }
+  if (rawItems.length > MAX_ITEMS) {
+    throw { status: 400, message: `Order cannot contain more than ${MAX_ITEMS} items` };
+  }
+
+  let subTotal = 0;
+  const processed = [];
+
+  for (const raw of rawItems) {
+    const size = String(raw.size || "").trim();
+    if (!REEL_SIZES.includes(size)) {
+      throw { status: 400, message: `Invalid reel size: ${size}` };
+    }
+
+    const stock = await ProductStock.findOne({ size, isActive: true });
+    if (!stock) {
+      throw { status: 400, message: `Product stock for ${size} not found` };
+    }
+
+    const qty = Number(raw.quantity);
+    const rate = Number(raw.rate ?? 0);
+    const lineDiscount = Number(raw.discount ?? 0);
+
+    if (!Number.isFinite(qty) || qty <= 0 || qty > MAX_QTY) {
+      throw { status: 400, message: `Quantity for ${size} must be between 0.01 and ${MAX_QTY}` };
+    }
+    if (!Number.isFinite(rate) || rate < 0 || rate > MAX_RATE) {
+      throw { status: 400, message: `Rate for ${size} must be between 0 and ${MAX_RATE}` };
+    }
+    if (!Number.isFinite(lineDiscount) || lineDiscount < 0 || lineDiscount > MAX_AMOUNT) {
+      throw { status: 400, message: `Discount for ${size} must be a valid number` };
+    }
+
+    const amount = Math.max(0, qty * rate - lineDiscount);
+
+    processed.push({
+      productStock: stock._id,
+      productName: stock.name,
+      size,
+      quantity: qty,
+      unit: "Reel",
+      rate,
+      discount: lineDiscount,
+      amount,
+    });
+    subTotal += amount;
+  }
+  return { items: processed, subTotal };
+};
+
+const getAllOrders = async (req, res) => {
   try {
-    const { status, material, supplier, search } = req.query;
+    const { page = 1, limit = 20, status, paymentStatus, contact, search, fromDate, toDate } = req.query;
+
+    const pageNumber = Math.max(Number(page) || 1, 1);
+    const limitNumber = Math.min(Math.max(Number(limit) || 20, 1), MAX_LIMIT);
+
     const query = { isActive: true };
 
-    if (status) {
-      if (!["Pending", "Received", "Cancelled"].includes(status)) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid status filter",
-        });
+    if (status && status !== "All") {
+      if (!VALID_STATUSES.includes(status)) {
+        return res.status(400).json({ success: false, message: "Invalid status filter" });
       }
       query.status = status;
     }
-    if (material && isValidId(material)) query.material = material;
-    if (supplier && isValidId(supplier)) query.supplier = supplier;
-
+    if (paymentStatus && paymentStatus !== "All") {
+      if (!VALID_PAYMENT_STATUSES.includes(paymentStatus)) {
+        return res.status(400).json({ success: false, message: "Invalid paymentStatus filter" });
+      }
+      query.paymentStatus = paymentStatus;
+    }
+    if (contact) {
+      if (!isValidId(contact)) {
+        return res.status(400).json({ success: false, message: "Invalid contact ID" });
+      }
+      query.contact = contact;
+    }
     if (search && typeof search === "string" && search.trim()) {
-      const safe = search.trim().slice(0, 100).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const safe = escapeRegex(search.trim().slice(0, 100));
       query.$or = [
-        { purchaseNumber: { $regex: safe, $options: "i" } },
-        { invoiceNumber: { $regex: safe, $options: "i" } },
+        { orderNumber: { $regex: safe, $options: "i" } },
+        { customerName: { $regex: safe, $options: "i" } },
+        { customerPhone: { $regex: safe, $options: "i" } },
         { notes: { $regex: safe, $options: "i" } },
       ];
     }
+    if (fromDate || toDate) {
+      query.orderDate = {};
+      if (fromDate) {
+        const d = parseDate(fromDate);
+        if (!d) return res.status(400).json({ success: false, message: "Invalid fromDate" });
+        query.orderDate.$gte = d;
+      }
+      if (toDate) {
+        const d = parseDate(toDate);
+        if (!d) return res.status(400).json({ success: false, message: "Invalid toDate" });
+        query.orderDate.$lte = endOfDay(d);
+      }
+    }
 
-    const items = await RawPurchase.find(query)
-      .populate("material", "name category unit sizeKg")
-      .populate("supplier", "name company phone")
-      .sort({ createdAt: -1 })
-      .limit(MAX_LIMIT);
+    const skip = (pageNumber - 1) * limitNumber;
+
+    const [orders, total] = await Promise.all([
+      Order.find(query)
+        .populate("contact", CONTACT_FIELDS)
+        .populate("enquiry", "enquiryNumber customerName company subject")
+        .sort({ orderDate: -1, createdAt: -1 })
+        .skip(skip)
+        .limit(limitNumber),
+      Order.countDocuments(query),
+    ]);
 
     return res.status(200).json({
       success: true,
-      count: items.length,
-      data: items,
+      count: orders.length,
+      total,
+      page: pageNumber,
+      limit: limitNumber,
+      pages: Math.max(Math.ceil(total / limitNumber), 1),
+      data: orders,
     });
   } catch (error) {
-    handleError(res, error, "Failed to fetch purchases");
+    handleError(res, error, "Server error while fetching orders");
   }
 };
 
-const getPurchaseById = async (req, res) => {
+const getOrderById = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
-      return res.status(400).json({ success: false, message: "Invalid ID" });
+      return res.status(400).json({ success: false, message: "Invalid order ID" });
     }
-    const item = await RawPurchase.findById(req.params.id)
-      .populate("material", "name category unit sizeKg quantity")
-      .populate("supplier", "name company phone email");
 
-    if (!item || !item.isActive) {
-      return res.status(404).json({ success: false, message: "Not found" });
+    const order = await Order.findById(req.params.id)
+      .populate("contact", CONTACT_FIELDS)
+      .populate("enquiry", "enquiryNumber customerName company phone email project location timeline");
+
+    if (!order || !order.isActive) {
+      return res.status(404).json({ success: false, message: "Order not found" });
     }
-    return res.status(200).json({ success: true, data: item });
+    return res.status(200).json({ success: true, data: order });
   } catch (error) {
-    handleError(res, error, "Failed to fetch purchase");
+    handleError(res, error, "Server error while fetching order");
   }
 };
 
-const createPurchase = async (req, res) => {
+const createOrder = async (req, res) => {
   try {
     const {
-      material,
-      supplier,
-      quantity,
-      unit,
-      unitPrice,
-      totalAmount,
-      invoiceNumber,
-      purchaseDate,
-      expectedDate,
-      notes,
-      paymentMode,
-      amountPaid,
+      enquiry, contact, customerName, customerPhone,
+      items, discount = 0, taxPercent = 18,
+      expectedDeliveryDate, shippingAddress, billingAddress,
+      notes, status = "Draft",
+      allowReserved = false,
     } = req.body;
 
-    if (!isValidId(material)) {
-      return res.status(400).json({ success: false, message: "Valid material ID required" });
-    }
-    if (!isValidId(supplier)) {
-      return res.status(400).json({ success: false, message: "Valid supplier ID required" });
-    }
-
-    const mat = await RawStock.findById(material);
-    if (!mat || !mat.isActive) {
-      return res.status(404).json({ success: false, message: "Material not found" });
+    if (
+      typeof allowReserved !== "boolean" &&
+      allowReserved !== "true" &&
+      allowReserved !== "false"
+    ) {
+      return res.status(400).json({ success: false, message: "allowReserved must be a boolean" });
     }
 
-    const sup = await Contact.findById(supplier);
-    if (!sup || sup.status !== "active") {
-      return res.status(404).json({ success: false, message: "Supplier not found or inactive" });
-    }
+    let contactDoc = null;
+    let finalContactId = null;
 
-    const qty = Number(quantity);
-    if (isNaN(qty) || qty <= 0 || qty > MAX_QUANTITY) {
+    if (contact && isValidId(contact)) {
+      contactDoc = await Contact.findById(contact);
+      if (!contactDoc) {
+        return res.status(404).json({ success: false, message: "Contact not found" });
+      }
+      finalContactId = contactDoc._id;
+    } else if (customerName && customerPhone) {
+      try {
+        contactDoc = await Contact.create({
+          name: String(customerName).trim().slice(0, 150),
+          phone: normalizePhone(customerPhone),
+          company: "",
+          email: "",
+        });
+        finalContactId = contactDoc._id;
+      } catch (err) {
+        return res.status(400).json({
+          success: false,
+          message: err.message || "Failed to create new customer",
+        });
+      }
+    } else {
       return res.status(400).json({
         success: false,
-        message: `quantity must be positive up to ${MAX_QUANTITY}`,
+        message: "Either select a customer or provide a new customer's name and phone.",
       });
     }
 
-    const price = Number(unitPrice);
-    if (isNaN(price) || price < 0) {
-      return res.status(400).json({ success: false, message: "unitPrice must be >= 0" });
+    let cleanEnquiry = null;
+    if (enquiry) {
+      if (!isValidId(enquiry)) {
+        return res.status(400).json({ success: false, message: "Invalid enquiry ID" });
+      }
+      cleanEnquiry = enquiry;
     }
 
-    let total = totalAmount !== undefined ? Number(totalAmount) : qty * price;
-    if (isNaN(total) || total < 0) {
-      return res.status(400).json({ success: false, message: "totalAmount must be >= 0" });
-    }
-    total = Math.round(total * 100) / 100;
-
-    const paid = amountPaid !== undefined ? Number(amountPaid) : 0;
-    if (isNaN(paid) || paid < 0) {
-      return res.status(400).json({ success: false, message: "amountPaid must be >= 0" });
+    const orderDiscount = Number(discount || 0);
+    if (!Number.isFinite(orderDiscount) || orderDiscount < 0 || orderDiscount > MAX_AMOUNT) {
+      return res.status(400).json({ success: false, message: "Invalid discount" });
     }
 
-    const purchaseUnit = unit || mat.unit;
-    if (!["Kg", "Box", "Piece"].includes(purchaseUnit)) {
+    const numericTaxPercent = Number(taxPercent);
+    if (!Number.isFinite(numericTaxPercent) || numericTaxPercent < 0 || numericTaxPercent > 100) {
+      return res.status(400).json({ success: false, message: "Tax percent must be between 0 and 100" });
+    }
+
+    if (!["Draft", "Confirmed"].includes(status)) {
       return res.status(400).json({
         success: false,
-        message: "unit must be Kg, Box, or Piece",
+        message: "New orders can only be created as Draft or Confirmed.",
       });
     }
 
-    if (paymentMode && !VALID_PAYMENT_MODES.includes(paymentMode)) {
-      return res.status(400).json({
-        success: false,
-        message: `paymentMode must be one of: ${VALID_PAYMENT_MODES.join(", ")}`,
-      });
+    let cleanExpectedDelivery;
+    if (expectedDeliveryDate) {
+      const d = parseDate(expectedDeliveryDate);
+      if (!d) return res.status(400).json({ success: false, message: "Invalid expected delivery date" });
+      cleanExpectedDelivery = d;
     }
 
-    const purchase = await RawPurchase.create({
-      material,
-      supplier,
-      quantity: qty,
-      unit: purchaseUnit,
-      unitPrice: price,
-      totalAmount: total,
-      amountPaid: Math.min(paid, total),
-      invoiceNumber: safeString(invoiceNumber, 100) || null,
-      purchaseDate: purchaseDate ? new Date(purchaseDate) : new Date(),
-      expectedDate: expectedDate ? new Date(expectedDate) : null,
-      notes: safeString(notes, 1000) || "",
-      paymentMode: paymentMode || null,
-      status: "Pending",
-      isActive: true,
+    const { items: processedItems, subTotal } = await buildItems(items);
+
+    const taxableAmount = Math.max(0, subTotal - orderDiscount);
+    const taxAmount = round2((taxableAmount * numericTaxPercent) / 100);
+    const grandTotal = round2(taxableAmount + taxAmount);
+
+    const orderPayload = {
+      enquiry: cleanEnquiry,
+      contact: finalContactId,
+      customerName:
+        safeString(customerName, 150) ||
+        (contactDoc.company
+          ? `${contactDoc.company} — ${contactDoc.name}`
+          : contactDoc.name),
+      customerPhone:
+        normalizePhone(customerPhone) || contactDoc.phone || "",
+      items: processedItems,
+      subTotal,
+      discount: orderDiscount,
+      taxPercent: numericTaxPercent,
+      taxAmount,
+      grandTotal,
+      status,
+      expectedDeliveryDate: cleanExpectedDelivery || null,
+      shippingAddress: safeString(shippingAddress, 500) || "",
+      billingAddress: safeString(billingAddress, 500) || "",
+      notes: safeString(notes, 2000) || "",
+      stockStatus: "Pending",
       createdBy: req.user?._id || null,
-      updatedBy: req.user?._id || null,
-      payments: paid > 0
-        ? [
-            {
-              amount: Math.min(paid, total),
-              mode: paymentMode || "Cash",
-              date: new Date(),
-              notes: "Initial payment",
-              by: req.user?._id || null,
-            },
-          ]
-        : [],
-    });
+    };
 
-    const populated = await RawPurchase.findById(purchase._id)
-      .populate("material", "name category unit sizeKg")
-      .populate("supplier", "name company phone email");
+    let order;
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        const orderNumber = await generateOrderNumber(session);
+        [order] = await Order.create(
+          [{ ...orderPayload, orderNumber }],
+          { session }
+        );
 
-    return res.status(201).json({ success: true, data: populated });
-  } catch (error) {
-    handleError(res, error, "Failed to create purchase");
-  }
-};
-
-const updatePurchase = async (req, res) => {
-  try {
-    if (!isValidId(req.params.id)) {
-      return res.status(400).json({ success: false, message: "Invalid ID" });
-    }
-
-    const purchase = await RawPurchase.findById(req.params.id);
-    if (!purchase || !purchase.isActive) {
-      return res.status(404).json({ success: false, message: "Not found" });
-    }
-
-    if (purchase.status === "Received") {
-      return res.status(400).json({
-        success: false,
-        message: "Cannot update a received purchase",
-      });
-    }
-    if (purchase.status === "Cancelled") {
-      return res.status(400).json({
-        success: false,
-        message: "Cannot update a cancelled purchase",
-      });
-    }
-
-    const {
-      quantity,
-      unitPrice,
-      totalAmount,
-      invoiceNumber,
-      purchaseDate,
-      expectedDate,
-      notes,
-      paymentMode,
-    } = req.body;
-
-    if (quantity !== undefined) {
-      const qty = Number(quantity);
-      if (isNaN(qty) || qty <= 0 || qty > MAX_QUANTITY) {
-        return res.status(400).json({
-          success: false,
-          message: `quantity must be positive up to ${MAX_QUANTITY}`,
-        });
-      }
-      purchase.quantity = qty;
-    }
-    if (unitPrice !== undefined) {
-      const price = Number(unitPrice);
-      if (isNaN(price) || price < 0) {
-        return res.status(400).json({ success: false, message: "unitPrice must be >= 0" });
-      }
-      purchase.unitPrice = price;
-    }
-    if (totalAmount !== undefined) {
-      let total = Number(totalAmount);
-      if (isNaN(total) || total < 0) {
-        return res.status(400).json({ success: false, message: "totalAmount must be >= 0" });
-      }
-      total = Math.round(total * 100) / 100;
-      purchase.totalAmount = total;
-      if (purchase.amountPaid > total) {
-        purchase.amountPaid = total;
-      }
-    } else if (quantity !== undefined || unitPrice !== undefined) {
-      const recalc =
-        Math.round(purchase.quantity * purchase.unitPrice * 100) / 100;
-      purchase.totalAmount = recalc;
-      if (purchase.amountPaid > recalc) {
-        purchase.amountPaid = recalc;
-      }
-    }
-
-    if (invoiceNumber !== undefined) {
-      purchase.invoiceNumber = safeString(invoiceNumber, 100) || null;
-    }
-    if (purchaseDate !== undefined) {
-      purchase.purchaseDate = purchaseDate ? new Date(purchaseDate) : purchase.purchaseDate;
-    }
-    if (expectedDate !== undefined) {
-      purchase.expectedDate = expectedDate ? new Date(expectedDate) : null;
-    }
-    if (notes !== undefined) {
-      purchase.notes = safeString(notes, 1000) || "";
-    }
-    if (paymentMode !== undefined) {
-      if (paymentMode && !VALID_PAYMENT_MODES.includes(paymentMode)) {
-        return res.status(400).json({
-          success: false,
-          message: `paymentMode must be one of: ${VALID_PAYMENT_MODES.join(", ")}`,
-        });
-      }
-      purchase.paymentMode = paymentMode || null;
-    }
-
-    if (req.user?._id) purchase.updatedBy = req.user._id;
-    await purchase.save();
-
-    const populated = await RawPurchase.findById(purchase._id)
-      .populate("material", "name category unit sizeKg")
-      .populate("supplier", "name company phone email");
-
-    return res.status(200).json({ success: true, data: populated });
-  } catch (error) {
-    handleError(res, error, "Failed to update purchase");
-  }
-};
-
-const receivePurchase = async (req, res) => {
-  const session = await mongoose.startSession();
-  try {
-    if (!isValidId(req.params.id)) {
-      return res.status(400).json({ success: false, message: "Invalid ID" });
-    }
-
-    let populated = null;
-
-    await session.withTransaction(async () => {
-      const purchase = await RawPurchase.findOne({
-        _id: req.params.id,
-        isActive: true,
-        status: "Pending",
-      })
-        .populate("material")
-        .session(session);
-
-      if (!purchase) {
-        const existing = await RawPurchase.findById(req.params.id).session(session);
-        if (!existing || !existing.isActive) {
-          const err = new Error("Purchase not found");
-          err.status = 404;
-          throw err;
+        if (order.status === "Confirmed") {
+          await deductOrderStock(order, req.user, allowReserved === true || allowReserved === "true", session);
+          order.stockStatus = "Deducted";
+          order.stockDeductedAt = new Date();
+          order.updatedBy = req.user?._id || null;
+          await order.save({ session });
         }
-        const err = new Error(
-          `Cannot receive a purchase in status "${existing.status}".`
-        );
-        err.status = 400;
-        throw err;
-      }
+      });
+    } finally {
+      await session.endSession();
+    }
 
-      if (!purchase.material?._id) {
-        const err = new Error("Purchase has no linked material");
-        err.status = 400;
-        throw err;
-      }
+    const populated = await Order.findById(order._id)
+      .populate("contact", CONTACT_FIELDS)
+      .populate("enquiry", "enquiryNumber customerName company subject");
 
-      purchase.status = "Received";
-      purchase.receivedAt = new Date();
-      purchase.updatedBy = req.user?._id || null;
-      await purchase.save({ session });
-
-      const materialId = purchase.material._id;
-      const qty = Number(purchase.quantity);
-
-      const result = await RawStock.updateOne(
-        { _id: materialId, isActive: true },
-        [
-          {
-            $set: {
-              quantity: { $add: ["$quantity", qty] },
-              lastReceivedAt: "$$NOW",
-              movementLog: {
-                $slice: [
-                  {
-                    $concatArrays: [
-                      { $ifNull: ["$movementLog", []] },
-                      [
-                        {
-                          type: "purchase-received",
-                          quantity: qty,
-                          unitAtTime: purchase.unit,
-                          beforeQty: "$quantity",
-                          afterQty: { $add: ["$quantity", qty] },
-                          reason: "Purchase received",
-                          notes: null,
-                          refType: "Purchase",
-                          refId: purchase._id,
-                          refLabel: purchase.purchaseNumber || purchase._id.toString().slice(-8),
-                          by: req.user?._id || null,
-                          at: "$$NOW",
-                        },
-                      ],
-                    ],
-                  },
-                  -MAX_MOVEMENT_LOG,
-                ],
-              },
-            },
-          },
-        ],
-        { session, updatePipeline: true }
-      );
-
-      if (result.modifiedCount !== 1) {
-        const err = new Error(
-          "Material not found or inactive — purchase was not received. Please try again."
-        );
-        err.status = 500;
-        throw err;
-      }
-    });
-
-    populated = await RawPurchase.findById(req.params.id)
-      .populate("material", "name category unit sizeKg quantity")
-      .populate("supplier", "name company phone email");
-
-    return res.status(200).json({
+    return res.status(201).json({
       success: true,
-      message: "Purchase received and stock updated",
+      message: "Order created successfully",
       data: populated,
     });
   } catch (error) {
-    if (error.status === 400 || error.status === 404 || error.status === 500) {
+    if (error?.code === "RESERVED_CONFLICT") {
+      return res.status(409).json({
+        success: false,
+        code: error.code,
+        message: error.message,
+        data: error.data,
+      });
+    }
+    if (error?.code === "STOCK_CHANGED") {
+      return res.status(409).json({ success: false, code: error.code, message: error.message });
+    }
+    if (error?.status) {
       return res.status(error.status).json({
         success: false,
+        ...(error.code ? { code: error.code } : {}),
+        message: error.message || "Failed to create order",
+      });
+    }
+    handleError(res, error, "Server error while creating order");
+  }
+};
+
+const updateOrder = async (req, res) => {
+  try {
+    if (!isValidId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid order ID" });
+    }
+
+    const order = await Order.findById(req.params.id);
+    if (!order || !order.isActive) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    if (req.body.items !== undefined && (order.status !== "Draft" || (order.stockStatus || "Pending") !== "Pending")) {
+      return res.status(400).json({
+        success: false,
+        message: "Order items can only be edited while the order is Draft and has no stock reservation or deduction.",
+      });
+    }
+
+    if (req.body.expectedDeliveryDate !== undefined) {
+      if (req.body.expectedDeliveryDate === null || req.body.expectedDeliveryDate === "") {
+        order.expectedDeliveryDate = null;
+      } else {
+        const d = parseDate(req.body.expectedDeliveryDate);
+        if (!d) return res.status(400).json({ success: false, message: "Invalid expected delivery date" });
+        order.expectedDeliveryDate = d;
+      }
+    }
+
+    if (req.body.shippingAddress !== undefined) {
+      order.shippingAddress = safeString(req.body.shippingAddress, 500) || "";
+    }
+    if (req.body.billingAddress !== undefined) {
+      order.billingAddress = safeString(req.body.billingAddress, 500) || "";
+    }
+    if (req.body.notes !== undefined) {
+      order.notes = safeString(req.body.notes, 2000) || "";
+    }
+    if (req.body.customerName !== undefined) {
+      order.customerName = safeString(req.body.customerName, 150) || "";
+    }
+    if (req.body.customerPhone !== undefined) {
+      order.customerPhone = safeString(req.body.customerPhone, 30) || "";
+    }
+
+    let totalsChanged = false;
+
+    if (req.body.items !== undefined) {
+      const { items: processedItems, subTotal } = await buildItems(req.body.items);
+      order.items = processedItems;
+      order.subTotal = subTotal;
+      totalsChanged = true;
+    }
+
+    if (req.body.discount !== undefined) {
+      const d = Number(req.body.discount);
+      if (!Number.isFinite(d) || d < 0 || d > MAX_AMOUNT) {
+        return res.status(400).json({ success: false, message: "Invalid discount" });
+      }
+      order.discount = d;
+      totalsChanged = true;
+    }
+
+    if (req.body.taxPercent !== undefined) {
+      const t = Number(req.body.taxPercent);
+      if (!Number.isFinite(t) || t < 0 || t > 100) {
+        return res.status(400).json({ success: false, message: "Tax percent must be between 0 and 100" });
+      }
+      order.taxPercent = t;
+      totalsChanged = true;
+    }
+
+    if (totalsChanged) {
+  const taxableAmount = Math.max(
+    0,
+    Number(order.subTotal || 0) - Number(order.discount || 0)
+  );
+
+  const taxAmount =
+    (taxableAmount * Number(order.taxPercent || 0)) / 100;
+
+  const grandTotal = round2(taxableAmount + taxAmount);
+  const amountPaid = round2(Number(order.amountPaid || 0));
+
+  if (amountPaid > grandTotal + 0.01) {
+    return res.status(400).json({
+      success: false,
+      code: "ORDER_TOTAL_BELOW_PAID_AMOUNT",
+      message:
+        "The new order total cannot be lower than the amount already paid.",
+    });
+  }
+
+  order.taxAmount = round2(taxAmount);
+  order.grandTotal = grandTotal;
+
+  if (amountPaid >= grandTotal) {
+    order.paymentStatus = "Paid";
+  } else if (order.paymentStatus === "Overdue") {
+    order.paymentStatus = "Overdue";
+  } else if (amountPaid > 0) {
+    order.paymentStatus = "Partial";
+  } else {
+    order.paymentStatus = "Pending";
+  }
+}
+
+    order.updatedBy = req.user?._id || null;
+    await order.save();
+
+    const populated = await Order.findById(order._id)
+      .populate("contact", CONTACT_FIELDS)
+      .populate("enquiry", "enquiryNumber customerName company subject");
+
+    return res.status(200).json({
+      success: true,
+      message: "Order updated successfully",
+      data: populated,
+    });
+  } catch (error) {
+    handleError(res, error, "Server error while updating order");
+  }
+};
+
+const updateOrderStatus = async (req, res) => {
+  if (!isValidId(req.params.id)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid order ID",
+    });
+  }
+
+  const { status, allowReserved = false } = req.body;
+
+  if (!VALID_STATUSES.includes(status)) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid order status",
+    });
+  }
+
+  // Accept only actual booleans or their explicit string equivalents.
+  if (
+    typeof allowReserved !== "boolean" &&
+    allowReserved !== "true" &&
+    allowReserved !== "false"
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: "allowReserved must be a boolean",
+    });
+  }
+
+  const allowReservedStock = allowReserved === true || allowReserved === "true";
+  const session = await mongoose.startSession();
+
+  try {
+    await session.withTransaction(async () => {
+      const order = await Order.findOne({
+        _id: req.params.id,
+        isActive: true,
+      }).session(session);
+
+      if (!order) {
+        throw {
+          status: 404,
+          message: "Order not found",
+        };
+      }
+
+      const fromStatus = order.status;
+
+      if (fromStatus === status) {
+        return;
+      }
+
+      const allowedTransitions = {
+        Draft: ["Confirmed", "Cancelled"],
+        Confirmed: ["In Production", "Cancelled"],
+        "In Production": ["Ready for Dispatch", "Cancelled"],
+        "Ready for Dispatch": ["Dispatched", "Cancelled"],
+        Dispatched: ["Delivered"],
+        Delivered: [],
+        Cancelled: [],
+      };
+
+      if (!allowedTransitions[fromStatus]?.includes(status)) {
+        throw {
+          status: 400,
+          code: "INVALID_STATUS_TRANSITION",
+          message: `Cannot change order status from ${fromStatus} to ${status}.`,
+        };
+      }
+
+      if (fromStatus === "Cancelled") {
+        throw {
+          status: 400,
+          code: "ORDER_ALREADY_CANCELLED",
+          message:
+            "A cancelled order cannot be reactivated. Please create a new order instead.",
+        };
+      }
+
+      const currentStockStatus = order.stockStatus || "Pending";
+
+      const activePayments = await Payment.countDocuments({
+        order: order._id,
+        isActive: true,
+      });
+
+      if (activePayments > 0) {
+        return res.status(400).json({
+          success: false,
+          message: "This order has payment records. Delete or reverse those payments first.",
+        });
+      }
+
+      if (status === "Confirmed" && currentStockStatus === "Pending") {
+        await deductOrderStock(order, req.user, allowReservedStock, session);
+        order.stockStatus = "Deducted";
+        order.stockDeductedAt = new Date();
+      } else if (status === "Confirmed" && currentStockStatus === "Reserved") {
+        await deductReservedOrderStock(order, req.user, session);
+        order.stockStatus = "Deducted";
+        order.stockDeductedAt = new Date();
+      }
+
+      if (status === "Cancelled" && currentStockStatus === "Deducted") {
+        await restoreOrderStock(order, req.user, session);
+        order.stockStatus = "Restored";
+        order.stockRestoredAt = new Date();
+      } else if (status === "Cancelled" && currentStockStatus === "Reserved") {
+        await releaseOrderReservation(order, req.user, session);
+        order.stockStatus = "Restored";
+        order.stockRestoredAt = new Date();
+      }
+
+      if (status === "Dispatched" && !order.dispatchedDate) {
+        order.dispatchedDate = new Date();
+      }
+
+      if (status === "Delivered" && !order.deliveredDate) {
+        order.deliveredDate = new Date();
+      }
+
+      if (status === "Cancelled" && !order.cancelledDate) {
+        order.cancelledDate = new Date();
+      }
+
+      order.status = status;
+      order.updatedBy = req.user?._id || null;
+
+      await order.save({ session });
+    });
+
+    const populated = await Order.findOne({
+      _id: req.params.id,
+      isActive: true,
+    })
+      .populate("contact", CONTACT_FIELDS)
+      .populate("enquiry", "enquiryNumber customerName company subject");
+
+    return res.status(200).json({
+      success: true,
+      message: `Order status updated to ${status}`,
+      data: populated,
+    });
+  } catch (error) {
+    if (error.code === "RESERVED_CONFLICT") {
+      return res.status(409).json({
+        success: false,
+        code: error.code,
+        message: error.message,
+        data: error.data,
+      });
+    }
+
+    if (error.code === "STOCK_CHANGED" || error.code === "RESERVATION_INCONSISTENT") {
+      return res.status(409).json({
+        success: false,
+        code: error.code,
         message: error.message,
       });
     }
-    handleError(res, error, "Failed to receive purchase");
+
+    if (error.status === 400 || error.status === 404) {
+      return res.status(error.status).json({
+        success: false,
+        ...(error.code ? { code: error.code } : {}),
+        message: error.message,
+      });
+    }
+
+    return handleError(
+      res,
+      error,
+      "Server error while updating order status"
+    );
   } finally {
     await session.endSession();
   }
 };
 
 
-const cancelPurchase = async (req, res) => {
+const updatePayment = async (req, res) => {
+  return res.status(400).json({
+    success: false,
+    code: "PAYMENT_RECORD_REQUIRED",
+    message:
+      "Manage payments through the Payments module. Order payment totals are calculated from payment records.",
+  });
+};
+
+/* ======================================================
+   DELETE ORDER
+====================================================== */
+const deleteOrder = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
-      return res.status(400).json({ success: false, message: "Invalid ID" });
+      return res.status(400).json({ success: false, message: "Invalid order ID" });
     }
 
-    const purchase = await RawPurchase.findById(req.params.id);
-    if (!purchase || !purchase.isActive) {
-      return res.status(404).json({ success: false, message: "Not found" });
+    const order = await Order.findById(req.params.id);
+    if (!order || !order.isActive) {
+      return res.status(404).json({ success: false, message: "Order not found" });
     }
 
-    if (purchase.status === "Received") {
+    if (!["Draft", "Cancelled"].includes(order.status)) {
       return res.status(400).json({
         success: false,
-        message: "Cannot cancel a received purchase — reverse stock first if needed",
-      });
-    }
-    if (purchase.status === "Cancelled") {
-      return res.status(400).json({
-        success: false,
-        message: "Purchase is already cancelled",
+        message: "Only Draft or Cancelled orders can be deleted",
       });
     }
 
-    purchase.status = "Cancelled";
-    purchase.updatedBy = req.user?._id || null;
-    await purchase.save();
+    if (["Reserved", "Deducted"].includes(order.stockStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: "This order still holds or reserves stock. Cancel it first so inventory is safely released, then delete.",
+      });
+    }
 
-    const populated = await RawPurchase.findById(purchase._id)
-      .populate("material", "name category unit sizeKg")
-      .populate("supplier", "name company phone email");
+    order.isActive = false;
+    order.updatedBy = req.user?._id || null;
+    await order.save();
 
-    return res.status(200).json({
-      success: true,
-      message: "Purchase cancelled",
-      data: populated,
-    });
+    return res.status(200).json({ success: true, message: "Order deleted successfully" });
   } catch (error) {
-    handleError(res, error, "Failed to cancel purchase");
+    handleError(res, error, "Server error");
   }
 };
 
-const deletePurchase = async (req, res) => {
+const generateInvoice = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
-      return res.status(400).json({ success: false, message: "Invalid ID" });
+      return res.status(400).json({ success: false, message: "Invalid order ID" });
     }
 
-    const purchase = await RawPurchase.findById(req.params.id);
-    if (!purchase || !purchase.isActive) {
-      return res.status(404).json({ success: false, message: "Not found" });
+    const order = await Order.findById(req.params.id).populate("contact", CONTACT_FIELDS);
+
+    if (!order || !order.isActive) {
+      return res.status(404).json({ success: false, message: "Order not found" });
     }
 
-    if (purchase.status === "Received") {
+    if (["Draft", "Cancelled"].includes(order.status)) {
       return res.status(400).json({
         success: false,
-        message: "Cannot delete a received purchase",
+        message: `Cannot generate an invoice for a ${order.status} order.`,
       });
     }
 
-    purchase.isActive = false;
-    purchase.updatedBy = req.user?._id || null;
-    await purchase.save();
+    const existingInvoice = await Invoice.findOne({ order: order._id }).populate("order");
+    if (existingInvoice) {
+      return res.status(200).json({
+        success: true,
+        message: "Invoice already exists for this order",
+        alreadyExists: true,
+        data: existingInvoice,
+      });
+    }
 
-    return res.status(200).json({
+    if (!order.items || order.items.length === 0) {
+      return res.status(400).json({ success: false, message: "Cannot generate invoice for an order without items" });
+    }
+    if (!order.contact) {
+      return res.status(400).json({ success: false, message: "Cannot generate invoice because customer information is missing" });
+    }
+
+    const contact = order.contact;
+
+    const settings = await getGlobalSettings();
+    if (!settings?.seller?.name || !settings?.seller?.gstin) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Seller details are not configured. Please fill in Business Profile in Settings before generating an invoice.",
+      });
+    }
+
+    const sellerCfg = settings.seller || {};
+    const bankCfg = settings.bank || {};
+    const invCfg = settings.invoice || {};
+
+    const sellerAddressLine = [
+      sellerCfg.address,
+      sellerCfg.addressLine2,
+      sellerCfg.city,
+      sellerCfg.state,
+      sellerCfg.pincode,
+    ]
+      .filter(Boolean)
+      .join(", ");
+
+    const sellerSnapshot = {
+      name: sellerCfg.name,
+      address: sellerAddressLine,
+      gstin: sellerCfg.gstin,
+      state: sellerCfg.state,
+      stateCode: sellerCfg.stateCode,
+      pan: sellerCfg.pan || "",
+      phone: sellerCfg.phone || "",
+      email: sellerCfg.email || "",
+      cin: sellerCfg.cin || "",
+      msme: sellerCfg.msme || "",
+      logoUrl: sellerCfg.logoUrl || "",
+      signatureUrl: sellerCfg.signatureUrl || "",
+    };
+
+    const bankSnapshot = {
+      accountName: bankCfg.accountName || "",
+      accountNumber: bankCfg.accountNumber || "",
+      bankName: bankCfg.bankName || "",
+      ifsc: bankCfg.ifsc || "",
+      branch: bankCfg.branch || "",
+      upiId: bankCfg.upiId || "",
+    };
+
+    const defaultHsn = invCfg.defaultHsn || "7217";
+
+    const buyer = {
+      name: contact.name || "",
+      company: contact.company || "",
+      address: order.billingAddress || contact.billingAddress || contact.address || "",
+      gstin: contact.gstin || "",
+      state: contact.state || "",
+      stateCode: contact.stateCode || "",
+      phone: contact.phone || "",
+      email: contact.email || "",
+    };
+
+    const consignee = {
+      name: contact.shippingName || contact.name || "",
+      company: contact.shippingCompany || contact.company || "",
+      address: order.shippingAddress || contact.shippingAddress || contact.address || "",
+      gstin: contact.shippingGstin || contact.gstin || "",
+      state: contact.shippingState || contact.state || "",
+      stateCode: contact.shippingStateCode || contact.stateCode || "",
+    };
+
+    const subTotal = Number(order.subTotal || 0);
+    const discount = Number(order.discount || 0);
+    const taxableAmount = Math.max(0, subTotal - discount);
+    const taxPercent = Number(order.taxPercent || invCfg.defaultGstRate || 0);
+
+    const sellerCode = String(sellerCfg.stateCode || "").trim();
+    const supplyCode = String(consignee.stateCode || buyer.stateCode || "").trim();
+    const intraState = Boolean(sellerCode && supplyCode && sellerCode === supplyCode);
+    const taxType = intraState ? "CGST_SGST" : "IGST";
+
+    const igstPercent = intraState ? 0 : taxPercent;
+    const igstAmount = intraState ? 0 : round2((taxableAmount * taxPercent) / 100);
+
+    const cgstPercent = intraState ? taxPercent / 2 : 0;
+    const cgstAmount = intraState ? round2((taxableAmount * cgstPercent) / 100) : 0;
+    const sgstPercent = cgstPercent;
+    const sgstAmount = cgstAmount;
+
+    const totalTax = round2(igstAmount + cgstAmount + sgstAmount);
+
+    const rawGrandTotal = round2(taxableAmount + totalTax);
+    const roundOff = invCfg.roundOffEnabled
+      ? round2(Math.round(rawGrandTotal) - rawGrandTotal)
+      : 0;
+    const grandTotal = round2(rawGrandTotal + roundOff);
+
+    const invoiceItems = order.items.map((item) => ({
+      product: item.productStock || item.product,
+      description: item.productName || `Reel ${item.size}`,
+      hsnSac: item.hsnSac || defaultHsn,   
+      quantity: Number(item.quantity || 0),
+      rate: Number(item.rate || 0),
+      unit: item.unit || "Reel",
+      amount: Number(item.amount || 0),
+    }));
+
+    let invoice = null;
+    for (let attempt = 0; attempt < 3 && !invoice; attempt++) {
+      const invoiceNumber = await generateInvoiceNumber();
+      try {
+        invoice = await Invoice.create({
+          invoiceNumber,
+          order: order._id,
+          invoiceDate: new Date(),
+          dueDate: invCfg.defaultDueDays
+            ? new Date(Date.now() + invCfg.defaultDueDays * 86400000)
+            : null,
+
+          seller: sellerSnapshot,    
+          bank: bankSnapshot,       
+          buyer,
+          consignee,
+
+          items: invoiceItems,
+
+          subTotal,
+          discount,
+          taxableAmount,
+
+          taxType,
+          taxPercent,
+          igstPercent,
+          igstAmount,
+          cgstPercent,
+          cgstAmount,
+          sgstPercent,
+          sgstAmount,
+          totalTax,
+
+          roundOff,                 
+          grandTotal,
+          amountInWords: amountInWords(grandTotal),
+          taxAmountInWords: amountInWords(totalTax),
+
+          termsAndConditions: invCfg.termsAndConditions || "",
+          declaration: invCfg.declaration || "",
+          footerNote: invCfg.footerNote || "",
+
+          reference: order.orderNumber,
+        });
+      } catch (err) {
+        if (err.code === 11000 && attempt < 2) continue;
+        throw err;
+      }
+    }
+
+    const populatedInvoice = await Invoice.findById(invoice._id).populate("order");
+
+    return res.status(201).json({
       success: true,
-      message: "Purchase deleted",
+      message: "Invoice generated successfully",
+      alreadyExists: false,
+      data: populatedInvoice,
     });
   } catch (error) {
-    handleError(res, error, "Failed to delete purchase");
+    console.error("Generate invoice error:", error);
+
+    if (error.code === 11000) {
+      const existingInvoice = await Invoice.findOne({ order: req.params.id }).populate("order");
+      if (existingInvoice) {
+        return res.status(200).json({
+          success: true,
+          message: "Invoice already exists for this order",
+          alreadyExists: true,
+          data: existingInvoice,
+        });
+      }
+      return res.status(409).json({
+        success: false,
+        message: "Invoice number collision. Resync the counter and try again.",
+      });
+    }
+
+    handleError(res, error, "Failed to generate invoice");
   }
-};
+}
 
-const recordPurchasePayment = async (req, res) => {
+const getInvoice = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
-      return res.status(400).json({ success: false, message: "Invalid ID" });
+      return res.status(400).json({ success: false, message: "Invalid order ID" });
     }
 
-    const { amount, mode, date, notes } = req.body;
-
-    const numAmount = Number(amount);
-    if (isNaN(numAmount) || numAmount <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "amount must be a positive number",
-      });
+    const invoice = await Invoice.findOne({ order: req.params.id }).populate("order");
+    if (!invoice) {
+      return res.status(404).json({ success: false, message: "Invoice not found for this order" });
     }
-
-    if (!mode || !VALID_PAYMENT_MODES.includes(mode)) {
-      return res.status(400).json({
-        success: false,
-        message: `mode must be one of: ${VALID_PAYMENT_MODES.join(", ")}`,
-      });
-    }
-
-    const purchase = await RawPurchase.findById(req.params.id);
-    if (!purchase || !purchase.isActive) {
-      return res.status(404).json({ success: false, message: "Not found" });
-    }
-
-    if (purchase.status === "Cancelled") {
-      return res.status(400).json({
-        success: false,
-        message: "Cannot record payment on a cancelled purchase",
-      });
-    }
-
-    const remaining = Math.round((purchase.totalAmount - purchase.amountPaid) * 100) / 100;
-    if (numAmount > remaining + 0.01) {
-      return res.status(400).json({
-        success: false,
-        message: `Payment exceeds remaining balance. Remaining: ${remaining}`,
-        remaining,
-      });
-    }
-
-    if (!Array.isArray(purchase.payments)) purchase.payments = [];
-    purchase.payments.push({
-      amount: numAmount,
-      mode,
-      date: date ? new Date(date) : new Date(),
-      notes: safeString(notes, 500) || null,
-      by: req.user?._id || null,
-    });
-
-    purchase.amountPaid =
-      Math.round((purchase.amountPaid + numAmount) * 100) / 100;
-    if (req.user?._id) purchase.updatedBy = req.user._id;
-    await purchase.save();
-
-    const populated = await RawPurchase.findById(purchase._id)
-      .populate("material", "name category unit sizeKg")
-      .populate("supplier", "name company phone email");
-
-    return res.status(200).json({
-      success: true,
-      message: "Payment recorded",
-      data: populated,
-    });
+    return res.status(200).json({ success: true, data: invoice });
   } catch (error) {
-    handleError(res, error, "Failed to record payment");
-  }
-};
-
-const deletePurchasePayment = async (req, res) => {
-  try {
-    if (!isValidId(req.params.id)) {
-      return res.status(400).json({ success: false, message: "Invalid ID" });
-    }
-    if (!isValidId(req.params.paymentId)) {
-      return res.status(400).json({ success: false, message: "Invalid payment ID" });
-    }
-
-    const purchase = await RawPurchase.findById(req.params.id);
-    if (!purchase || !purchase.isActive) {
-      return res.status(404).json({ success: false, message: "Not found" });
-    }
-
-    const beforeLen = (purchase.payments || []).length;
-    purchase.payments = (purchase.payments || []).filter(
-      (p) => String(p._id) !== String(req.params.paymentId)
-    );
-    if (purchase.payments.length === beforeLen) {
-      return res.status(404).json({
-        success: false,
-        message: "Payment not found on this purchase",
-      });
-    }
-
-    // amountPaid / paymentStatus recomputed by model pre-save from payments[]
-    if (req.user?._id) purchase.updatedBy = req.user._id;
-    await purchase.save();
-
-    const populated = await RawPurchase.findById(purchase._id)
-      .populate("material", "name category unit sizeKg")
-      .populate("supplier", "name company phone email");
-
-    return res.status(200).json({
-      success: true,
-      message: "Payment removed",
-      data: populated,
-    });
-  } catch (error) {
-    handleError(res, error, "Failed to delete payment");
+    handleError(res, error, "Failed to fetch invoice");
   }
 };
 
 module.exports = {
-  getAllRawStock,
-  getRawStockById,
-  createRawStock,
-  updateRawStock,
-  adjustRawStock,
-  getRawStockMovements,
-  seedDefaultMaterials,
-
-  getAllPurchases,
-  getPurchaseById,
-  createPurchase,
-  updatePurchase,
-  receivePurchase,
-  cancelPurchase,
-  deletePurchase,
-  recordPurchasePayment,
-  deletePurchasePayment,
+  getAllOrders,
+  getOrderById,
+  createOrder,
+  updateOrder,
+  updateOrderStatus,
+  updatePayment,
+  deleteOrder,
+  generateInvoice,
+  getInvoice,
 };

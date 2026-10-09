@@ -339,7 +339,6 @@ exports.updateQuotation = async (req, res) => {
     const { customerName, company, gstin, billingAddress, quoteDate, validTill, items, terms } =
       req.body;
 
-    // Items
     if (items !== undefined) {
       const cleanItems = sanitizeItems(items);
       if (!cleanItems) {
@@ -360,7 +359,6 @@ exports.updateQuotation = async (req, res) => {
       quotation.amountInWords = amountInWords(totals.grandTotal);
     }
 
-    // Whitelisted scalar fields
     if (customerName !== undefined) {
       const v = safeString(customerName, 200);
       if (!v) return res.status(400).json({ success: false, message: "Invalid customerName." });
