@@ -69,7 +69,6 @@ const invoiceSchema = new mongoose.Schema(
       required: true,
     },
 
-    // 🔽 NEW — auto-computed from Settings.invoice.defaultDueDays
     dueDate: {
       type: Date,
       default: null,
@@ -81,7 +80,6 @@ const invoiceSchema = new mongoose.Schema(
       default: "",
     },
 
-    /* ---------- SELLER (snapshot from Settings at invoice time) ---------- */
     seller: {
       name: {
         type: String,
@@ -108,7 +106,6 @@ const invoiceSchema = new mongoose.Schema(
         default: "",
       },
 
-      // 🔽 NEW — extra seller identity fields
       pan: {
         type: String,
         trim: true,
@@ -155,9 +152,6 @@ const invoiceSchema = new mongoose.Schema(
       },
     },
 
-    /* ---------- BANK DETAILS (snapshot from Settings) ---------- */
-    // 🔽 NEW — bank block prints on the invoice footer so the
-    // buyer knows where to remit payment.
     bank: {
       accountName: {
         type: String,
@@ -337,7 +331,6 @@ const invoiceSchema = new mongoose.Schema(
       default: 0,
     },
 
-    // 🔽 NEW — round-off adjustment (+/-) applied to reach grandTotal
     roundOff: {
       type: Number,
       default: 0,
@@ -369,7 +362,6 @@ const invoiceSchema = new mongoose.Schema(
         "We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.",
     },
 
-    // 🔽 NEW — admin-configurable terms / footer snapshot from Settings
     termsAndConditions: {
       type: String,
       trim: true,

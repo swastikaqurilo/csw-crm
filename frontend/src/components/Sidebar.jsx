@@ -3,12 +3,10 @@ import {
   Inbox,
   Users,
   CalendarCheck,
-  BarChart3,
   Package,
   Warehouse,
   ShoppingCart,
   CreditCard,
-  TrendingUp,
   Settings,
   ChevronDown,
   ChevronLeft,
@@ -17,6 +15,8 @@ import {
   ReceiptText,
   Menu,
   X,
+  BadgeIndianRupee,
+  ContactRound,
 } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useEffect, useState } from "react";
@@ -33,6 +33,11 @@ const businessItems = [
   { name: "Products", path: "/products", icon: Package },
   { name: "Raw Materials", path: "/rawmats", icon: Warehouse },
   { name: "Orders", path: "/orders", icon: ShoppingCart },
+];
+
+const employeeItems = [
+  {name: "Workers", path: "/worker", icon: ContactRound},
+  {name: "Salary", path: "/salary", icon: BadgeIndianRupee},
 ];
 
 const financeItems = [
@@ -271,6 +276,14 @@ function Sidebar() {
               collapsed={effectiveCollapsed}
               onItemClick={() => setMobileOpen(false)}
             />
+            <SidebarSection
+              label="EMPLOYEE"
+              items={employeeItems}
+              isOpen={openSections.employee}
+              onToggle={() => toggleSection("employee")}
+              collapsed={effectiveCollapsed}
+              onItemClick={() => setMobileOpen(false)}
+            />  
             <SidebarSection
               label="SYSTEM"
               items={systemItems}

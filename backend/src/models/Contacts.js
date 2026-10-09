@@ -5,7 +5,7 @@ const contactSchema = new Schema(
   {
     contactId: {
       type: String,
-      unique: true,             // unique already creates an index — no need for index:true
+      unique: true,             
       trim: true,
       maxlength: 50,
     },
@@ -27,7 +27,7 @@ const contactSchema = new Schema(
     role: {
       type: String,
       trim: true,
-      lowercase: true,                       // "Customer" → "customer" automatically
+      lowercase: true,                       
       enum: {
         values: ["customer", "supplier", "partner", "other", ""],
         message: "{VALUE} is not a valid role",
@@ -52,7 +52,6 @@ const contactSchema = new Schema(
       default: "",
     },
 
-    // Legacy single address — kept so old code keeps working
     address: {
       type: String,
       trim: true,
@@ -60,7 +59,6 @@ const contactSchema = new Schema(
       default: "",
     },
 
-    // ✅ NEW — split billing / shipping addresses
     billingAddress: {
       type: String,
       trim: true,
@@ -142,11 +140,6 @@ const contactSchema = new Schema(
   { timestamps: true }
 );
 
-/* ------------------------------------------------------------------
-   Auto-generate contactId:  CON-001, CON-002, … CON-999, CON-1000
-   Fixed so it keeps working past CON-999 (previous version sorted
-   ids as strings, so "CON-999" > "CON-1000" lexically → duplicates).
-------------------------------------------------------------------- */
 contactSchema.pre("save", async function () {
   if (this.contactId) return;
 

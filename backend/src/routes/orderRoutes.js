@@ -23,9 +23,6 @@ router.patch("/:id/status", updateOrderStatus);
 
 router.delete("/:id", deleteOrder);
 
-/*
- * Invoice routes
- */
 router.post("/:id/invoice", generateInvoice);
 router.get("/:id/invoice", getInvoice);
 

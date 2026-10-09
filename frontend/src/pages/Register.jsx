@@ -14,14 +14,7 @@ import {
 } from "lucide-react";
 import { register } from "../api/api";
 
-import cswLogo from "../assets/cswlogo.png"; // adjust path if needed
-
-// const ROLE_OPTIONS = [
-//   { value: "Admin", label: "Admin", desc: "Full system access" },
-//   { value: "Sales Manager", label: "Sales Manager", desc: "Team & deals" },
-//   { value: "Sales Executive", label: "Sales Executive", desc: "Handle enquiries" },
-//   { value: "Viewer", label: "Viewer", desc: "Read-only access" },
-// ];
+import cswLogo from "../assets/cswlogo.png"; 
 
 function Register() {
   const navigate = useNavigate();
@@ -31,8 +24,7 @@ function Register() {
     email: "",
     password: "",
     confirmPassword: "",
-    // role: "Admin",
-  });
+});
 
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);

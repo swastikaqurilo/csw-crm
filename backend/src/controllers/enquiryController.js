@@ -18,14 +18,11 @@ const safeString = (v, max = 500) => {
 const escapeRegex = (str) =>
   String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/* ================= ENQUIRY NUMBER ================= */
 const generateEnquiryNumber = async () => {
   const year = new Date().getFullYear();
   const seq = await getNextSequence(`enquiry-${year}`);
   return `ENQ-${year}-${String(seq).padStart(4, "0")}`;
 };
-
-/* ================= CREATE ================= */
 const createEnquiry = async (req, res) => {
   try {
     const {
@@ -246,7 +243,6 @@ const getEnquiries = async (req, res) => {
   }
 };
 
-/* ================= GET ONE ================= */
 const getEnquiry = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -278,7 +274,6 @@ const getEnquiry = async (req, res) => {
   }
 };
 
-/* ================= UPDATE ================= */
 const updateEnquiry = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -427,7 +422,6 @@ const updateEnquiry = async (req, res) => {
   }
 };
 
-/* ================= DELETE ================= */
 const deleteEnquiry = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -462,7 +456,6 @@ const deleteEnquiry = async (req, res) => {
   }
 };
 
-/* ================= ADD TIMELINE NOTE ================= */
 const addTimelineNote = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {

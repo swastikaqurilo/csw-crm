@@ -7,7 +7,6 @@ const VALID_TYPES = ["Call", "Email", "Meeting", "WhatsApp", "Other"];
 const VALID_STATUSES = ["Pending", "Completed", "Cancelled"];
 const VALID_PRIORITIES = ["Low", "Medium", "High"];
 
-/* ---------- helpers ---------- */
 const isValidId = (v) => mongoose.isValidObjectId(v);
 
 const safeString = (v, max = 500) => {
@@ -23,7 +22,6 @@ const parseDate = (v) => {
   return isNaN(d.getTime()) ? null : d;
 };
 
-/* ================= CREATE ================= */
 const createFollowUp = async (req, res) => {
   try {
     const {
@@ -38,7 +36,6 @@ const createFollowUp = async (req, res) => {
       completedAt,
     } = req.body;
 
-    // Required: contact
     if (!contact || !isValidId(contact)) {
       return res.status(400).json({
         success: false,
@@ -46,7 +43,6 @@ const createFollowUp = async (req, res) => {
       });
     }
 
-    // Required: subject
     const cleanSubject = safeString(subject, 200);
     if (!cleanSubject) {
       return res.status(400).json({
@@ -55,7 +51,6 @@ const createFollowUp = async (req, res) => {
       });
     }
 
-    // Required: scheduledAt
     const parsedScheduledAt = parseDate(scheduledAt);
     if (!parsedScheduledAt) {
       return res.status(400).json({
@@ -64,7 +59,6 @@ const createFollowUp = async (req, res) => {
       });
     }
 
-    // Optional: enquiry
     let cleanEnquiry = null;
     if (enquiry) {
       if (!isValidId(enquiry)) {
@@ -76,7 +70,6 @@ const createFollowUp = async (req, res) => {
       cleanEnquiry = enquiry;
     }
 
-    // Enum guards
     if (type !== undefined && !VALID_TYPES.includes(type)) {
       return res.status(400).json({ success: false, message: "Invalid type" });
     }
@@ -87,7 +80,6 @@ const createFollowUp = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid priority" });
     }
 
-    // Consistency: status=Completed → set completedAt
     const finalStatus = status || "Pending";
     let finalCompletedAt = null;
 
@@ -100,7 +92,6 @@ const createFollowUp = async (req, res) => {
       });
     }
 
-    // Explicit whitelist
     const payload = {
       contact,
       enquiry: cleanEnquiry,
@@ -145,7 +136,6 @@ const createFollowUp = async (req, res) => {
   }
 };
 
-/* ================= LIST ================= */
 const getFollowUps = async (req, res) => {
   try {
     const {
@@ -205,7 +195,6 @@ const getFollowUps = async (req, res) => {
       query.enquiry = enquiry;
     }
 
-    // Pagination clamped
     const pageNumber = Math.max(Number(page) || 1, 1);
     const limitNumber = Math.min(Math.max(Number(limit) || 50, 1), MAX_LIMIT);
     const skip = (pageNumber - 1) * limitNumber;
@@ -237,7 +226,6 @@ const getFollowUps = async (req, res) => {
   }
 };
 
-/* ================= GET ONE ================= */
 const getFollowUp = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -271,7 +259,6 @@ const getFollowUp = async (req, res) => {
   }
 };
 
-/* ================= UPDATE ================= */
 const updateFollowUp = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -301,7 +288,6 @@ const updateFollowUp = async (req, res) => {
       completedAt,
     } = req.body;
 
-    // Contact (if changing)
     if (contact !== undefined) {
       if (!isValidId(contact)) {
         return res
@@ -311,7 +297,6 @@ const updateFollowUp = async (req, res) => {
       followUp.contact = contact;
     }
 
-    // Enquiry (if changing)
     if (enquiry !== undefined) {
       if (enquiry === null || enquiry === "") {
         followUp.enquiry = null;
@@ -325,7 +310,6 @@ const updateFollowUp = async (req, res) => {
       }
     }
 
-    // Subject
     if (subject !== undefined) {
       const v = safeString(subject, 200);
       if (!v) {
@@ -336,12 +320,10 @@ const updateFollowUp = async (req, res) => {
       followUp.subject = v;
     }
 
-    // Notes
     if (notes !== undefined) {
       followUp.notes = safeString(notes, 2000) || "";
     }
 
-    // Scheduled date
     if (scheduledAt !== undefined) {
       const d = parseDate(scheduledAt);
       if (!d) {
@@ -352,7 +334,6 @@ const updateFollowUp = async (req, res) => {
       followUp.scheduledAt = d;
     }
 
-    // Type
     if (type !== undefined) {
       if (!VALID_TYPES.includes(type)) {
         return res
@@ -362,7 +343,6 @@ const updateFollowUp = async (req, res) => {
       followUp.type = type;
     }
 
-    // Priority
     if (priority !== undefined) {
       if (!VALID_PRIORITIES.includes(priority)) {
         return res
@@ -372,7 +352,6 @@ const updateFollowUp = async (req, res) => {
       followUp.priority = priority;
     }
 
-    // Status + completedAt consistency
     if (status !== undefined) {
       if (!VALID_STATUSES.includes(status)) {
         return res
@@ -385,11 +364,9 @@ const updateFollowUp = async (req, res) => {
       if (status === "Completed") {
         followUp.completedAt = parseDate(completedAt) || new Date();
       } else {
-        // Leaving Completed → clear completedAt
         followUp.completedAt = null;
       }
     } else if (completedAt !== undefined) {
-      // Only allow completedAt change if status is already Completed
       if (followUp.status !== "Completed") {
         return res.status(400).json({
           success: false,
@@ -431,7 +408,6 @@ const updateFollowUp = async (req, res) => {
   }
 };
 
-/* ================= DELETE ================= */
 const deleteFollowUp = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {

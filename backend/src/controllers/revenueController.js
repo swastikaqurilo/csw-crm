@@ -77,7 +77,6 @@ function buildScope(query, now = new Date()) {
     label = `Q${quarter} · ${label}`;
   }
 
-  // Half-open intervals include the start, exclude the end and future payments.
   const started = now > start;
   const cutoff = new Date(Math.max(start.getTime(), Math.min(now.getTime(), end.getTime())));
   const priorStart = previousYear(start);

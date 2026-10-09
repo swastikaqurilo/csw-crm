@@ -1,5 +1,4 @@
 const errorHandler = (err, req, res, next) => {
-  // Mongoose ValidationError
   if (err.name === "ValidationError") {
     return res.status(400).json({
       success: false,
@@ -11,7 +10,6 @@ const errorHandler = (err, req, res, next) => {
     });
   }
 
-  // Mongoose CastError (bad ObjectId, bad number, etc.)
   if (err.name === "CastError") {
     return res.status(400).json({
       success: false,
@@ -19,7 +17,6 @@ const errorHandler = (err, req, res, next) => {
     });
   }
 
-  // Duplicate key (unique index)
   if (err.code === 11000) {
     return res.status(409).json({
       success: false,
@@ -27,7 +24,6 @@ const errorHandler = (err, req, res, next) => {
     });
   }
 
-  // Log the real error but don't leak it
   console.error("[Error]", err);
   res.status(500).json({
     success: false,

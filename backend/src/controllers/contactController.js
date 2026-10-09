@@ -282,7 +282,7 @@ const updateContact = async (req, res) => {
       contact.status = status;
     }
 
-    await contact.save(); // runs schema validators
+    await contact.save(); 
 
     const updated = await Contact.findById(contact._id).populate("enquiry");
 

@@ -184,7 +184,6 @@ const getAllPayments = async (req, res) => {
       query.contact = contact;
     }
 
-    /* ---------- STATUS FILTER (Pending = special) ---------- */
     if (status) {
       if (!VALID_STATUSES.includes(status)) {
         return res
@@ -193,7 +192,6 @@ const getAllPayments = async (req, res) => {
       }
 
       if (status === 'Pending') {
-        // 1. Find every order that still has an outstanding balance
         const unpaidOrders = await Order.find({
           isActive: true,
           paymentStatus: { $in: ['Pending', 'Partial'] },
@@ -203,9 +201,6 @@ const getAllPayments = async (req, res) => {
 
         const unpaidOrderIds = unpaidOrders.map((o) => o._id);
 
-        // 2. Show payments that are either:
-        //    a) themselves marked Pending, OR
-        //    b) belong to an order that hasn't been fully settled
         andConditions.push({
           $or: [
             { status: 'Pending' },
@@ -250,7 +245,6 @@ const getAllPayments = async (req, res) => {
       }
     }
 
-    /* ---------- SEARCH (pushed into $and, not $or) ---------- */
     if (search && typeof search === 'string' && search.trim()) {
       const safe = escapeRegex(search.trim().slice(0, 100));
       andConditions.push({
@@ -264,7 +258,6 @@ const getAllPayments = async (req, res) => {
       });
     }
 
-    /* Combine any number of $or blocks without clobbering each other */
     if (andConditions.length > 0) {
       query.$and = andConditions;
     }
@@ -273,7 +266,6 @@ const getAllPayments = async (req, res) => {
     const limitNumber = Math.min(Math.max(Number(limit) || 20, 1), MAX_LIMIT);
     const skip = (pageNumber - 1) * limitNumber;
 
-    /* ✅ deep-populate order.contact */
     const [payments, total] = await Promise.all([
       populatePayment(Payment.find(query))
         .sort({ paymentDate: -1 })
@@ -339,7 +331,6 @@ const createPayment = async (req, res) => {
       attachmentUrl,
     } = req.body;
 
-    /* ---------- validation ---------- */
     if (!orderId || !isValidId(orderId)) {
       return res
         .status(400)
@@ -767,11 +758,6 @@ const getPaymentsByOrder = async (req, res) => {
   }
 };
 
-/*
-|--------------------------------------------------------------------------
-| PAYMENT SUMMARY
-|--------------------------------------------------------------------------
-*/
 const getPaymentSummary = async (req, res) => {
   try {
     const startOfToday = new Date();

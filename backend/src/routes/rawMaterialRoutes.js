@@ -15,9 +15,10 @@ const {
   receivePurchase,
   cancelPurchase,
   deletePurchase,
+  recordPurchasePayment,
+  deletePurchasePayment,
 } = require("../controllers/rawmatsController");
 
-/* ---------- STOCK ---------- */
 router.get("/stock/seed-defaults", seedDefaultMaterials);
 router.get("/stock", getAllRawStock);
 router.post("/stock", createRawStock);
@@ -26,7 +27,6 @@ router.get("/stock/:id", getRawStockById);
 router.patch("/stock/:id", updateRawStock);
 router.post("/stock/:id/adjust", adjustRawStock);
 
-/* ---------- PURCHASES ---------- */
 router.get("/purchases", getAllPurchases);
 router.post("/purchases", createPurchase);
 router.get("/purchases/:id", getPurchaseById);
@@ -34,5 +34,7 @@ router.patch("/purchases/:id", updatePurchase);
 router.post("/purchases/:id/receive", receivePurchase);
 router.post("/purchases/:id/cancel", cancelPurchase);
 router.delete("/purchases/:id", deletePurchase);
+router.post("/purchases/:id/payments", recordPurchasePayment);
+router.delete("/purchases/:id/payments/:paymentId", deletePurchasePayment);
 
 module.exports = router;

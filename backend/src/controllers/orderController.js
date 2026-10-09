@@ -152,8 +152,7 @@ const resolveStockId = (item) =>
   item.productStock?._id || item.productStock || null;
 
 const deductOrderStock = async (order, user, allowReserved = false) => {
-  const completed = []; // { stockId, qty, usedFromReserved }
-
+  const completed = []; 
   try {
     for (const item of order.items) {
       const stockId = resolveStockId(item);
@@ -254,7 +253,6 @@ const deductOrderStock = async (order, user, allowReserved = false) => {
       completed.push({ stockId, qty, usedFromReserved });
     }
   } catch (err) {
-    // Roll back completed items: restore qty and any reserved we took.
     for (const c of completed) {
       try {
         await ProductStock.findByIdAndUpdate(
@@ -305,7 +303,6 @@ const deductOrderStock = async (order, user, allowReserved = false) => {
   }
 };
 
-/** Restore previously-deducted stock (Cancelled from a Deducted order). */
 const restoreOrderStock = async (order, user) => {
   for (const item of order.items) {
     const stockId = resolveStockId(item);
@@ -353,9 +350,6 @@ const restoreOrderStock = async (order, user) => {
   }
 };
 
-/* ======================================================
-   BUILD ORDER ITEMS FROM REQUEST
-====================================================== */
 const buildItems = async (rawItems) => {
   if (!Array.isArray(rawItems) || rawItems.length === 0) {
     throw { status: 400, message: "Order must have at least one item" };
@@ -373,7 +367,6 @@ const buildItems = async (rawItems) => {
       throw { status: 400, message: `Invalid reel size: ${size}` };
     }
 
-    // Find ProductStock by size
     const stock = await ProductStock.findOne({ size, isActive: true });
     if (!stock) {
       throw { status: 400, message: `Product stock for ${size} not found` };
@@ -410,9 +403,6 @@ const buildItems = async (rawItems) => {
   return { items: processed, subTotal };
 };
 
-/* ======================================================
-   GET ALL ORDERS
-====================================================== */
 const getAllOrders = async (req, res) => {
   try {
     const { page = 1, limit = 20, status, paymentStatus, contact, search, fromDate, toDate } = req.query;
@@ -489,9 +479,6 @@ const getAllOrders = async (req, res) => {
   }
 };
 
-/* ======================================================
-   GET ORDER BY ID
-====================================================== */
 const getOrderById = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -511,9 +498,6 @@ const getOrderById = async (req, res) => {
   }
 };
 
-/* ======================================================
-   CREATE ORDER
-====================================================== */
 const createOrder = async (req, res) => {
   try {
     const {
@@ -524,19 +508,16 @@ const createOrder = async (req, res) => {
       allowReserved = false,
     } = req.body;
 
-    /* ---------- resolve customer ---------- */
     let contactDoc = null;
     let finalContactId = null;
 
     if (contact && isValidId(contact)) {
-      // Existing customer
       contactDoc = await Contact.findById(contact);
       if (!contactDoc) {
         return res.status(404).json({ success: false, message: "Contact not found" });
       }
       finalContactId = contactDoc._id;
     } else if (customerName && customerPhone) {
-      // New customer — auto-create a Contact from name + phone
       try {
         contactDoc = await Contact.create({
           name: String(customerName).trim().slice(0, 150),
@@ -558,7 +539,6 @@ const createOrder = async (req, res) => {
       });
     }
 
-    /* ---------- validation ---------- */
     let cleanEnquiry = null;
     if (enquiry) {
       if (!isValidId(enquiry)) {
@@ -594,7 +574,6 @@ const createOrder = async (req, res) => {
     const taxAmount = (taxableAmount * numericTaxPercent) / 100;
     const grandTotal = taxableAmount + taxAmount;
 
-    /* ---------- build order payload ---------- */
     const orderPayload = {
       enquiry: cleanEnquiry,
       contact: finalContactId,
@@ -620,7 +599,6 @@ const createOrder = async (req, res) => {
       createdBy: req.user?._id || null,
     };
 
-    /* ---------- create ---------- */
     let order = null;
     for (let attempt = 0; attempt < 3 && !order; attempt++) {
       try {
@@ -632,7 +610,6 @@ const createOrder = async (req, res) => {
       }
     }
 
-    // If created directly as Confirmed, deduct stock immediately
     if (order.status === "Confirmed") {
       try {
         await deductOrderStock(order, req.user, !!allowReserved);
@@ -676,9 +653,6 @@ const createOrder = async (req, res) => {
   }
 };
 
-/* ======================================================
-   UPDATE ORDER (Draft only for items)
-====================================================== */
 const updateOrder = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -725,7 +699,6 @@ const updateOrder = async (req, res) => {
 
     let totalsChanged = false;
 
-    // Full items replacement (Draft only, guarded above)
     if (req.body.items !== undefined) {
       const { items: processedItems, subTotal } = await buildItems(req.body.items);
       order.items = processedItems;
@@ -774,18 +747,6 @@ const updateOrder = async (req, res) => {
   }
 };
 
-/* ======================================================
-   UPDATE ORDER STATUS
-
-   Stock effects:
-     Draft → Confirmed     : deduct (with reserved-conflict gate)
-     * → Cancelled         : if Deducted, restore quantity
-
-   `reservedQty` is never touched by order operations — it
-   is a manual admin field on ProductStock. When Confirmed
-   exceeds free qty, returns 409 RESERVED_CONFLICT unless
-   allowReserved is passed.
-====================================================== */
 const updateOrderStatus = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -826,7 +787,6 @@ const updateOrderStatus = async (req, res) => {
       });
     }
 
-    /* ---- stock transitions ---- */
     const currentStockStatus = order.stockStatus || "Pending";
 
     const shouldDeduct = status === "Confirmed" && currentStockStatus === "Pending";
@@ -885,9 +845,6 @@ const updateOrderStatus = async (req, res) => {
   }
 };
 
-/* ======================================================
-   UPDATE PAYMENT
-====================================================== */
 const updatePayment = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -1003,7 +960,6 @@ const generateInvoice = async (req, res) => {
 
     const contact = order.contact;
 
-    /* ---------- 🔽 LOAD SETTINGS 🔽 ---------- */
     const settings = await getGlobalSettings();
     if (!settings?.seller?.name || !settings?.seller?.gstin) {
       return res.status(400).json({
@@ -1017,7 +973,6 @@ const generateInvoice = async (req, res) => {
     const bankCfg = settings.bank || {};
     const invCfg = settings.invoice || {};
 
-    // Build a single-line seller address for the invoice header
     const sellerAddressLine = [
       sellerCfg.address,
       sellerCfg.addressLine2,
@@ -1054,7 +1009,6 @@ const generateInvoice = async (req, res) => {
 
     const defaultHsn = invCfg.defaultHsn || "7217";
 
-    /* ---------- buyer (bill to) ---------- */
     const buyer = {
       name: contact.name || "",
       company: contact.company || "",
@@ -1066,7 +1020,6 @@ const generateInvoice = async (req, res) => {
       email: contact.email || "",
     };
 
-    /* ---------- consignee (ship to) — falls back to buyer ---------- */
     const consignee = {
       name: contact.shippingName || contact.name || "",
       company: contact.shippingCompany || contact.company || "",
@@ -1076,14 +1029,11 @@ const generateInvoice = async (req, res) => {
       stateCode: contact.shippingStateCode || contact.stateCode || "",
     };
 
-    /* ---------- amounts ---------- */
     const subTotal = Number(order.subTotal || 0);
     const discount = Number(order.discount || 0);
     const taxableAmount = Math.max(0, subTotal - discount);
     const taxPercent = Number(order.taxPercent || invCfg.defaultGstRate || 0);
 
-    /* ---------- tax type ----------
-       Reads seller stateCode from Settings now (was hardcoded env). */
     const sellerCode = String(sellerCfg.stateCode || "").trim();
     const supplyCode = String(consignee.stateCode || buyer.stateCode || "").trim();
     const intraState = Boolean(sellerCode && supplyCode && sellerCode === supplyCode);
@@ -1099,7 +1049,6 @@ const generateInvoice = async (req, res) => {
 
     const totalTax = round2(igstAmount + cgstAmount + sgstAmount);
 
-    /* ---------- round-off (from Settings) ---------- */
     const rawGrandTotal = round2(taxableAmount + totalTax);
     const roundOff = invCfg.roundOffEnabled
       ? round2(Math.round(rawGrandTotal) - rawGrandTotal)
@@ -1109,7 +1058,7 @@ const generateInvoice = async (req, res) => {
     const invoiceItems = order.items.map((item) => ({
       product: item.productStock || item.product,
       description: item.productName || `Reel ${item.size}`,
-      hsnSac: item.hsnSac || defaultHsn,   // per-item HSN falls back to Settings
+      hsnSac: item.hsnSac || defaultHsn,   
       quantity: Number(item.quantity || 0),
       rate: Number(item.rate || 0),
       unit: item.unit || "Reel",
@@ -1128,8 +1077,8 @@ const generateInvoice = async (req, res) => {
             ? new Date(Date.now() + invCfg.defaultDueDays * 86400000)
             : null,
 
-          seller: sellerSnapshot,   // 🔽 was { ...SELLER }
-          bank: bankSnapshot,       // 🔽 new field — add to Invoice model
+          seller: sellerSnapshot,    
+          bank: bankSnapshot,       
           buyer,
           consignee,
 
@@ -1149,7 +1098,7 @@ const generateInvoice = async (req, res) => {
           sgstAmount,
           totalTax,
 
-          roundOff,                 // 🔽 new
+          roundOff,                 
           grandTotal,
           amountInWords: amountInWords(grandTotal),
           taxAmountInWords: amountInWords(totalTax),
@@ -1195,11 +1144,8 @@ const generateInvoice = async (req, res) => {
 
     handleError(res, error, "Failed to generate invoice");
   }
-};
+}
 
-/* ======================================================
-   GET INVOICE FOR ORDER
-====================================================== */
 const getInvoice = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {

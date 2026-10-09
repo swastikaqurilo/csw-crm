@@ -6,6 +6,10 @@ const MAX_LIMIT = 200;
 const MAX_MOVEMENT_LOG = 200;
 const MAX_QUANTITY = 1e8;
 
+const VALID_PAYMENT_MODES = [
+  "Bank Transfer", "UPI", "Cheque", "Cash", "NEFT", "RTGS", "Other",
+];
+
 const isValidId = (v) => mongoose.isValidObjectId(v);
 
 const safeString = (v, max = 500) => {
@@ -15,7 +19,6 @@ const safeString = (v, max = 500) => {
   return t ? t.slice(0, max) : "";
 };
 
-// ✅ NEW — normalize + validate a phone number string
 const normalizePhone = (v, max = 20) => {
   const raw = safeString(v, max);
   if (!raw) return null;
@@ -49,7 +52,6 @@ const handleError = (res, error, fallback) => {
   return res.status(500).json({ success: false, message: fallback });
 };
 
-/* -------- LIST -------- */
 const getAllRawStock = async (req, res) => {
   try {
     const { category, search } = req.query;
@@ -83,7 +85,6 @@ const getAllRawStock = async (req, res) => {
   }
 };
 
-/* -------- GET ONE -------- */
 const getRawStockById = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -99,7 +100,6 @@ const getRawStockById = async (req, res) => {
   }
 };
 
-/* -------- CREATE -------- */
 const createRawStock = async (req, res) => {
   try {
     const {
@@ -176,7 +176,6 @@ const createRawStock = async (req, res) => {
   }
 };
 
-/* -------- UPDATE -------- */
 const updateRawStock = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -253,7 +252,6 @@ const updateRawStock = async (req, res) => {
   }
 };
 
-/* -------- ADJUST -------- */
 const adjustRawStock = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -301,7 +299,6 @@ const adjustRawStock = async (req, res) => {
         return res.status(400).json({ success: false, message: "Quantity must be > 0" });
       }
 
-      // Can't issue more than total stock
       if (numQty > before) {
         return res.status(400).json({
           success: false,
@@ -309,11 +306,9 @@ const adjustRawStock = async (req, res) => {
         });
       }
 
-      // Does this issue dip into reserved stock?
       if (numQty > freeBefore) {
         usedFromReserved = numQty - freeBefore;
 
-        // Permission required
         if (!allowReserved) {
           return res.status(409).json({
             success: false,
@@ -330,16 +325,13 @@ const adjustRawStock = async (req, res) => {
           });
         }
 
-        // Permission granted — reduce reserved by the overlap
         reservedAfter = Math.max(reservedBefore - usedFromReserved, 0);
         overrideReserved = true;
       }
 
       after = before - numQty;
     } else {
-      // adjustment — set to absolute value
       after = numQty;
-      // Keep reserved from exceeding new total
       if (reservedBefore > after) {
         reservedAfter = after;
       }
@@ -352,7 +344,6 @@ const adjustRawStock = async (req, res) => {
       });
     }
 
-    // Apply changes
     item.quantity = after;
     if (type === "out" && overrideReserved) {
       item.reservedQty = reservedAfter;
@@ -401,7 +392,6 @@ const adjustRawStock = async (req, res) => {
   }
 };
 
-/* -------- MOVEMENTS -------- */
 const getRawStockMovements = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -418,7 +408,6 @@ const getRawStockMovements = async (req, res) => {
   }
 };
 
-/* -------- SEED DEFAULTS -------- */
 const seedDefaultMaterials = async (req, res) => {
   try {
     const defaults = [
@@ -452,11 +441,6 @@ const seedDefaultMaterials = async (req, res) => {
   }
 };
 
-/* ============================================================
-   ██  RAW PURCHASES
-============================================================ */
-
-/* -------- LIST -------- */
 const getAllPurchases = async (req, res) => {
   try {
     const {
@@ -499,7 +483,6 @@ const getAllPurchases = async (req, res) => {
       }
     }
 
-    // ✅ NEW — search now also covers supplierName and supplierPhone
     if (search && typeof search === "string" && search.trim()) {
       const safe = search.trim().slice(0, 100).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       query.$or = [
@@ -534,7 +517,6 @@ const getAllPurchases = async (req, res) => {
   }
 };
 
-/* -------- GET ONE -------- */
 const getPurchaseById = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -552,7 +534,6 @@ const getPurchaseById = async (req, res) => {
   }
 };
 
-/* -------- UPDATE PURCHASE (Pending only) -------- */
 const updatePurchase = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -571,7 +552,6 @@ const updatePurchase = async (req, res) => {
       });
     }
 
-    // Editable fields
     if (req.body.quantity !== undefined) {
       const n = Number(req.body.quantity);
       if (!Number.isFinite(n) || n <= 0 || n > MAX_QUANTITY) {
@@ -591,7 +571,6 @@ const updatePurchase = async (req, res) => {
       purchase.unitPrice = n;
     }
 
-    // Recompute total after quantity or price change
     purchase.totalAmount =
       Number(purchase.quantity || 0) * Number(purchase.unitPrice || 0);
 
@@ -630,12 +609,10 @@ const updatePurchase = async (req, res) => {
       }
     }
 
-    // ✅ NEW — allow editing supplierName while Pending
     if (req.body.supplierName !== undefined) {
       purchase.supplierName = safeString(req.body.supplierName, 100) || null;
     }
 
-    // ✅ NEW — allow editing supplierPhone while Pending
     if (req.body.supplierPhone !== undefined) {
       const phone = normalizePhone(req.body.supplierPhone, 20);
       if (phone && phone.error) {
@@ -668,18 +645,19 @@ const updatePurchase = async (req, res) => {
   }
 };
 
-/* -------- CREATE (does NOT touch stock yet) -------- */
 const createPurchase = async (req, res) => {
   try {
     const {
       material,
       supplier,
-      supplierName,   // ✅ NEW
-      supplierPhone,  // ✅ NEW
+      supplierName,   
+      supplierPhone, 
       quantity,
       unitPrice = 0,
       orderedAt,
       expectedAt,
+      dueDate,          
+      invoiceNumber,
       notes,
     } = req.body;
 
@@ -703,7 +681,6 @@ const createPurchase = async (req, res) => {
       }
     }
 
-    // ✅ NEW — supplier text field validation
     const cleanSupplierName = safeString(supplierName, 100) || null;
     const cleanSupplierPhone = normalizePhone(supplierPhone, 20);
     if (cleanSupplierPhone && cleanSupplierPhone.error) {
@@ -744,11 +721,20 @@ const createPurchase = async (req, res) => {
       cleanExpected = d;
     }
 
+    let cleanDue = null;
+      if (dueDate) {
+        const d = new Date(dueDate);
+        if (isNaN(d.getTime())) {
+          return res.status(400).json({ success: false, message: "Invalid dueDate" });
+        }
+        cleanDue = d;
+      }
+
     const purchase = await RawPurchase.create({
       material,
       supplier: supplierDoc?._id || null,
-      supplierName: cleanSupplierName,    // ✅ NEW
-      supplierPhone: cleanSupplierPhone,  // ✅ NEW
+      supplierName: cleanSupplierName,    
+      supplierPhone: cleanSupplierPhone,  
       quantity: numQty,
       unit: materialDoc.unit,
       unitPrice: numPrice,
@@ -757,6 +743,8 @@ const createPurchase = async (req, res) => {
       expectedAt: cleanExpected,
       status: "Pending",
       notes: safeString(notes, 1000) || undefined,
+      ueDate: cleanDue,                                        // ← add
+      invoiceNumber: safeString(invoiceNumber, 60) || null, 
       createdBy: req.user?._id || null,
     });
 
@@ -774,14 +762,12 @@ const createPurchase = async (req, res) => {
   }
 };
 
-/* -------- RECEIVE (the ONLY path that increases stock) -------- */
 const receivePurchase = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
       return res.status(400).json({ success: false, message: "Invalid ID" });
     }
 
-    // Step 1 — atomic status flip. Guards against double-receive.
     const purchase = await RawPurchase.findOneAndUpdate(
       { _id: req.params.id, isActive: true, status: "Pending" },
       {
@@ -805,7 +791,6 @@ const receivePurchase = async (req, res) => {
       });
     }
 
-    // Step 2 — atomic stock increment + movement log entry.
     const material = await RawStock.findByIdAndUpdate(
       purchase.material._id,
       [
@@ -845,7 +830,6 @@ const receivePurchase = async (req, res) => {
       { new: true, updatePipeline: true }
     );
 
-    // Step 3 — if stock update failed, roll back the status flip.
     if (!material) {
       await RawPurchase.findByIdAndUpdate(purchase._id, {
         $set: { status: "Pending", receivedAt: null },
@@ -870,7 +854,6 @@ const receivePurchase = async (req, res) => {
   }
 };
 
-/* -------- CANCEL -------- */
 const cancelPurchase = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -908,7 +891,6 @@ const cancelPurchase = async (req, res) => {
   }
 };
 
-/* -------- DELETE (soft, only non-received) -------- */
 const deletePurchase = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -933,6 +915,106 @@ const deletePurchase = async (req, res) => {
   }
 };
 
+const recordPurchasePayment = async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid purchase ID" });
+    }
+
+    const {
+      amount,
+      method = "Bank Transfer",
+      paidAt,
+      transactionId,
+      chequeNumber,
+      bankName,
+      notes,
+    } = req.body;
+
+    const numericAmount = Number(amount);
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      return res.status(400).json({ success: false, message: "Amount must be greater than 0" });
+    }
+    if (!VALID_PAYMENT_MODES.includes(method)) {
+      return res.status(400).json({ success: false, message: "Invalid payment method" });
+    }
+
+    const purchase = await RawPurchase.findById(req.params.id);
+    if (!purchase || !purchase.isActive) {
+      return res.status(404).json({ success: false, message: "Purchase not found" });
+    }
+    if (purchase.status === "Cancelled") {
+      return res.status(400).json({ success: false, message: "Cannot pay a cancelled purchase" });
+    }
+    if (purchase.status !== "Received") {
+      return res.status(400).json({
+        success: false,
+        message: "Mark the purchase as received before recording a payment",
+      });
+    }
+
+    const total = Number(purchase.totalAmount || 0);
+    const alreadyPaid = Number(purchase.amountPaid || 0);
+    const remaining = Math.max(0, total - alreadyPaid);
+
+    if (numericAmount > remaining + 0.01) {
+      return res.status(400).json({
+        success: false,
+        message: `Payment exceeds remaining balance of ₹${remaining.toFixed(2)}`,
+      });
+    }
+
+    purchase.payments.push({
+      amount: numericAmount,
+      method,
+      paidAt: paidAt ? new Date(paidAt) : new Date(),
+      transactionId: transactionId?.trim() || null,
+      chequeNumber: chequeNumber?.trim() || null,
+      bankName: bankName?.trim() || null,
+      notes: notes?.trim() || null,
+      by: req.user?._id || null,
+    });
+    purchase.updatedBy = req.user?._id;
+    await purchase.save();
+
+    const populated = await RawPurchase.findById(purchase._id)
+      .populate("material", "name category sizeKg unit")
+      .populate("supplier", "name company phone");
+
+    res.status(201).json({ success: true, data: populated });
+  } catch (err) {
+    console.error("[recordPurchasePayment]", err);
+    res.status(500).json({ success: false, message: "Failed to record payment" });
+  }
+};
+
+const deletePurchasePayment = async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id) || !mongoose.isValidObjectId(req.params.paymentId)) {
+      return res.status(400).json({ success: false, message: "Invalid ID" });
+    }
+
+    const purchase = await RawPurchase.findById(req.params.id);
+    if (!purchase || !purchase.isActive) {
+      return res.status(404).json({ success: false, message: "Purchase not found" });
+    }
+
+    const sub = purchase.payments.id(req.params.paymentId);
+    if (!sub) {
+      return res.status(404).json({ success: false, message: "Payment not found" });
+    }
+
+    sub.deleteOne();
+    purchase.updatedBy = req.user?._id;
+    await purchase.save();
+
+    res.status(200).json({ success: true, message: "Payment removed" });
+  } catch (err) {
+    console.error("[deletePurchasePayment]", err);
+    res.status(500).json({ success: false, message: "Failed to remove payment" });
+  }
+};
+
 module.exports = {
   getAllRawStock,
   getRawStockById,
@@ -949,4 +1031,6 @@ module.exports = {
   receivePurchase,
   cancelPurchase,
   deletePurchase,
+  recordPurchasePayment,
+  deletePurchasePayment,
 };

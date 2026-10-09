@@ -11,7 +11,6 @@ import Contacts from "./pages/Contacts";
 import FollowUps from "./pages/FollowUps";
 import Settings from "./pages/Settings";
 import Products from "./pages/Products";
-// import Inventory from "./pages/Inventory";
 import Orders from "./pages/Orders";
 import Payments from "./pages/Payments";
 import Accounting from "./pages/Accounting";
@@ -19,6 +18,9 @@ import Login from "./pages/Login";
 import Register from "./pages/Register";
 import Expenses from "./pages/Expenses";
 import RawMaterials from "./pages/RawMaterials";
+import Salary from "./pages/Salary";
+import Workers from "./pages/Worker";
+
 
 function App() {
   return (
@@ -41,16 +43,15 @@ function App() {
             <Route path="enquiries" element={<Enquiries />} />
             <Route path="contacts" element={<Contacts />} />
             <Route path="follow-ups" element={<FollowUps />} />
-            {/* <Route path="reports" element={<Reports />} /> */}
             <Route path="settings" element={<Settings />} />
             <Route path="products" element={<Products />} />
-            {/* <Route path="inventory" element={<Inventory />} /> */}
             <Route path="orders" element={<Orders />} />
             <Route path="payments" element={<Payments />} />
-            {/* <Route path="revenue" element={<Revenue />} /> */}
             <Route path="accounting" element={<Accounting />} />
             <Route path="expenses" element={<Expenses/>} />
             <Route path="rawmats" element={<RawMaterials/>} />
+            <Route path="salary" element={<Salary/>} />
+            <Route path="worker" element={<Workers/>} />
           </Route>
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

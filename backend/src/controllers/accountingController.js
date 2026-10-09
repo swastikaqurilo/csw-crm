@@ -3,8 +3,10 @@
 const Payment = require('../models/Payment');
 const Expense = require('../models/Expense');
 const Order = require('../models/Order');
+const { RawPurchase } = require('../models/RawMaterial');
+const Salary = require('../models/Salary');
 
-const FISCAL_YEAR_START_MONTH = 3; // April = index 3 (0-based)
+const FISCAL_YEAR_START_MONTH = 3;
 
 function badRequest(message) {
   const error = new Error(message);
@@ -15,25 +17,44 @@ function badRequest(message) {
 function parseAsOfDate(value) {
   if (!value) {
     const now = new Date();
+
     return new Date(
-      Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+      Date.UTC(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate(),
+        23,
+        59,
+        59,
+        999
+      )
     );
   }
 
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+  if (
+    typeof value !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(value)
+  ) {
     throw badRequest('asOf must be YYYY-MM-DD');
   }
 
   const [y, m, d] = value.split('-').map(Number);
 
-  // Range guard
-  if (y < 2000 || y > 2100 || m < 1 || m > 12 || d < 1 || d > 31) {
+  if (
+    y < 2000 ||
+    y > 2100 ||
+    m < 1 ||
+    m > 12 ||
+    d < 1 ||
+    d > 31
+  ) {
     throw badRequest('asOf is out of range');
   }
 
-  const date = new Date(Date.UTC(y, m - 1, d, 23, 59, 59, 999));
+  const date = new Date(
+    Date.UTC(y, m - 1, d, 23, 59, 59, 999)
+  );
 
-  // Catch roll-over (e.g. 2026-02-30 becomes 2026-03-02)
   if (
     date.getUTCFullYear() !== y ||
     date.getUTCMonth() !== m - 1 ||
@@ -48,13 +69,29 @@ function parseAsOfDate(value) {
 function fiscalYearStart(asOf) {
   const y = asOf.getUTCFullYear();
   const m = asOf.getUTCMonth();
-  const startYear = m >= FISCAL_YEAR_START_MONTH ? y : y - 1;
-  return new Date(Date.UTC(startYear, FISCAL_YEAR_START_MONTH, 1, 0, 0, 0, 0));
+
+  const startYear =
+    m >= FISCAL_YEAR_START_MONTH ? y : y - 1;
+
+  return new Date(
+    Date.UTC(
+      startYear,
+      FISCAL_YEAR_START_MONTH,
+      1,
+      0,
+      0,
+      0,
+      0
+    )
+  );
 }
 
 function monthLabel(key) {
   const [y, m] = key.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-IN', {
+
+  return new Date(
+    Date.UTC(y, m - 1, 1)
+  ).toLocaleDateString('en-IN', {
     month: 'short',
     year: '2-digit',
     timeZone: 'UTC',
@@ -65,6 +102,32 @@ function money(n) {
   return Number(Number(n || 0).toFixed(2));
 }
 
+/* ---------- helpers ---------- */
+
+function dueStatus(purchase, asOf) {
+  if (purchase.paymentStatus === 'Paid') {
+    return 'Paid';
+  }
+
+  const dd = purchase.dueDate
+    ? new Date(purchase.dueDate)
+    : null;
+
+  if (!dd) {
+    return 'Pending';
+  }
+
+  if (dd < asOf) {
+    return 'Overdue';
+  }
+
+  const days =
+    (dd - asOf) /
+    (1000 * 60 * 60 * 24);
+
+  return days <= 7 ? 'Due' : 'Upcoming';
+}
+
 const getAccountingDashboard = async (req, res) => {
   try {
     const asOf = parseAsOfDate(req.query.asOf);
@@ -73,105 +136,246 @@ const getAccountingDashboard = async (req, res) => {
     const paymentMatchToDate = {
       isActive: true,
       status: 'Completed',
-      paymentDate: { $lte: asOf },
+      paymentDate: {
+        $lte: asOf,
+      },
     };
 
     const paymentMatchPeriod = {
-      ...paymentMatchToDate,
-      paymentDate: { $gte: fyStart, $lte: asOf },
+      isActive: true,
+      status: 'Completed',
+      paymentDate: {
+        $gte: fyStart,
+        $lte: asOf,
+      },
     };
 
     const expenseMatchToDate = {
+      isDeleted: false,
       date: { $lte: asOf },
     };
 
     const expenseMatchPeriod = {
+      isDeleted: false,
       date: { $gte: fyStart, $lte: asOf },
     };
 
+    const purchaseReceivedMatchToDate = {
+      isActive: true,
+      status: 'Received',
+      receivedAt: {
+        $lte: asOf,
+      },
+    };
+    
     const [
       revenueToDate,
       revenuePeriod,
       revenueByMonth,
+
       expensesPeriodAgg,
       expensesByMonth,
       unpaidExpenses,
       payablesTotalAgg,
       paidExpensesToDate,
+
       receivablesAgg,
       periodPayments,
       periodPaidExpenses,
       openOrders,
+
+      openPurchases,
+      purchasePayablesTotalAgg,
+      periodPurchasePayments,
+      purchaseSpendToDate,
+
+      revenueAccrualPeriod,
+      periodPurchaseAccrual,
+      periodSalariesAgg,
+      salaryExpenseAgg,
     ] = await Promise.all([
+
       Payment.aggregate([
-        { $match: paymentMatchToDate },
-        { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } },
-      ]),
-      Payment.aggregate([
-        { $match: paymentMatchPeriod },
-        { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } },
-      ]),
-      Payment.aggregate([
-        { $match: paymentMatchPeriod },
         {
-          $group: {
-            _id: { y: { $year: '$paymentDate' }, m: { $month: '$paymentDate' } },
-            total: { $sum: '$amount' },
-          },
+          $match: paymentMatchToDate,
         },
-        { $sort: { '_id.y': 1, '_id.m': 1 } },
-      ]),
-      Expense.aggregate([
-        { $match: expenseMatchPeriod },
         {
           $group: {
-            _id: { type: '$type', paymentStatus: '$paymentStatus' },
-            total: { $sum: '$amount' },
-            count: { $sum: 1 },
-          },
-        },
-      ]),
-      Expense.aggregate([
-        { $match: expenseMatchPeriod },
-        {
-          $group: {
-            _id: { y: { $year: '$date' }, m: { $month: '$date' } },
-            total: { $sum: '$amount' },
-            paid: {
-              $sum: { $cond: [{ $eq: ['$paymentStatus', 'Paid'] }, '$amount', 0] },
+            _id: null,
+            total: {
+              $sum: '$amount',
+            },
+            count: {
+              $sum: 1,
             },
           },
         },
-        { $sort: { '_id.y': 1, '_id.m': 1 } },
       ]),
-      Expense.find({ ...expenseMatchToDate, paymentStatus: 'Pending' })
-        .populate('person', 'name type')
-        .sort({ date: -1 })
+
+      Payment.aggregate([
+        {
+          $match: paymentMatchPeriod,
+        },
+        {
+          $group: {
+            _id: null,
+            total: {
+              $sum: '$amount',
+            },
+            count: {
+              $sum: 1,
+            },
+          },
+        },
+      ]),
+
+      Payment.aggregate([
+        {
+          $match: paymentMatchPeriod,
+        },
+        {
+          $group: {
+            _id: {
+              y: {
+                $year: '$paymentDate',
+              },
+              m: {
+                $month: '$paymentDate',
+              },
+            },
+            total: {
+              $sum: '$amount',
+            },
+          },
+        },
+        {
+          $sort: {
+            '_id.y': 1,
+            '_id.m': 1,
+          },
+        },
+      ]),
+
+      Expense.aggregate([
+        {
+          $match: expenseMatchPeriod,
+        },
+        {
+          $group: {
+            _id: {
+              type: '$type',
+              paymentStatus: '$paymentStatus',
+            },
+            total: {
+              $sum: '$amount',
+            },
+            count: {
+              $sum: 1,
+            },
+          },
+        },
+      ]),
+
+      Expense.aggregate([
+        {
+          $match: expenseMatchPeriod,
+        },
+        {
+          $group: {
+            _id: {
+              y: {
+                $year: '$date',
+              },
+              m: {
+                $month: '$date',
+              },
+            },
+            total: {
+              $sum: '$amount',
+            },
+          },
+        },
+        {
+          $sort: {
+            '_id.y': 1,
+            '_id.m': 1,
+          },
+        },
+      ]),
+
+      Expense.find({
+        ...expenseMatchToDate,
+        paymentStatus: 'Pending',
+      })
+        .sort({
+          date: -1,
+        })
         .limit(100)
         .lean(),
-      // 👈 Full payables total — not limited by the 100-row list cap
-      Expense.aggregate([
-        { $match: { ...expenseMatchToDate, paymentStatus: 'Pending' } },
-        { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } },
-      ]),
+
       Expense.aggregate([
         {
           $match: {
+            ...expenseMatchToDate,
+            paymentStatus: 'Pending',
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            total: {
+              $sum: '$amount',
+            },
+            count: {
+              $sum: 1,
+            },
+          },
+        },
+      ]),
+
+      Expense.aggregate([
+        {
+          $match: {
+            isDeleted: false,  
             paymentStatus: 'Paid',
             $or: [
-              { paidAt: { $lte: asOf } },
-              { paidAt: null, date: { $lte: asOf } },
+              {
+                paidAt: {
+                  $lte: asOf,
+                },
+              },
+              {
+                paidAt: null,
+                date: {
+                  $lte: asOf,
+                },
+              },
             ],
           },
         },
-        { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } },
+        {
+          $group: {
+            _id: null,
+            total: {
+              $sum: '$amount',
+            },
+            count: {
+              $sum: 1,
+            },
+          },
+        },
       ]),
+
       Order.aggregate([
         {
           $match: {
             isActive: true,
-            status: { $ne: 'Cancelled' },
-            orderDate: { $lte: asOf },
+            status: {
+              $ne: 'Cancelled',
+            },
+            orderDate: {
+              $lte: asOf,
+            },
           },
         },
         {
@@ -179,381 +383,1419 @@ const getAccountingDashboard = async (req, res) => {
             due: {
               $max: [
                 0,
-                { $subtract: [{ $ifNull: ['$grandTotal', 0] }, { $ifNull: ['$amountPaid', 0] }] },
+                {
+                  $subtract: [
+                    {
+                      $ifNull: [
+                        '$grandTotal',
+                        0,
+                      ],
+                    },
+                    {
+                      $ifNull: [
+                        '$amountPaid',
+                        0,
+                      ],
+                    },
+                  ],
+                },
               ],
             },
           },
         },
-        { $group: { _id: null, total: { $sum: '$due' }, count: { $sum: 1 } } },
+        {
+          $group: {
+            _id: null,
+            total: {
+              $sum: '$due',
+            },
+            count: {
+              $sum: 1,
+            },
+          },
+        },
       ]),
+
       Payment.find(paymentMatchPeriod)
-        .populate('contact', 'name company phone email')
-        .populate('order', 'orderNumber grandTotal')
-        .sort({ paymentDate: -1 })
+        .populate(
+          'contact',
+          'name company phone email'
+        )
+        .populate(
+          'order',
+          'orderNumber grandTotal'
+        )
+        .sort({
+          paymentDate: -1,
+        })
         .limit(500)
         .lean(),
+
       Expense.find({
+        isDeleted: false,  
         paymentStatus: 'Paid',
         $or: [
-          { paidAt: { $gte: fyStart, $lte: asOf } },
-          { paidAt: null, date: { $gte: fyStart, $lte: asOf } },
+          {
+            paidAt: {
+              $gte: fyStart,
+              $lte: asOf,
+            },
+          },
+          {
+            paidAt: null,
+            date: {
+              $gte: fyStart,
+              $lte: asOf,
+            },
+          },
         ],
       })
-        .populate('person', 'name type')
-        .sort({ paidAt: -1, date: -1 })
+        .sort({
+          paidAt: -1,
+          date: -1,
+        })
         .limit(500)
         .lean(),
+
       Order.find({
         isActive: true,
-        status: { $ne: 'Cancelled' },
-        orderDate: { $lte: asOf },
+        status: {
+          $ne: 'Cancelled',
+        },
+        orderDate: {
+          $lte: asOf,
+        },
       })
-        .populate('contact', 'name company')
-        .select('orderNumber orderDate grandTotal amountPaid paymentStatus contact status')
-        .sort({ orderDate: -1 })
+        .populate(
+          'contact',
+          'name company'
+        )
+        .select(
+          'orderNumber orderDate grandTotal amountPaid paymentStatus contact status'
+        )
+        .sort({
+          orderDate: -1,
+        })
         .limit(300)
         .lean(),
+
+      RawPurchase.find({
+        isActive: true,
+        status: 'Received',
+        receivedAt: {
+          $lte: asOf,
+        },
+        paymentStatus: {
+          $in: [
+            'Pending',
+            'Partial',
+            'Overdue',
+          ],
+        },
+      })
+        .populate(
+          'supplier',
+          'name company phone'
+        )
+        .populate(
+          'material',
+          'name category sizeKg unit'
+        )
+        .sort({
+          dueDate: 1,
+          receivedAt: -1,
+        })
+        .limit(200)
+        .lean(),
+
+      RawPurchase.aggregate([
+        {
+          $match: purchaseReceivedMatchToDate,
+        },
+        {
+          $project: {
+            due: {
+              $max: [
+                0,
+                {
+                  $subtract: [
+                    {
+                      $ifNull: [
+                        '$totalAmount',
+                        0,
+                      ],
+                    },
+                    {
+                      $ifNull: [
+                        '$amountPaid',
+                        0,
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            total: {
+              $sum: '$due',
+            },
+            count: {
+              $sum: 1,
+            },
+          },
+        },
+      ]),
+
+      RawPurchase.aggregate([
+        {
+          $match: {
+            isActive: true,
+            status: 'Received',
+          },
+        },
+        {
+          $unwind: '$payments',
+        },
+        {
+          $match: {
+            'payments.paidAt': {
+              $gte: fyStart,
+              $lte: asOf,
+            },
+          },
+        },
+        {
+          $project: {
+            _id: '$payments._id',
+            purchaseId: '$_id',
+            purchaseNumber: '$purchaseNumber',
+
+            supplier: '$supplierName',
+            supplierRef: '$supplier',
+
+            amount: '$payments.amount',
+            paidAt: '$payments.paidAt',
+
+            method: '$payments.method',
+            transactionId:
+              '$payments.transactionId',
+
+            chequeNumber:
+              '$payments.chequeNumber',
+
+            bankName:
+              '$payments.bankName',
+
+            invoiceNumber:
+              '$invoiceNumber',
+
+            notes:
+              '$payments.notes',
+          },
+        },
+        {
+          $sort: {
+            paidAt: -1,
+          },
+        },
+        {
+          $limit: 500,
+        },
+      ]),
+
+      RawPurchase.aggregate([
+        {
+          $match: purchaseReceivedMatchToDate,
+        },
+        {
+          $group: {
+            _id: null,
+            total: {
+              $sum: '$amountPaid',
+            },
+          },
+        },
+      ]),
+
+      Order.aggregate([
+        {
+          $match: {
+            isActive: true,
+            status: { $ne: 'Cancelled' },
+            orderDate: { $gte: fyStart, $lte: asOf },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: '$grandTotal' },
+            count: { $sum: 1 },
+          },
+        },
+      ]),
+
+      RawPurchase.aggregate([
+        {
+          $match: {
+            isActive: true,
+            status: 'Received',
+            receivedAt: { $gte: fyStart, $lte: asOf },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: '$totalAmount' },
+            count: { $sum: 1 },
+          },
+        },
+      ]),
+
+            Promise.resolve([{ _id: null, total: 0, count: 0 }]),
+
+      // Chart-of-accounts only — salary accrued in FY
+      Salary.aggregate([
+        {
+          $match: {
+            isDeleted: false,
+            periodEnd: { $gte: fyStart, $lte: asOf },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: '$netSalary' },
+            count: { $sum: 1 },
+          },
+        },
+      ]),
     ]);
 
-    const totalRevenueAllTime = money(revenueToDate[0]?.total);
-    const totalRevenuePeriod = money(revenuePeriod[0]?.total);
-    const paymentCountPeriod = revenuePeriod[0]?.count || 0;
 
-    let expenseByType = {
-      Employee: 0,
-      'Factory People': 0,
+    const totalRevenueAllTime =
+      money(revenueToDate[0]?.total);
+
+    const totalRevenuePeriod =
+      money(revenuePeriod[0]?.total);
+
+    const paymentCountPeriod =
+      revenuePeriod[0]?.count || 0;
+
+    const expenseByType = {
       'Factory Expense': 0,
       Miscellaneous: 0,
     };
+
     let totalExpensesPeriod = 0;
     let totalPaidExpensesPeriod = 0;
     let totalPendingExpensesPeriod = 0;
 
     for (const row of expensesPeriodAgg) {
-      const t = row._id.type;
+      const type = row._id.type;
       const status = row._id.paymentStatus;
-      const amt = money(row.total);
-      if (expenseByType[t] !== undefined) expenseByType[t] += amt;
-      totalExpensesPeriod += amt;
-      if (status === 'Paid') totalPaidExpensesPeriod += amt;
-      else totalPendingExpensesPeriod += amt;
+
+      const amount = money(row.total);
+
+      if (expenseByType[type] !== undefined) {
+        expenseByType[type] += amount;
+      }
+
+      totalExpensesPeriod += amount;
+
+      if (status === 'Paid') {
+        totalPaidExpensesPeriod += amount;
+      } else {
+        totalPendingExpensesPeriod += amount;
+      }
     }
 
-    const cashOutAllTime = money(paidExpensesToDate[0]?.total);
-    const accountsReceivable = money(receivablesAgg[0]?.total);
-    const netCashPosition = money(totalRevenueAllTime - cashOutAllTime);
+    const cashOutExpensesAllTime =
+      money(paidExpensesToDate[0]?.total);
 
-    const payables = unpaidExpenses.map((e) => {
-      let supplier = '—';
-      let invoice = e.invoiceNumber || e.expenseName || e.expenseType || e.type;
-      if (e.type === 'Employee' || e.type === 'Factory People') {
-        supplier = e.person?.name || e.type;
-        invoice = e.description || e.type;
-      } else if (e.type === 'Factory Expense') {
-        supplier = e.vendor || 'Factory vendor';
-        invoice = e.invoiceNumber || e.expenseType || 'Factory expense';
-      } else {
-        supplier = e.expenseName || e.expenseCategory || 'Miscellaneous';
-        invoice = e.invoiceNumber || e.expenseCategory || 'Misc';
+    const cashOutSupplierAllTime =
+      money(purchaseSpendToDate[0]?.total);
+
+    const cashOutAllTime = money(
+      cashOutExpensesAllTime +
+      cashOutSupplierAllTime
+    );
+
+    const accountsReceivable =
+      money(receivablesAgg[0]?.total);
+
+    const netCashPosition = money(
+      totalRevenueAllTime -
+      cashOutAllTime
+    );
+
+    const expensePayables = unpaidExpenses.map(
+      (expense) => {
+        let supplier =
+          expense.vendor ||
+          expense.expenseName ||
+          expense.expenseCategory ||
+          expense.type ||
+          '—';
+
+        let invoice =
+          expense.invoiceNumber ||
+          expense.expenseType ||
+          expense.expenseName ||
+          expense.type ||
+          '—';
+
+        if (expense.type === 'Factory Expense') {
+          supplier =
+            expense.vendor ||
+            'Factory vendor';
+
+          invoice =
+            expense.invoiceNumber ||
+            expense.expenseType ||
+            'Factory expense';
+        }
+
+        if (expense.type === 'Miscellaneous') {
+          supplier =
+            expense.expenseName ||
+            expense.expenseCategory ||
+            'Miscellaneous';
+
+          invoice =
+            expense.invoiceNumber ||
+            expense.expenseCategory ||
+            'Misc';
+        }
+
+        const dueDate =
+          expense.date
+            ? new Date(expense.date)
+            : asOf;
+
+        let status = 'Pending';
+
+        if (dueDate < asOf) {
+          status = 'Overdue';
+        } else {
+          const days =
+            (dueDate - asOf) /
+            (1000 * 60 * 60 * 24);
+
+          status =
+            days <= 7
+              ? 'Due'
+              : 'Upcoming';
+        }
+
+        return {
+          id: expense._id,
+
+          supplier,
+          invoice,
+
+          type: expense.type,
+          source: 'Expense',
+
+          createdDate: expense.date,
+          dueDate,
+
+          amount: money(expense.amount),
+          amountPaid: 0,
+
+          balanceDue:
+            money(expense.amount),
+
+          status,
+          paymentStatus:
+            expense.paymentStatus,
+
+          description:
+            expense.description ||
+            expense.notes ||
+            '',
+        };
       }
+    );
 
-      const dueDate = e.date;
-      const selected = asOf;
-      let status = 'Pending';
-      if (dueDate < selected) status = 'Overdue';
-      else {
-        const days = (dueDate - selected) / (1000 * 60 * 60 * 24);
-        if (days <= 7) status = 'Due';
-        else status = 'Upcoming';
-      }
+    const purchasePayables =
+      openPurchases.map((purchase) => {
+        const total =
+          money(purchase.totalAmount);
 
-      return {
-        id: e._id,
-        supplier,
-        invoice,
-        type: e.type,
-        createdDate: e.date,
-        dueDate: e.date,
-        amount: money(e.amount),
-        status,
-        paymentStatus: e.paymentStatus,
-        description: e.description || e.notes || '',
-      };
-    });
+        const paid =
+          money(purchase.amountPaid);
 
-    // 👈 True total from aggregate — not limited by the 100-row list cap
-    const totalPayables = money(payablesTotalAgg[0]?.total || 0);
+        const due = money(
+          Math.max(0, total - paid)
+        );
+
+        const supplierName =
+          purchase.supplier?.company ||
+          purchase.supplier?.name ||
+          purchase.supplierName ||
+          'Unknown supplier';
+
+        const materialLabel =
+          purchase.material?.name ||
+          'Material';
+
+        return {
+          id: purchase._id,
+
+          supplier: supplierName,
+
+          invoice:
+            purchase.invoiceNumber ||
+            purchase.purchaseNumber ||
+            '—',
+
+          type: 'Raw Material',
+          source: 'Purchase',
+
+          createdDate:
+            purchase.receivedAt ||
+            purchase.orderedAt,
+
+          dueDate:
+            purchase.dueDate ||
+            purchase.receivedAt ||
+            purchase.orderedAt,
+
+          amount: total,
+          amountPaid: paid,
+          balanceDue: due,
+
+          status:
+            dueStatus(
+              purchase,
+              asOf
+            ),
+
+          paymentStatus:
+            purchase.paymentStatus,
+
+          description:
+            `${materialLabel} · ${purchase.quantity} ${purchase.unit}`,
+
+          purchaseNumber:
+            purchase.purchaseNumber,
+
+          supplierPhone:
+            purchase.supplier?.phone ||
+            purchase.supplierPhone ||
+            '',
+        };
+      });
+
+    const payables = [
+      ...purchasePayables,
+      ...expensePayables,
+    ];
+
+    const totalExpensePayables =
+      money(
+        payablesTotalAgg[0]?.total || 0
+      );
+
+    const totalPurchasePayables =
+      money(
+        purchasePayablesTotalAgg[0]?.total || 0
+      );
+
+    const totalPayables = money(
+      totalExpensePayables +
+      totalPurchasePayables
+    );
 
     const monthMap = {};
-    for (const row of revenueByMonth) {
-      const key = `${row._id.y}-${String(row._id.m).padStart(2, '0')}`;
-      if (!monthMap[key]) monthMap[key] = { month: monthLabel(key), revenue: 0, expenses: 0 };
-      monthMap[key].revenue = money(row.total);
-    }
-    for (const row of expensesByMonth) {
-      const key = `${row._id.y}-${String(row._id.m).padStart(2, '0')}`;
-      if (!monthMap[key]) monthMap[key] = { month: monthLabel(key), revenue: 0, expenses: 0 };
-      monthMap[key].expenses = money(row.total);
-    }
-    const monthlyData = Object.keys(monthMap)
-      .sort()
-      .map((k) => ({
-        ...monthMap[k],
-        netProfit: money(monthMap[k].revenue - monthMap[k].expenses),
-      }));
 
-    const netProfit = money(totalRevenuePeriod - totalExpensesPeriod);
+    for (const row of revenueByMonth) {
+      const key =
+        `${row._id.y}-${String(
+          row._id.m
+        ).padStart(2, '0')}`;
+
+      if (!monthMap[key]) {
+        monthMap[key] = {
+          month: monthLabel(key),
+          revenue: 0,
+          expenses: 0,
+        };
+      }
+
+      monthMap[key].revenue =
+        money(row.total);
+    }
+
+    for (const row of expensesByMonth) {
+      const key =
+        `${row._id.y}-${String(
+          row._id.m
+        ).padStart(2, '0')}`;
+
+      if (!monthMap[key]) {
+        monthMap[key] = {
+          month: monthLabel(key),
+          revenue: 0,
+          expenses: 0,
+        };
+      }
+
+      monthMap[key].expenses +=
+        money(row.total);
+    }
+
+    for (const payment of periodPurchasePayments) {
+      const date =
+        new Date(payment.paidAt);
+
+      const key =
+        `${date.getUTCFullYear()}-${String(
+          date.getUTCMonth() + 1
+        ).padStart(2, '0')}`;
+
+      if (!monthMap[key]) {
+        monthMap[key] = {
+          month: monthLabel(key),
+          revenue: 0,
+          expenses: 0,
+        };
+      }
+
+      monthMap[key].expenses +=
+        money(payment.amount);
+    }
+
+    const monthlyData =
+      Object.keys(monthMap)
+        .sort()
+        .map((key) => ({
+          ...monthMap[key],
+          netProfit: money(
+            monthMap[key].revenue -
+            monthMap[key].expenses
+          ),
+        }));
+
+    const periodPurchaseSpend =
+      money(
+        periodPurchasePayments.reduce(
+          (sum, payment) =>
+            sum +
+            Number(payment.amount || 0),
+          0
+        )
+      );
+
+    const accrualRevenue = money(
+      revenueAccrualPeriod[0]?.total || 0
+    );
+
+    const accrualRawMaterial = money(
+      periodPurchaseAccrual[0]?.total || 0
+    );
+
+    const accrualSalaries = money(
+      periodSalariesAgg[0]?.total || 0
+    );
+
+    const salaryExpenseForChart = money(
+      salaryExpenseAgg[0]?.total || 0
+    );
+
+    const factoryExpenseTotal = money(
+      expenseByType['Factory Expense']
+    );
+
+    const miscExpenseTotal = money(
+      expenseByType['Miscellaneous']
+    );
+
+    const totalAccrualExpenses = money(
+      accrualRawMaterial +
+        factoryExpenseTotal +
+        miscExpenseTotal +
+        accrualSalaries
+    );
+
+    const netProfit = money(
+      accrualRevenue - totalAccrualExpenses
+    );
+
+    const totalExpensesPeriodWithMaterials = money(
+      totalExpensesPeriod + periodPurchaseSpend
+    );
 
     const accountGroups = [
       {
         name: 'Assets',
         code: '1000',
+
         accounts: [
           {
             name: 'Cash & Bank (derived)',
             code: '1001',
-            balance: Math.max(0, netCashPosition),
-            note: 'Completed payments − paid expenses (no opening balance)',
+            balance:
+              Math.max(
+                0,
+                netCashPosition
+              ),
+            note:
+              'Completed customer payments − paid expenses − supplier payments',
           },
+
           {
             name: 'Accounts Receivable',
             code: '1003',
-            balance: accountsReceivable,
-            note: 'Unpaid balance on active orders',
+            balance:
+              accountsReceivable,
+            note:
+              'Unpaid balance on active orders',
           },
         ],
       },
+
       {
         name: 'Liabilities',
         code: '2000',
+
         accounts: [
           {
-            name: 'Accounts Payable',
+            name:
+              'Accounts Payable — Suppliers',
             code: '2001',
-            balance: totalPayables,
-            note: 'Unpaid expenses',
+            balance:
+              totalPurchasePayables,
+            note:
+              'Unpaid received raw-material purchases',
+          },
+
+          {
+            name:
+              'Accounts Payable — Operations',
+            code: '2002',
+            balance:
+              totalExpensePayables,
+            note:
+              'Unpaid factory and miscellaneous expenses',
           },
         ],
       },
+
       {
         name: 'Equity',
         code: '3000',
+
         accounts: [
           {
-            name: 'Retained earnings (period)',
+            name:
+              'Retained earnings (period)',
             code: '3001',
             balance: netProfit,
-            note: 'Period revenue − period expenses',
+            note:
+              'Period revenue − period expenses',
           },
         ],
       },
+
       {
         name: 'Income',
         code: '4000',
+
         accounts: [
           {
             name: 'Sales Revenue',
             code: '4001',
-            balance: totalRevenuePeriod,
-            note: 'Completed customer payments in period',
+            balance:
+              totalRevenuePeriod,
+            note:
+              'Completed customer payments in period',
           },
         ],
       },
+
       {
         name: 'Expenses',
         code: '5000',
+
         accounts: [
-          { name: 'Employee costs', code: '5001', balance: money(expenseByType.Employee), note: 'Salaries' },
-          { name: 'Factory wages', code: '5002', balance: money(expenseByType['Factory People']), note: 'Daily wages' },
-          { name: 'Factory expenses', code: '5003', balance: money(expenseByType['Factory Expense']), note: 'Vendor / factory costs' },
-          { name: 'Miscellaneous', code: '5004', balance: money(expenseByType.Miscellaneous), note: 'Other spend' },
+          {
+            name: 'Factory expenses',
+            code: '5003',
+            balance:
+              money(
+                expenseByType[
+                  'Factory Expense'
+                ]
+              ),
+            note:
+              'Vendor / factory costs',
+          },
+
+          {
+            name: 'Miscellaneous',
+            code: '5004',
+            balance:
+              money(
+                expenseByType[
+                  'Miscellaneous'
+                ]
+              ),
+            note:
+              'Other miscellaneous spending',
+          },
+
+          {
+            name:
+              'Raw material purchases',
+            code: '5005',
+            balance:
+              accrualRawMaterial,
+            note:
+              'Raw material received in period',
+          },
+
+          {
+            name: 'Salaries & Wages',
+            code: '5006',
+            balance:
+              salaryExpenseForChart,
+            note:
+              'Salary accrued in period (chart only)',
+          },
         ],
       },
     ];
 
-    const customerPaymentRows = periodPayments.map((p) => ({
-      id: p._id,
-      paymentNumber: p.paymentNumber || '',
-      date: p.paymentDate,
-      customer: p.contact?.company || p.contact?.name || 'Unknown customer',
-      contactName: p.contact?.name || '',
-      orderNumber: p.order?.orderNumber || '',
-      amount: money(p.amount),
-      currency: p.currency || 'INR',
-      paymentMode: p.paymentMode || '',
-      transactionId: p.transactionId || '',
-      status: p.status || 'Completed',
-      notes: p.notes || '',
-    }));
+    const customerPaymentRows =
+      periodPayments.map((payment) => ({
+        id: payment._id,
 
-    const expensePaymentRows = periodPaidExpenses.map((e) => ({
-      id: e._id,
-      date: e.paidAt || e.date,
-      payee: e.person?.name || e.vendor || e.expenseName || e.expenseType || e.type,
-      type: e.type,
-      amount: money(e.amount),
-      paymentMethod: e.paymentMethod || '',
-      transactionId: e.transactionId || '',
-      invoiceNumber: e.invoiceNumber || '',
-      description: e.description || e.notes || '',
-    }));
+        paymentNumber:
+          payment.paymentNumber || '',
 
-    const receivableRows = openOrders
-      .map((o) => {
-        const due = money(Math.max(0, Number(o.grandTotal || 0) - Number(o.amountPaid || 0)));
-        return {
-          id: o._id,
-          orderNumber: o.orderNumber || '',
-          date: o.orderDate,
-          customer: o.contact?.company || o.contact?.name || 'Unknown',
-          contactName: o.contact?.name || '',
-          grandTotal: money(o.grandTotal),
-          amountPaid: money(o.amountPaid),
-          balanceDue: due,
-          paymentStatus: o.paymentStatus || 'Pending',
-          status: o.status || '',
-        };
-      })
-      .filter((r) => r.balanceDue > 0.009);
+        date:
+          payment.paymentDate,
 
-    const cashBalance = money(Math.max(0, netCashPosition));
-    const totalAssets = money(cashBalance + accountsReceivable);
-    const totalLiabilities = totalPayables;
-    const totalEquity = money(totalAssets - totalLiabilities);
+        customer:
+          payment.contact?.company ||
+          payment.contact?.name ||
+          'Unknown customer',
+
+        contactName:
+          payment.contact?.name ||
+          '',
+
+        orderNumber:
+          payment.order?.orderNumber ||
+          '',
+
+        amount:
+          money(payment.amount),
+
+        currency:
+          payment.currency ||
+          'INR',
+
+        paymentMode:
+          payment.paymentMode ||
+          '',
+
+        transactionId:
+          payment.transactionId ||
+          '',
+
+        status:
+          payment.status ||
+          'Completed',
+
+        notes:
+          payment.notes ||
+          '',
+      }));
+
+    const expensePaymentRows =
+      periodPaidExpenses.map(
+        (expense) => ({
+          id: expense._id,
+
+          date:
+            expense.paidAt ||
+            expense.date,
+
+          payee:
+            expense.vendor ||
+            expense.expenseName ||
+            expense.expenseType ||
+            expense.expenseCategory ||
+            expense.type ||
+            'Expense',
+
+          type:
+            expense.type,
+
+          amount:
+            money(expense.amount),
+
+          paymentMethod:
+            expense.paymentMethod ||
+            '',
+
+          transactionId:
+            expense.transactionId ||
+            '',
+
+          invoiceNumber:
+            expense.invoiceNumber ||
+            '',
+
+          description:
+            expense.description ||
+            expense.notes ||
+            '',
+        })
+      );
+
+    const supplierPaymentRows =
+      periodPurchasePayments.map(
+        (payment) => ({
+          id: payment._id,
+
+          date:
+            payment.paidAt,
+
+          payee:
+            payment.supplier ||
+            'Unknown supplier',
+
+          type:
+            'Raw Material',
+
+          amount:
+            money(payment.amount),
+
+          paymentMethod:
+            payment.method ||
+            '',
+
+          transactionId:
+            payment.transactionId ||
+            '',
+
+          chequeNumber:
+            payment.chequeNumber ||
+            '',
+
+          bankName:
+            payment.bankName ||
+            '',
+
+          invoiceNumber:
+            payment.invoiceNumber ||
+            '',
+
+          purchaseNumber:
+            payment.purchaseNumber ||
+            '',
+
+          description:
+            payment.notes ||
+            '',
+        })
+      );
+
+    const receivableRows =
+      openOrders
+        .map((order) => {
+          const due = money(
+            Math.max(
+              0,
+              Number(
+                order.grandTotal || 0
+              ) -
+                Number(
+                  order.amountPaid || 0
+                )
+            )
+          );
+
+          return {
+            id: order._id,
+
+            orderNumber:
+              order.orderNumber ||
+              '',
+
+            date:
+              order.orderDate,
+
+            customer:
+              order.contact?.company ||
+              order.contact?.name ||
+              'Unknown',
+
+            contactName:
+              order.contact?.name ||
+              '',
+
+            grandTotal:
+              money(
+                order.grandTotal
+              ),
+
+            amountPaid:
+              money(
+                order.amountPaid
+              ),
+
+            balanceDue:
+              due,
+
+            paymentStatus:
+              order.paymentStatus ||
+              'Pending',
+
+            status:
+              order.status ||
+              '',
+          };
+        })
+        .filter(
+          (row) =>
+            row.balanceDue > 0.009
+        );
+
+    const cashBalance = money(
+      Math.max(
+        0,
+        netCashPosition
+      )
+    );
+
+    const totalAssets = money(
+      cashBalance +
+      accountsReceivable
+    );
+
+    const totalLiabilities =
+      totalPayables;
+
+    const totalEquity = money(
+      totalAssets -
+      totalLiabilities
+    );
 
     const balanceSheet = {
       assets: [
         {
-          name: 'Cash & Bank (derived)',
+          name:
+            'Cash & Bank (derived)',
           code: '1001',
-          balance: cashBalance,
-          note: 'All completed payments − all paid expenses (no opening balance)',
+
+          balance:
+            cashBalance,
+
+          note:
+            'All completed customer payments − paid expenses − supplier payments',
+
           breakdown: {
-            totalCollections: totalRevenueAllTime,
-            totalPaidExpenses: cashOutAllTime,
-            net: cashBalance,
+            totalCollections:
+              totalRevenueAllTime,
+
+            totalPaidExpenses:
+              money(
+                cashOutExpensesAllTime
+              ),
+
+            totalSupplierPayments:
+              money(
+                cashOutSupplierAllTime
+              ),
+
+            net:
+              cashBalance,
           },
         },
+
         {
-          name: 'Accounts Receivable',
+          name:
+            'Accounts Receivable',
+
           code: '1003',
-          balance: accountsReceivable,
-          note: 'Outstanding on active orders (grand total − amount paid)',
+
+          balance:
+            accountsReceivable,
+
+          note:
+            'Outstanding on active orders',
         },
       ],
+
       liabilities: [
         {
-          name: 'Accounts Payable',
+          name:
+            'Accounts Payable — Suppliers',
+
           code: '2001',
-          balance: totalPayables,
-          note: 'Unpaid expenses (salaries, factory, misc)',
+
+          balance:
+            totalPurchasePayables,
+
+          note:
+            'Unpaid received raw-material purchases',
+        },
+
+        {
+          name:
+            'Accounts Payable — Operations',
+
+          code: '2002',
+
+          balance:
+            totalExpensePayables,
+
+          note:
+            'Unpaid factory and miscellaneous expenses',
         },
       ],
+
       equity: [
         {
-          name: 'Net position / retained',
+          name:
+            'Net position / retained',
+
           code: '3001',
-          balance: totalEquity,
-          note: 'Assets − liabilities (derived)',
+
+          balance:
+            totalEquity,
+
+          note:
+            'Assets − liabilities (derived)',
         },
       ],
-      totals: { assets: totalAssets, liabilities: totalLiabilities, equity: totalEquity },
-      cashMovements: {
-        collections: customerPaymentRows,
-        collectionsAllTime: totalRevenueAllTime,
-        paidExpenses: expensePaymentRows,
-        paidExpensesAllTime: cashOutAllTime,
-        net: cashBalance,
+
+      totals: {
+        assets:
+          totalAssets,
+
+        liabilities:
+          totalLiabilities,
+
+        equity:
+          totalEquity,
       },
-      receivables: receivableRows,
-      payablesDetail: payables,
+
+      cashMovements: {
+        collections:
+          customerPaymentRows,
+
+        collectionsAllTime:
+          totalRevenueAllTime,
+
+        paidExpenses:
+          expensePaymentRows,
+
+        paidExpensesAllTime:
+          money(
+            cashOutExpensesAllTime
+          ),
+
+        supplierPayments:
+          supplierPaymentRows,
+
+        supplierPaymentsAllTime:
+          money(
+            cashOutSupplierAllTime
+          ),
+
+        net:
+          cashBalance,
+      },
+
+      receivables:
+        receivableRows,
+
+      payablesDetail:
+        payables,
     };
 
     const cashFlow = {
       summary: [
         {
-          category: 'Operating Activities',
+          category:
+            'Operating Activities',
+
           items: [
-            { label: 'Customer payments', amount: totalRevenuePeriod, count: paymentCountPeriod },
-            { label: 'Expense payments', amount: money(-totalPaidExpensesPeriod), count: expensePaymentRows.length },
+            {
+              label:
+                'Customer payments',
+
+              amount:
+                totalRevenuePeriod,
+
+              count:
+                paymentCountPeriod,
+            },
+
+            {
+              label:
+                'Expense payments',
+
+              amount:
+                money(
+                  -totalPaidExpensesPeriod
+                ),
+
+              count:
+                expensePaymentRows.length,
+            },
+
+            {
+              label:
+                'Supplier payments (raw materials)',
+
+              amount:
+                money(
+                  -periodPurchaseSpend
+                ),
+
+              count:
+                supplierPaymentRows.length,
+            },
           ],
-          total: money(totalRevenuePeriod - totalPaidExpensesPeriod),
+
+          total:
+            money(
+              totalRevenuePeriod -
+                totalPaidExpensesPeriod -
+                periodPurchaseSpend
+            ),
         },
       ],
-      customerPayments: customerPaymentRows,
-      expensePayments: expensePaymentRows,
+
+      customerPayments:
+        customerPaymentRows,
+
+      expensePayments:
+        expensePaymentRows,
+
+      supplierPayments:
+        supplierPaymentRows,
+
       totals: {
-        customerPayments: totalRevenuePeriod,
-        expensePayments: money(totalPaidExpensesPeriod),
-        net: money(totalRevenuePeriod - totalPaidExpensesPeriod),
+        customerPayments:
+          totalRevenuePeriod,
+
+        expensePayments:
+          money(
+            totalPaidExpensesPeriod
+          ),
+
+        supplierPayments:
+          periodPurchaseSpend,
+
+        net:
+          money(
+            totalRevenuePeriod -
+              totalPaidExpensesPeriod -
+              periodPurchaseSpend
+          ),
       },
     };
 
     const recentActivity = {
-      payments: customerPaymentRows.slice(0, 8).map((p) => ({
-        id: p.id,
-        date: p.date,
-        label: p.customer,
-        sub: p.orderNumber || p.paymentNumber || p.paymentMode,
-        amount: p.amount,
-        direction: 'in',
-      })),
-      expenses: expensePaymentRows.slice(0, 8).map((e) => ({
-        id: e.id,
-        date: e.date,
-        label: e.payee,
-        sub: e.type,
-        amount: e.amount,
-        direction: 'out',
-      })),
+      payments:
+        customerPaymentRows
+          .slice(0, 8)
+          .map((payment) => ({
+            id: payment.id,
+
+            date: payment.date,
+
+            label:
+              payment.customer,
+
+            sub:
+              payment.orderNumber ||
+              payment.paymentNumber ||
+              payment.paymentMode,
+
+            amount:
+              payment.amount,
+
+            direction:
+              'in',
+          })),
+
+      expenses:
+        expensePaymentRows
+          .slice(0, 8)
+          .map((expense) => ({
+            id: expense.id,
+
+            date: expense.date,
+
+            label:
+              expense.payee,
+
+            sub:
+              expense.type,
+
+            amount:
+              expense.amount,
+
+            direction:
+              'out',
+          })),
+
+      supplierPayments:
+        supplierPaymentRows
+          .slice(0, 8)
+          .map((payment) => ({
+            id: payment.id,
+
+            date: payment.date,
+
+            label:
+              payment.payee,
+
+            sub:
+              payment.purchaseNumber ||
+              payment.invoiceNumber ||
+              'Raw material',
+
+            amount:
+              payment.amount,
+
+            direction:
+              'out',
+          })),
     };
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
+
       meta: {
-        asOf: asOf.toISOString().slice(0, 10),
-        fiscalYearStart: fyStart.toISOString().slice(0, 10),
+        asOf:
+          asOf
+            .toISOString()
+            .slice(0, 10),
+
+        fiscalYearStart:
+          fyStart
+            .toISOString()
+            .slice(0, 10),
+
         note:
-          'Derived from Payments, Expenses, and Orders. Cash & equity are approximate without opening balances or a full ledger.',
+          'Derived from Payments, Expenses, Orders, and Raw Material Purchases. Cash & equity are approximate without opening balances.',
       },
+
       overview: {
         totalAssets,
+
         totalLiabilities,
+
         totalEquity,
-        netRevenue: totalRevenuePeriod,
-        totalExpenses: money(totalExpensesPeriod),
+
+        netRevenue: accrualRevenue,
+
+        totalExpenses: totalAccrualExpenses,
+
         netProfit,
+
         totalPayables,
+
+        totalPurchasePayables,
+
+        totalExpensePayables,
+
         accountsReceivable,
+
         netCashPosition,
-        cashInAllTime: totalRevenueAllTime,
-        cashOutAllTime,
+
+        cashInAllTime:
+          totalRevenueAllTime,
+
+        cashOutAllTime:
+          cashOutAllTime,
       },
+
       profitLoss: {
-        salesRevenue: totalRevenuePeriod,
+        /* Revenue is now accrual (orders placed in FY) */
+        salesRevenue: accrualRevenue,
         otherRevenue: 0,
-        totalRevenue: totalRevenuePeriod,
-        expensesByType: expenseByType,
-        employeeCosts: money(expenseByType.Employee),
-        factoryWages: money(expenseByType['Factory People']),
-        factoryExpenses: money(expenseByType['Factory Expense']),
-        miscellaneous: money(expenseByType.Miscellaneous),
-        totalExpenses: money(totalExpensesPeriod),
+        totalRevenue: accrualRevenue,
+
+        expensesByType: {
+          'Factory Expense': factoryExpenseTotal,
+          Miscellaneous: miscExpenseTotal,
+          'Raw Material': accrualRawMaterial,
+          Salaries: accrualSalaries,
+        },
+
+        employeeCosts: accrualSalaries,
+        factoryWages: 0,          
+        factoryExpenses: factoryExpenseTotal,
+        miscellaneous: miscExpenseTotal,
+        rawMaterialPurchases: accrualRawMaterial,
+
+        totalExpenses: totalAccrualExpenses,
+
         totalPaidExpenses: money(totalPaidExpensesPeriod),
         totalPendingExpenses: money(totalPendingExpensesPeriod),
+
         netProfit,
+
         monthlyData,
       },
+
       payables,
+
       accountGroups,
+
       balanceSheet,
+
       cashFlow,
+
       recentActivity,
     });
   } catch (error) {
-    console.error('[getAccountingDashboard]', error);
+    console.error(
+      '\n========================================'
+    );
 
-    // 400 errors we threw ourselves — safe to show the message
+    console.error(
+      'ACCOUNTING DASHBOARD ERROR'
+    );
+
+    console.error(
+      'Name:',
+      error?.name
+    );
+
+    console.error(
+      'Message:',
+      error?.message
+    );
+
+    console.error(
+      'Code:',
+      error?.code
+    );
+
+    console.error(
+      'Stack:',
+      error?.stack
+    );
+
+    console.error(
+      '========================================\n'
+    );
+
     if (error.status === 400) {
       return res.status(400).json({
         success: false,
@@ -561,10 +1803,11 @@ const getAccountingDashboard = async (req, res) => {
       });
     }
 
-    // 500 — don't leak internal details
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: 'Failed to load accounting dashboard',
+      message:
+        error.message ||
+        'Failed to load accounting dashboard',
     });
   }
 };

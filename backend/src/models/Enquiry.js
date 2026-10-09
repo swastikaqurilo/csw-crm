@@ -163,7 +163,6 @@ const enquirySchema = new mongoose.Schema(
       default: "",
     },
 
-    // 👈 timeline is capped at 200 entries — see controller pushTimeline()
     timeline: {
       type: [timelineSchema],
       validate: {

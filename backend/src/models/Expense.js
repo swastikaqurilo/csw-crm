@@ -5,12 +5,7 @@ const expenseSchema = new mongoose.Schema(
     type: {
       type: String,
       enum: {
-        values: [
-          "Employee",
-          "Factory People",
-          "Factory Expense",
-          "Miscellaneous",
-        ],
+        values: ["Factory Expense", "Miscellaneous"],
         message: "{VALUE} is not a valid expense type",
       },
       required: [true, "Expense type is required"],
@@ -26,7 +21,7 @@ const expenseSchema = new mongoose.Schema(
       type: Number,
       required: [true, "Amount is required"],
       min: [0, "Amount cannot be negative"],
-      max: [100000000, "Amount is too large"], // 10 Cr cap
+      max: [100000000, "Amount is too large"],
     },
 
     paymentStatus: {
@@ -41,7 +36,7 @@ const expenseSchema = new mongoose.Schema(
     paymentMethod: {
       type: String,
       enum: {
-        values: ["Cash", "UPI", null],
+        values: ["Cash", "UPI", "Bank Transfer", "Cheque", "NEFT", "RTGS", null],
         message: "{VALUE} is not a valid payment method",
       },
       default: null,
@@ -59,52 +54,67 @@ const expenseSchema = new mongoose.Schema(
       default: null,
     },
 
-    person: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Person",
-      default: null,
-    },
-
+    // Factory Expense specific
     expenseType: {
       type: String,
       trim: true,
       maxlength: [100, "Expense type too long"],
+      default: null,
     },
 
     vendor: {
       type: String,
       trim: true,
       maxlength: [150, "Vendor name too long"],
+      default: null,
     },
 
     invoiceNumber: {
       type: String,
       trim: true,
       maxlength: [50, "Invoice number too long"],
+      default: null,
     },
 
+    // Miscellaneous specific
     expenseName: {
       type: String,
       trim: true,
       maxlength: [150, "Expense name too long"],
+      default: null,
     },
 
     expenseCategory: {
       type: String,
       trim: true,
       maxlength: [100, "Category too long"],
+      default: null,
     },
 
     description: {
       type: String,
       trim: true,
       maxlength: [1000, "Description too long"],
+      default: "",
     },
 
     notes: {
       type: String,
       trim: true,
       maxlength: [1000, "Notes too long"],
+      default: "",
+    },
+
+    // Soft delete
+    isDeleted: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    deletedAt: {
+      type: Date,
+      default: null,
     },
   },
   {

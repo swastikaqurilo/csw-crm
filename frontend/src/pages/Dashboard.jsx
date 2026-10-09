@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useId } from "react";
+import { useCallback, useEffect, useMemo, useState, useId } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   RefreshCw,
@@ -34,12 +34,20 @@ const formatDate = (v) => {
   });
 };
 
-const daysAgo = (d) =>
-  d ? Math.floor((Date.now() - new Date(d).getTime()) / 86400_000) : 0;
+/* FIX: guard against invalid dates so we never render "NaNd late" */
+const daysAgo = (d) => {
+  if (!d) return 0;
+  const t = new Date(d).getTime();
+  if (Number.isNaN(t)) return 0;
+  return Math.max(0, Math.floor((Date.now() - t) / 86400_000));
+};
 
+/* FIX: guard against invalid dates so we never render "NaNd ago" */
 const timeAgo = (date) => {
   if (!date) return "";
-  const s = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
+  const t = new Date(date).getTime();
+  if (Number.isNaN(t)) return "";
+  const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
   if (s < 60) return `${s}s ago`;
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
@@ -61,8 +69,6 @@ const ENQUIRY_CLOSED = ["converted", "lost"];
 
 /* ══════════════════════════════════════════════════════════════════
    STOCK NORMALIZATION
-   Merges raw-material + product rows into a single shape with
-   severity precomputed.
    ══════════════════════════════════════════════════════════════════ */
 
 function normalizeStockItem(item, source) {
@@ -72,13 +78,11 @@ function normalizeStockItem(item, source) {
   const reorder = num(item.reorderLevel);
   const critical = num(item.criticalLevel);
 
-  // Prefer server-computed flags if present, otherwise derive
   let severity = "ok";
   if (source === "raw") {
     if (item.isCritical === true || (critical > 0 && qty <= critical)) severity = "critical";
     else if (item.isLowStock === true || (reorder > 0 && qty <= reorder)) severity = "low";
   } else {
-    // product — has no server flags in the sample; derive
     if (critical > 0 && qty <= critical) severity = "critical";
     else if (reorder > 0 && qty <= reorder) severity = "low";
   }
@@ -159,7 +163,7 @@ function Sparkline({ values = [], h = 36 }) {
       />
     </svg>
   );
-} 
+}
 
 /* ══════════════════════════════════════════════════════════════════
    HOOK
@@ -216,142 +220,122 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
     }
   }, [fetchAll, autoRefreshMs]);
 
-  /* ── Normalized stock ────────────────────────────────────────── */
-  const stockItems = [
-    ...data.rawStock.map((i) => normalizeStockItem(i, "raw")),
-    ...data.productStock.map((i) => normalizeStockItem(i, "product")),
-  ];
+  /* FIX: memoize all derived data so we only recompute when `data` changes */
+  const derived = useMemo(() => {
+    /* ── Normalized stock ──────────────────────────────────────── */
+    const stockItems = [
+      ...data.rawStock.map((i) => normalizeStockItem(i, "raw")),
+      ...data.productStock.map((i) => normalizeStockItem(i, "product")),
+    ];
 
-  const criticalStock = stockItems.filter((i) => i.severity === "critical" || i.severity === "out");
-  const lowStock = stockItems.filter((i) => i.severity === "low");
+    const criticalStock = stockItems.filter(
+      (i) => i.severity === "critical" || i.severity === "out"
+    );
+    const lowStock = stockItems.filter((i) => i.severity === "low");
 
-  /* ── Cash ────────────────────────────────────────────────────── */
-  const cash = (() => {
+    /* ── Cash ──────────────────────────────────────────────────── */
     const o = data.accounting?.overview || {};
-    return {
+    const cash = {
       net: num(o.netCashPosition),
       payables: num(o.totalPayables),
       receivables: num(o.accountsReceivable),
       netProfit: num(o.netProfit),
     };
-  })();
 
-  /* ── Order book ──────────────────────────────────────────────── */
-  const orderBook = (() => {
-    const active = data.orders.filter((o) =>
-      ORDER_ACTIVE.includes(String(o.status || "").toLowerCase())
+    /* ── Order book ────────────────────────────────────────────── */
+    const activeOrders = data.orders.filter((ord) =>
+      ORDER_ACTIVE.includes(String(ord.status || "").toLowerCase())
     );
-    return {
-      count: active.length,
-      total: active.reduce((s, o) => s + num(o.grandTotal), 0),
+    const orderBook = {
+      count: activeOrders.length,
+      total: activeOrders.reduce((s, ord) => s + num(ord.grandTotal), 0),
     };
-  })();
 
-  /* ── Enquiry pipeline ────────────────────────────────────────── */
-  const pipeline = (() => {
-    const open = data.enquiries.filter((e) =>
+    /* ── Enquiry pipeline ──────────────────────────────────────── */
+    const openEnq = data.enquiries.filter((e) =>
       ENQUIRY_OPEN.includes(String(e.status || "").toLowerCase())
     );
-    const total = open.reduce((s, e) => s + num(e.estimatedValue), 0);
-    const closed = data.enquiries.filter((e) =>
+    const closedEnq = data.enquiries.filter((e) =>
       ENQUIRY_CLOSED.includes(String(e.status || "").toLowerCase())
     );
-    const won = closed.filter(
+    const won = closedEnq.filter(
       (e) => String(e.status || "").toLowerCase() === "converted"
     ).length;
-    return {
-      count: open.length,
-      total,
-      convRate: closed.length > 0 ? Math.round((won / closed.length) * 100) : 0,
+    const pipeline = {
+      count: openEnq.length,
+      total: openEnq.reduce((s, e) => s + num(e.estimatedValue), 0),
+      convRate: closedEnq.length > 0 ? Math.round((won / closedEnq.length) * 100) : 0,
     };
-  })();
 
-  /* ── Stock health ────────────────────────────────────────────── */
-  const stockHealth = (() => {
+    /* ── Stock health ──────────────────────────────────────────── */
     const totalRecords = stockItems.length;
     const criticalCount = criticalStock.length;
     const lowCount = lowStock.length;
     const healthy = Math.max(totalRecords - criticalCount - lowCount, 0);
-    return {
+    const stockHealth = {
       totalRecords,
       lowCount,
       criticalCount,
-      pct:
-        totalRecords > 0
-          ? Math.round((healthy / totalRecords) * 100)
-          : 100,
+      pct: totalRecords > 0 ? Math.round((healthy / totalRecords) * 100) : 100,
     };
-  })();
 
-  /* ── Revenue series ──────────────────────────────────────────── */
-  const revenueSeries = (data.accounting?.profitLoss?.monthlyData || []).map((m) => ({
-    label: m.month || m.label || "",
-    revenue: num(m.revenue),
-    expenses: num(m.expenses),
-    net: num(m.netProfit),
-  }));
+    /* ── Revenue series ────────────────────────────────────────── */
+    const revenueSeries = (data.accounting?.profitLoss?.monthlyData || []).map((m) => ({
+      label: m.month || m.label || "",
+      revenue: num(m.revenue),
+      expenses: num(m.expenses),
+      net: num(m.netProfit),
+    }));
 
-  /* ── Alerts ──────────────────────────────────────────────────── */
-  const delayedOrders = (() => {
+    /* ── Alerts ────────────────────────────────────────────────── */
     const now = Date.now();
-    return data.orders.filter((o) => {
-      if (ORDER_DONE.includes(String(o.status || "").toLowerCase())) return false;
-      const due = o.expectedDeliveryDate;
+
+    const delayedOrders = data.orders.filter((ord) => {
+      if (ORDER_DONE.includes(String(ord.status || "").toLowerCase())) return false;
+      const due = ord.expectedDeliveryDate;
       return due && new Date(due).getTime() < now;
     });
-  })();
 
-  const unpaidOrders = (() => {
-    const now = Date.now();
-    return data.orders.filter((o) => {
-      if (ORDER_DONE.includes(String(o.status || "").toLowerCase())) return false;
-      const paid = num(o.amountPaid);
-      const total = num(o.grandTotal);
+    const unpaidOrders = data.orders.filter((ord) => {
+      if (ORDER_DONE.includes(String(ord.status || "").toLowerCase())) return false;
+      const paid = num(ord.amountPaid);
+      const total = num(ord.grandTotal);
       if (total <= 0 || paid >= total - 0.01) return false;
-      const due = o.expectedDeliveryDate;
+      const due = ord.expectedDeliveryDate;
       return due && new Date(due).getTime() < now;
     });
-  })();
 
-  const stuckEnquiries = (() => {
-    const cutoff = Date.now() - 7 * 86400_000;
-    return data.enquiries.filter((e) => {
+    const cutoff = now - 7 * 86400_000;
+    const stuckEnquiries = data.enquiries.filter((e) => {
       if (ENQUIRY_CLOSED.includes(String(e.status || "").toLowerCase())) return false;
       const last = e.updatedAt || e.createdAt;
       return last && new Date(last).getTime() < cutoff;
     });
-  })();
 
-  const overdueFollowups = (() => {
-    const now = Date.now();
-    return data.followups.filter((f) => {
+    const overdueFollowups = data.followups.filter((f) => {
       if (String(f.status || "") !== "Pending") return false;
       return f.scheduledAt && new Date(f.scheduledAt).getTime() < now;
     });
-  })();
 
-  const todayFollowups = (() => {
-    const now = new Date();
-    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const todayStart = new Date();
+    const start = new Date(
+      todayStart.getFullYear(),
+      todayStart.getMonth(),
+      todayStart.getDate()
+    ).getTime();
     const end = start + 86400_000;
-    return data.followups.filter((f) => {
+    const todayFollowups = data.followups.filter((f) => {
       if (String(f.status || "") !== "Pending") return false;
       if (!f.scheduledAt) return false;
       const t = new Date(f.scheduledAt).getTime();
       return t >= start && t < end;
     });
-  })();
 
-  const readyForDispatch = data.orders.filter(
-    (o) => String(o.status || "").toLowerCase() === "ready for dispatch"
-  );
+    const readyForDispatch = data.orders.filter(
+      (ord) => String(ord.status || "").toLowerCase() === "ready for dispatch"
+    );
 
-  return {
-    data,
-    loading,
-    error,
-    refetch: fetchAll,
-    derived: {
+    return {
       cash,
       orderBook,
       pipeline,
@@ -366,10 +350,13 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
       stockItems,
       criticalStock,
       lowStock,
-    },
-  };
+    };
+  }, [data]);
+
+  return { data, loading, error, refetch: fetchAll, derived };
 }
 
+/* FIX: actually render the sparkline that ControlStrip already passes in */
 function HeroMetric({
   label,
   value,
@@ -377,13 +364,12 @@ function HeroMetric({
   icon: Icon,
   tint,
   loading,
+  sparkValues,
 }) {
   return (
     <div className="group relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-lg hover:shadow-slate-200/60">
-      {/* soft accent on hover */}
       <div className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-gradient-to-br from-slate-100 via-slate-50 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
 
-      {/* header row — icon + label only */}
       <div className="relative flex min-w-0 items-center gap-2.5">
         <div
           className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${tint}`}
@@ -408,6 +394,11 @@ function HeroMetric({
           <p className="relative mt-2 truncate text-[11.5px] font-medium text-slate-500">
             {context}
           </p>
+          {Array.isArray(sparkValues) && sparkValues.length > 1 && (
+            <div className="relative mt-3 -mb-1">
+              <Sparkline values={sparkValues} h={26} />
+            </div>
+          )}
         </>
       )}
     </div>
@@ -470,10 +461,6 @@ function ControlStrip({ loading, cash, orderBook, pipeline, stockHealth, revenue
   );
 }
 
-/* ══════════════════════════════════════════════════════════════════
-   ZONE 2 — ACTION QUEUE
-   ══════════════════════════════════════════════════════════════════ */
-
 const SEVERITY_DOT = {
   critical: "bg-red-500",
   warning: "bg-amber-500",
@@ -494,7 +481,7 @@ function buildActionQueue(d) {
         ? `${names.join(", ")}${d.criticalStock.length > 2 ? ` +${d.criticalStock.length - 2} more` : ""}`
         : "Production may stop",
       action: "Order now",
-      route: "/inventory",
+      route: "/rawmats",
     });
   }
 
@@ -510,7 +497,7 @@ function buildActionQueue(d) {
       title: `${d.delayedOrders.length} order${d.delayedOrders.length !== 1 ? "s" : ""} past delivery date`,
       detail: `${formatINR(value)} at risk · ${customer ? `${customer} ${late}d late` : "Reschedule"}`,
       action: "Dispatch",
-      route: "/orders",
+      route: "/rawmats",
     });
   }
 
@@ -552,7 +539,7 @@ function buildActionQueue(d) {
       title: `${d.lowStock.length} item${d.lowStock.length !== 1 ? "s" : ""} below reorder`,
       detail: "Purchase or reorder recommended",
       action: "Review",
-      route: "/inventory",
+      route: "/rawmats",
     });
   }
 
@@ -598,9 +585,29 @@ function buildActionQueue(d) {
   return items;
 }
 
-function ActionQueue({ loading, ...d }) {
+function ActionQueue({
+  loading,
+  criticalStock = [],
+  lowStock = [],
+  delayedOrders = [],
+  unpaidOrders = [],
+  stuckEnquiries = [],
+  overdueFollowups = [],
+  todayFollowups = [],
+  readyForDispatch = [],
+}) {
   const navigate = useNavigate();
-  const queue = buildActionQueue(d);
+
+  const queue = buildActionQueue({
+    criticalStock,
+    lowStock,
+    delayedOrders,
+    unpaidOrders,
+    stuckEnquiries,
+    overdueFollowups,
+    todayFollowups,
+    readyForDispatch,
+  });
   const criticalCount = queue.filter((q) => q.severity === "critical").length;
 
   return (
@@ -865,8 +872,10 @@ function PipelineVelocity({ loading, enquiries, orders }) {
 
   const enqCount = enquiries.length;
   const orderCount = orders.length;
-  const delivered = orders.filter((o) =>
-    ["delivered", "Delivered"].includes(o.status)
+
+  /* FIX: case-insensitive status comparison (was brittle "delivered"/"Delivered") */
+  const delivered = orders.filter(
+    (o) => String(o.status || "").toLowerCase() === "delivered"
   ).length;
 
   const counts = [enqCount, orderCount, delivered];
@@ -877,12 +886,13 @@ function PipelineVelocity({ loading, enquiries, orders }) {
   ];
   const max = Math.max(...counts, 1);
 
+  /* FIX: same case-insensitive fix for enquiries */
   const stuck = enquiries
-    .filter(
-      (e) =>
-        !["converted", "lost", "Converted", "Lost"].includes(e.status) &&
-        daysAgo(e.updatedAt || e.createdAt) >= 7
-    )
+    .filter((e) => {
+      const s = String(e.status || "").toLowerCase();
+      if (s === "converted" || s === "lost") return false;
+      return daysAgo(e.updatedAt || e.createdAt) >= 7;
+    })
     .map((e) => ({
       id: e._id,
       name: e.customerName || "Unknown",
@@ -1092,7 +1102,6 @@ function ActivityStream({ loading, orders, payments, enquiries }) {
 
 /* ══════════════════════════════════════════════════════════════════
    ZONE 6 — LOW STOCK ALERT
-   Now merges raw-material + product rows into one table.
    ══════════════════════════════════════════════════════════════════ */
 
 const SEV_BADGE = {
@@ -1106,6 +1115,8 @@ const SEV_LABEL = { out: "Out", critical: "Critical", low: "Low" };
 const SEV_ORDER = { out: 0, critical: 1, low: 2 };
 
 function LowStockPanel({ loading, stockItems }) {
+  /* FIX: use router navigation instead of window.location.href (was a full page reload) */
+  const navigate = useNavigate();
   const [filter, setFilter] = useState("all");
 
   const alertItems = stockItems
@@ -1294,7 +1305,9 @@ function LowStockPanel({ loading, stockItems }) {
               : `${alertItems.length} low`}
           </span>
           <button
-            onClick={() => (window.location.href = "/inventory")}
+            onClick={() =>
+              navigate(filter === "product" ? "/products" : "/rawmats")
+            }
             className="text-[10px] font-semibold text-black transition hover:text-slate-600"
           >
             Manage inventory →
@@ -1304,10 +1317,6 @@ function LowStockPanel({ loading, stockItems }) {
     </div>
   );
 }
-
-/* ══════════════════════════════════════════════════════════════════
-   DASHBOARD — PAGE
-   ══════════════════════════════════════════════════════════════════ */
 
 export default function Dashboard() {
   const { data, loading, error, refetch, derived } = useDashboardData({
@@ -1328,15 +1337,19 @@ export default function Dashboard() {
         <div>
           <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-black">
             <span>COMMAND CONSOLE</span>
+
             <span className="text-slate-300">/</span>
+
             <span className="flex items-center gap-1.5">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
               Live Operations
             </span>
           </div>
+
           <h1 className="text-[28px] font-semibold tracking-tight text-black">
             Good morning, Admin
           </h1>
+
           <p className="mt-1.5 text-sm text-black">
             {today} · Here's what needs your attention.
           </p>
@@ -1348,18 +1361,22 @@ export default function Dashboard() {
             className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900"
             title="Refresh"
           >
-            <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
+            <RefreshCw
+              size={15}
+              className={loading ? "animate-spin" : ""}
+            />
           </button>
         </div>
       </div>
 
+      {/* ERROR */}
       {error && (
         <div className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
           {error}
         </div>
       )}
 
-      {/* ZONE 1 */}
+      {/* ZONE 1 — CONTROL STRIP */}
       <div className="mb-6">
         <ControlStrip
           loading={loading}
@@ -1371,7 +1388,7 @@ export default function Dashboard() {
         />
       </div>
 
-      {/* ZONES 2 + 3 */}
+      {/* ZONES 2 + 3 — ACTION QUEUE + FINANCIAL SNAPSHOT */}
       <div className="mb-6 grid grid-cols-1 gap-5 xl:grid-cols-[1fr_1.65fr]">
         <ActionQueue
           loading={loading}
@@ -1384,19 +1401,29 @@ export default function Dashboard() {
           todayFollowups={derived.todayFollowups}
           readyForDispatch={derived.readyForDispatch}
         />
-        <FinancialSnapshot loading={loading} accounting={data.accounting} />
+
+        <FinancialSnapshot
+          loading={loading}
+          accounting={data.accounting}
+        />
       </div>
 
+      {/* ZONE 4 — LOW STOCK */}
       <div className="mb-6">
-        <LowStockPanel loading={loading} stockItems={derived.stockItems} />
+        <LowStockPanel
+          loading={loading}
+          stockItems={derived.stockItems}
+        />
       </div>
 
-]      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+      {/* ZONES 5 + 6 — PIPELINE + ACTIVITY */}
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
         <PipelineVelocity
           loading={loading}
           enquiries={data.enquiries}
           orders={data.orders}
         />
+
         <ActivityStream
           loading={loading}
           orders={data.orders}

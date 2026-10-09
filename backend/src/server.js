@@ -12,17 +12,16 @@ const enquiryRoutes = require("./routes/enquiryRoutes");
 const contactRoutes = require("./routes/contactRoutes");
 const followUpRoutes = require("./routes/followUpRoutes");
 const productRoutes = require("./routes/productRoutes");
-// const inventoryRoutes = require("./routes/inventoryRoutes");
 const orderRoutes = require("./routes/orderRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const revenueRoutes = require("./routes/revenueRoutes");
-
-const personRoutes = require("./routes/personRoutes");
+const workerRoutes = require("./routes/workerRoutes");
 const expenseRoutes = require("./routes/expenseRoutes");
 const accountingRoutes = require("./routes/accountingRoutes");
 const rawMaterialRoutes = require("./routes/rawMaterialRoutes");
 const settingRoutes = require("./routes/settingRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
+const salaryRoutes = require("./routes/salaryRoutes");
 
 const authRoutes = require("./routes/authRoutes");
 const { protect } = require("./middleware/auth");
@@ -58,12 +57,13 @@ app.use("/api/products", productRoutes);
 app.use("/api/order", orderRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/api/revenue", revenueRoutes);
-app.use("/api/people", personRoutes);
+app.use("/api/workers", workerRoutes);
 app.use("/api/expense", expenseRoutes);
 app.use("/api/accounting", accountingRoutes);
 app.use("/api/raw-material", rawMaterialRoutes);
 app.use('/api/settings', settingRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/salaries", salaryRoutes);
 
 app.use((req, res) => {
   res.status(404).json({

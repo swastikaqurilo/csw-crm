@@ -2,13 +2,12 @@ const mongoose = require("mongoose");
 const Quotation = require("../models/Quotation");
 const Enquiry = require("../models/Enquiry");
 
-const GST_RATE = 0.09; // CGST and SGST, 9% each = 18% total
+const GST_RATE = 0.09; 
 
 const MAX_ITEMS = 50;
 const MAX_QTY = 1_000_000;
 const MAX_RATE = 10_000_000;
 
-/* ---------- helpers ---------- */
 const isValidId = (v) => mongoose.isValidObjectId(v);
 
 const safeString = (v, max = 500) => {
@@ -26,7 +25,6 @@ const isDate = (v) => {
   return !isNaN(d.getTime());
 };
 
-/* ---------- number to words (unchanged) ---------- */
 const ONES = [
   "", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
   "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen",
@@ -64,7 +62,6 @@ function round2(value) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
-/* ---------- whitelist-safe computeTotals ---------- */
 function sanitizeItems(rawItems) {
   if (!Array.isArray(rawItems)) return null;
   if (rawItems.length === 0 || rawItems.length > MAX_ITEMS) return null;
@@ -146,7 +143,6 @@ function addEnquiryTimelineEntry(enquiry, text) {
   enquiry.timeline.push({ text, createdBy: "System", date: new Date() });
 }
 
-/* ================= LIST ================= */
 exports.getQuotations = async (req, res) => {
   try {
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
@@ -188,7 +184,6 @@ exports.getQuotations = async (req, res) => {
   }
 };
 
-/* ================= BY ENQUIRY ================= */
 exports.getQuotationsByEnquiry = async (req, res) => {
   try {
     if (!isValidId(req.params.enquiryId)) {
@@ -206,7 +201,6 @@ exports.getQuotationsByEnquiry = async (req, res) => {
   }
 };
 
-/* ================= GET ONE ================= */
 exports.getQuotationById = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -229,7 +223,6 @@ exports.getQuotationById = async (req, res) => {
   }
 };
 
-/* ================= CREATE ================= */
 exports.createQuotation = async (req, res) => {
   try {
     const {
@@ -244,12 +237,10 @@ exports.createQuotation = async (req, res) => {
       terms,
     } = req.body;
 
-    // 1. enquiryId
     if (!enquiryId || !isValidId(enquiryId)) {
       return res.status(400).json({ success: false, message: "Invalid enquiryId." });
     }
 
-    // 2. items
     const cleanItems = sanitizeItems(items);
     if (!cleanItems) {
       return res.status(400).json({
@@ -258,18 +249,14 @@ exports.createQuotation = async (req, res) => {
       });
     }
 
-    // 3. validTill
     if (!validTill || !isDate(validTill)) {
       return res.status(400).json({ success: false, message: "Valid validTill date is required." });
     }
 
-    // 4. customerName (from body or enquiry fallback)
     const cleanCustomer = safeString(customerName, 200);
 
-    // 5. quoteDate
     const cleanQuoteDate = quoteDate && isDate(quoteDate) ? new Date(quoteDate) : new Date();
 
-    // 6. Find enquiry
     const enquiry = await Enquiry.findById(enquiryId);
     if (!enquiry) {
       return res.status(404).json({ success: false, message: "Linked enquiry not found." });
@@ -282,7 +269,6 @@ exports.createQuotation = async (req, res) => {
       existingCount + 1
     ).padStart(2, "0")}`;
 
-    // 7. Explicit whitelist — nothing from req.body flows raw
     const quotation = await Quotation.create({
       quotationNumber,
       enquiry: enquiry._id,
@@ -334,7 +320,6 @@ exports.createQuotation = async (req, res) => {
   }
 };
 
-/* ================= UPDATE ================= */
 exports.updateQuotation = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -427,7 +412,6 @@ exports.updateQuotation = async (req, res) => {
   }
 };
 
-/* ================= SEND ================= */
 exports.sendQuotation = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -467,7 +451,6 @@ exports.sendQuotation = async (req, res) => {
   }
 };
 
-/* ================= STATUS ================= */
 exports.updateQuotationStatus = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -510,7 +493,6 @@ exports.updateQuotationStatus = async (req, res) => {
   }
 };
 
-/* ================= DELETE ================= */
 exports.deleteQuotation = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {

@@ -5,17 +5,11 @@ const { getGlobalSettings } = require("../utils/getSettings");
 
 const MAX_ALERTS_PER_TYPE = 10;
 
-/**
- * GET /api/notifications
- * Aggregates low stock, pending payments, and overdue orders
- * into a single payload for the header bell.
- */
 const getNotifications = async (req, res) => {
   try {
     const settings = await getGlobalSettings();
     const threshold = Number(settings?.preferences?.lowStockThreshold ?? 10);
 
-    /* ---------- 1. LOW STOCK / OUT OF STOCK ---------- */
     const lowStockItems = await ProductStock.find({
       isActive: true,
       $expr: {
@@ -48,7 +42,6 @@ const getNotifications = async (req, res) => {
       };
     });
 
-    /* ---------- 2. PENDING PAYMENTS ---------- */
     const pendingPayments = await Payment.find({
       isActive: true,
       status: "Pending",
@@ -75,7 +68,6 @@ const getNotifications = async (req, res) => {
       { $group: { _id: null, total: { $sum: "$amount" }, count: { $sum: 1 } } },
     ]);
 
-    /* ---------- 3. OVERDUE ORDERS ---------- */
     const overdueOrders = await Order.find({
       isActive: true,
       paymentStatus: "Overdue",
@@ -102,7 +94,6 @@ const getNotifications = async (req, res) => {
       };
     });
 
-    /* ---------- 4. COMBINE + SORT ---------- */
     const allAlerts = [
       ...lowStockAlerts,
       ...overdueAlerts,

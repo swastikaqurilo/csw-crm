@@ -3,10 +3,16 @@ const ProductProduction = require("../models/Product");
 const ProductStock = require("../models/ProductStock");
 const { RawStock } = require("../models/RawMaterial");
 const { computeConsumption, REEL_COMPOSITION } = require("../utils/reelComposition");
+const { Worker } = require("../models/Worker");
+const REEL_WEIGHTS = {
+  "2kg": 2,
+  "5kg": 5,
+  "8kg": 8,
+  "10kg": 10,
+};
 
 const MAX_LIMIT = 200;
 const MAX_QTY = 1e7;
-const MAX_RATE = 1e7;
 const MAX_MOVEMENT_LOG = 200;
 const SIZES = ["2kg", "5kg", "8kg", "10kg"];
 
@@ -138,7 +144,6 @@ const verifyStockAvailable = async (
     }
   }
 
-  /* ---------- TAPE (NEW) ---------- */
   if (tapeNeeded > 0) {
     const tape = await findTapeStock();
     if (!tape) {
@@ -180,7 +185,6 @@ const deductRawMaterials = async ({
 }) => {
   const consumed = { steel: null, reels: [], tape: null, deductedAt: new Date() };
 
-  /* ---------- STEEL ---------- */
   if (steelNeeded > 0) {
     const steel = await findSteelStock();
     const before = steel.quantity;
@@ -220,7 +224,6 @@ const deductRawMaterials = async ({
     };
   }
 
-  /* ---------- REELS ---------- */
   for (const [size, qty] of Object.entries(reelsBySize)) {
     if (!qty || qty <= 0) continue;
     const reel = await findReelStock(size);
@@ -265,7 +268,6 @@ const deductRawMaterials = async ({
     });
   }
 
-  /* ---------- TAPE (NEW) ---------- */
   if (tapeNeeded > 0) {
     const tape = await findTapeStock();
     if (!tape) throw { status: 500, message: "Tape not found during deduction." };
@@ -338,7 +340,6 @@ const refundRawMaterials = async ({ consumed, productionId, userId }) => {
       steel.updatedBy = userId || null;
       await steel.save();
     }
-      /* ---------- TAPE (NEW) ---------- */
   if (consumed.tape?.rawStock && consumed.tape.quantity > 0) {
     const tape = await RawStock.findById(consumed.tape.rawStock);
     if (tape) {
@@ -396,9 +397,6 @@ const refundRawMaterials = async ({ consumed, productionId, userId }) => {
   }
 };
 
-/* ============================================================
-   PRODUCT STOCK HELPERS
-============================================================ */
 const ensureProductStock = async (size, userId) => {
   let doc = await ProductStock.findOne({ size, isActive: true });
   if (!doc) {
@@ -488,9 +486,141 @@ const buildQtys = (entry) => ({
   "10kg": Number(entry.qty10kg || 0),
 });
 
-/* ============================================================
-   PRODUCT STOCK — ENDPOINTS
-============================================================ */
+const buildWorkerProduction = async (workers, dailyQtys) => {
+  // No worker assignment is perfectly valid
+  if (workers === undefined || workers === null) {
+    return [];
+  }
+
+  if (!Array.isArray(workers)) {
+    throw {
+      status: 400,
+      message: "workers must be an array",
+    };
+  }
+
+  const seenWorkers = new Set();
+
+  const assigned = {
+    "2kg": 0,
+    "5kg": 0,
+    "8kg": 0,
+    "10kg": 0,
+  };
+
+  const result = [];
+
+  for (const item of workers) {
+    // Explicitly validate the worker value
+    const workerId =
+      item?.worker !== undefined && item?.worker !== null
+        ? String(item.worker).trim()
+        : "";
+
+    if (!workerId) {
+      throw {
+        status: 400,
+        message: "Please select a worker for every worker production row.",
+      };
+    }
+
+    if (!isValidId(workerId)) {
+      throw {
+        status: 400,
+        message: "Invalid worker ID.",
+      };
+    }
+
+    // Prevent duplicate worker assignment
+    if (seenWorkers.has(workerId)) {
+      throw {
+        status: 400,
+        message:
+          "A worker cannot be added more than once in the same production entry.",
+      };
+    }
+
+    seenWorkers.add(workerId);
+
+    const worker = await Worker.findOne({
+      _id: workerId,
+      status: "Active",
+    }).select("_id name payType variablePay");
+
+    if (!worker) {
+      throw {
+        status: 400,
+        message: "Worker not found or worker is inactive.",
+      };
+    }
+
+    if (worker.payType !== "Variable") {
+      throw {
+        status: 400,
+        message:
+          `${worker.name} is a Fixed-pay worker and cannot be assigned to production.`,
+      };
+    }
+
+    if (!worker) {
+      throw {
+        status: 400,
+        message: "Worker not found or worker is inactive.",
+      };
+    }
+
+    const production = item?.production || {};
+
+    const cleanProduction = {
+      "2kg": 0, "5kg": 0, "8kg": 0, "10kg": 0,
+    };
+
+    const rates = {
+      "2kg":  Number(worker.variablePay?.rate2kg)  || 0,
+      "5kg":  Number(worker.variablePay?.rate5kg)  || 0,
+      "8kg":  Number(worker.variablePay?.rate8kg)  || 0,
+      "10kg": Number(worker.variablePay?.rate10kg) || 0,
+    };
+
+    let totalReels = 0;
+    let grossKg = 0;
+    let totalEarnings = 0;
+
+    for (const size of SIZES) {
+      const qty = parseNum(production[size], `${size} worker production`);
+
+      if (!Number.isInteger(qty)) {
+        throw { status: 400, message: `${size} worker production must be a whole number.` };
+      }
+
+      assigned[size] += qty;
+
+      if (assigned[size] > Number(dailyQtys[size] || 0)) {
+        throw { status: 400, message: `Workers cannot be assigned more ${size} reels than today's production.` };
+      }
+
+      const weightKg = REEL_WEIGHTS[size] || 0;
+      const rate = rates[size];
+      const amount = qty * weightKg * rate;
+
+      cleanProduction[size] = qty;
+      totalReels    += qty;
+      grossKg       += qty * weightKg;
+      totalEarnings += amount;
+    }
+
+    result.push({
+      worker: worker._id,
+      production: cleanProduction,
+      totalReels,
+      grossKg,
+      totalEarnings: Math.round(totalEarnings * 100) / 100,   // ← store it
+    });
+  }
+
+  return result;
+};
+
 const getAllProductStock = async (req, res) => {
   try {
     for (const size of SIZES) {
@@ -522,50 +652,78 @@ const updateProductReserved = async (req, res) => {
       return res.status(404).json({ success: false, message: "Not found" });
     }
 
-    const n = Number(req.body.reservedQty);
-    if (!Number.isFinite(n) || n < 0 || n > MAX_QTY) {
-      return res.status(400).json({ success: false, message: "Invalid reservedQty" });
-    }
-    if (n > Number(doc.quantity || 0)) {
-      return res.status(400).json({
-        success: false,
-        message: `Cannot reserve more than available (${doc.quantity} ${doc.unit})`,
+    /* ── Reserved quantity (optional) ────────────────────── */
+    if (req.body.reservedQty !== undefined) {
+      const n = Number(req.body.reservedQty);
+      if (!Number.isFinite(n) || n < 0 || n > MAX_QTY) {
+        return res.status(400).json({ success: false, message: "Invalid reservedQty" });
+      }
+      if (n > Number(doc.quantity || 0)) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot reserve more than available (${doc.quantity} ${doc.unit})`,
+        });
+      }
+
+      const before = Number(doc.reservedQty || 0);
+      doc.reservedQty = n;
+
+      pushProductMovement(doc, {
+        type: "adjustment",
+        quantity: Math.abs(n - before),
+        unitAtTime: doc.unit,
+        beforeQty: Number(doc.quantity || 0),
+        afterQty: Number(doc.quantity || 0),
+        reason:
+          n > before
+            ? `Reserved increased by ${n - before}`
+            : n < before
+            ? `Reserved released by ${before - n}`
+            : "Reserved updated (no change)",
+        notes: safeString(req.body.notes, 500) || null,
+        refType: "Manual",
+        refId: null,
+        refLabel: "reserved-change",
+        by: req.user?._id || null,
+        at: new Date(),
       });
     }
 
-    const before = Number(doc.reservedQty || 0);
-    doc.reservedQty = n;
+    /* ── Reorder level (optional) ────────────────────────── */
+    if (req.body.reorderLevel !== undefined) {
+      const r = Number(req.body.reorderLevel);
+      if (!Number.isFinite(r) || r < 0 || r > MAX_QTY) {
+        return res.status(400).json({ success: false, message: "Invalid reorderLevel" });
+      }
+      doc.reorderLevel = r;
+    }
 
-    pushProductMovement(doc, {
-      type: "adjustment",
-      quantity: Math.abs(n - before),
-      unitAtTime: doc.unit,
-      beforeQty: Number(doc.quantity || 0),
-      afterQty: Number(doc.quantity || 0),
-      reason:
-        n > before
-          ? `Reserved increased by ${n - before}`
-          : n < before
-          ? `Reserved released by ${before - n}`
-          : "Reserved updated (no change)",
-      notes: safeString(req.body.notes, 500) || null,
-      refType: "Manual",
-      refId: null,
-      refLabel: "reserved-change",
-      by: req.user?._id || null,
-      at: new Date(),
-    });
+    /* ── Critical level (optional) ───────────────────────── */
+    if (req.body.criticalLevel !== undefined) {
+      const c = Number(req.body.criticalLevel);
+      if (!Number.isFinite(c) || c < 0 || c > MAX_QTY) {
+        return res.status(400).json({ success: false, message: "Invalid criticalLevel" });
+      }
+      doc.criticalLevel = c;
+    }
+
+    if (Number(doc.criticalLevel) > Number(doc.reorderLevel)) {
+      return res.status(400).json({
+        success: false,
+        message: "Critical level cannot be higher than reorder level",
+      });
+    }
 
     doc.updatedBy = req.user?._id || null;
     await doc.save();
 
     return res.status(200).json({
       success: true,
-      message: "Reserved quantity updated",
+      message: "Stock settings updated",
       data: doc,
     });
   } catch (error) {
-    handleError(res, error, "Failed to update reserved");
+    handleError(res, error, "Failed to update stock settings");
   }
 };
 
@@ -774,9 +932,6 @@ const getProductStockMovements = async (req, res) => {
   }
 };
 
-/* ============================================================
-   PRODUCTION ENTRIES — ENDPOINTS
-============================================================ */
 const getAllProductions = async (req, res) => {
   try {
     const { page = 1, limit = 50, fromDate, toDate, search } = req.query;
@@ -797,7 +952,15 @@ const getAllProductions = async (req, res) => {
 
     const skip = (pageNumber - 1) * limitNumber;
     const [entries, total] = await Promise.all([
-      ProductProduction.find(query).sort({ date: -1 }).skip(skip).limit(limitNumber),
+      ProductProduction.find(query)
+        .populate({
+          path: "workers.worker",
+          select: "name payType variablePay",
+        })
+        .sort({ date: -1 })
+        .skip(skip)
+        .limit(limitNumber),
+
       ProductProduction.countDocuments(query),
     ]);
 
@@ -817,7 +980,13 @@ const getAllProductions = async (req, res) => {
 const getProductionById = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) return res.status(400).json({ success: false, message: "Invalid ID" });
-    const entry = await ProductProduction.findById(req.params.id);
+
+    const entry = await ProductProduction.findById(req.params.id)
+      .populate({
+        path: "workers.worker",
+        select: "name payType variablePay",
+      });
+
     if (!entry || !entry.isActive) return res.status(404).json({ success: false, message: "Entry not found" });
     return res.status(200).json({ success: true, data: entry });
   } catch (error) {
@@ -828,10 +997,16 @@ const getProductionById = async (req, res) => {
 const createProduction = async (req, res) => {
   try {
     const {
-      date, qty2kg, qty5kg, qty8kg, qty10kg,
-      rate2kg, rate5kg, rate8kg, rate10kg,
-      tapeUsedBox, scrapKg,
-      notes, allowReserved = false,
+      date,
+      qty2kg,
+      qty5kg,
+      qty8kg,
+      qty10kg,
+      tapeUsedBox,
+      scrapKg,
+      notes,
+      workers,
+      allowReserved = false,
     } = req.body;
 
     if (!date) return res.status(400).json({ success: false, message: "Date is required" });
@@ -852,10 +1027,6 @@ const createProduction = async (req, res) => {
         qty5kg: parseNum(qty5kg, "5kg quantity"),
         qty8kg: parseNum(qty8kg, "8kg quantity"),
         qty10kg: parseNum(qty10kg, "10kg quantity"),
-        rate2kg: parseNum(rate2kg, "2kg rate", MAX_RATE),
-        rate5kg: parseNum(rate5kg, "5kg rate", MAX_RATE),
-        rate8kg: parseNum(rate8kg, "8kg rate", MAX_RATE),
-        rate10kg: parseNum(rate10kg, "10kg rate", MAX_RATE),
         tapeUsedBox: parseNum(tapeUsedBox, "tape used (boxes)"),
         scrapKg: parseNum(scrapKg, "scrap (kg)"),
         notes: safeString(notes, 1000) || undefined,
@@ -865,12 +1036,23 @@ const createProduction = async (req, res) => {
       return res.status(validationErr.status || 400).json({ success: false, message: validationErr.message });
     }
 
+    const dailyQtys = {
+      "2kg": payload.qty2kg,
+      "5kg": payload.qty5kg,
+      "8kg": payload.qty8kg,
+      "10kg": payload.qty10kg,
+    };
+
+    payload.workers = await buildWorkerProduction(
+      workers,
+      dailyQtys
+    );
+
     const consumption = computeConsumption(payload);
     consumption.steelNeeded = Math.round(
       (consumption.steelNeeded + Number(payload.scrapKg || 0)) * 1000
     ) / 1000;
 
-    // ✅ Strip any size with qty <= 0
     consumption.reelsBySize = Object.fromEntries(
       Object.entries(consumption.reelsBySize || {}).filter(
         ([, q]) => Number(q) > 0
@@ -935,10 +1117,6 @@ const updateProduction = async (req, res) => {
       if (req.body.qty5kg !== undefined) entry.qty5kg = parseNum(req.body.qty5kg, "5kg quantity");
       if (req.body.qty8kg !== undefined) entry.qty8kg = parseNum(req.body.qty8kg, "8kg quantity");
       if (req.body.qty10kg !== undefined) entry.qty10kg = parseNum(req.body.qty10kg, "10kg quantity");
-      if (req.body.rate2kg !== undefined) entry.rate2kg = parseNum(req.body.rate2kg, "2kg rate", MAX_RATE);
-      if (req.body.rate5kg !== undefined) entry.rate5kg = parseNum(req.body.rate5kg, "5kg rate", MAX_RATE);
-      if (req.body.rate8kg !== undefined) entry.rate8kg = parseNum(req.body.rate8kg, "8kg rate", MAX_RATE);
-      if (req.body.rate10kg !== undefined) entry.rate10kg = parseNum(req.body.rate10kg, "10kg rate", MAX_RATE);
       if (req.body.tapeUsedBox !== undefined) entry.tapeUsedBox = parseNum(req.body.tapeUsedBox, "tape used (boxes)");
       if (req.body.scrapKg !== undefined) entry.scrapKg = parseNum(req.body.scrapKg, "scrap (kg)");
     } catch (validationErr) {
@@ -946,6 +1124,21 @@ const updateProduction = async (req, res) => {
     }
 
     if (req.body.notes !== undefined) entry.notes = safeString(req.body.notes, 1000) || undefined;
+
+    if (req.body.workers !== undefined) {
+
+    const dailyQtys = {
+      "2kg": entry.qty2kg,
+      "5kg": entry.qty5kg,
+      "8kg": entry.qty8kg,
+      "10kg": entry.qty10kg,
+    };
+
+    entry.workers = await buildWorkerProduction(
+      req.body.workers,
+      dailyQtys
+    );
+  }
 
     const newConsumption = computeConsumption({
       qty2kg: entry.qty2kg,
@@ -958,7 +1151,6 @@ const updateProduction = async (req, res) => {
       (newConsumption.steelNeeded + Number(entry.scrapKg || 0)) * 1000
     ) / 1000;
 
-    // ✅ Strip zero sizes too
     newConsumption.reelsBySize = Object.fromEntries(
       Object.entries(newConsumption.reelsBySize || {}).filter(
         ([, q]) => Number(q) > 0
@@ -1056,21 +1248,6 @@ const deleteProduction = async (req, res) => {
   }
 };
 
-const getRecentRates = async (req, res) => {
-  try {
-    const latest = await ProductProduction.findOne({ isActive: true }).sort({ date: -1 });
-    if (!latest) {
-      return res.status(200).json({ success: true, data: { rate2kg: 0, rate5kg: 0, rate8kg: 0, rate10kg: 0 } });
-    }
-    return res.status(200).json({
-      success: true,
-      data: { rate2kg: latest.rate2kg || 0, rate5kg: latest.rate5kg || 0, rate8kg: latest.rate8kg || 0, rate10kg: latest.rate10kg || 0 },
-    });
-  } catch (error) {
-    handleError(res, error, "Failed to fetch recent rates");
-  }
-};
-
 const previewConsumption = async (req, res) => {
   try {
     const { qty2kg = 0, qty5kg = 0, qty8kg = 0, qty10kg = 0 } = req.query;
@@ -1132,7 +1309,6 @@ module.exports = {
   createProduction,
   updateProduction,
   deleteProduction,
-  getRecentRates,
   previewConsumption,
   debugReels,
 };
