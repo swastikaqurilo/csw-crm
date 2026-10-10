@@ -226,6 +226,7 @@ const updateRawStock = async (req, res) => {
       category,
       unit,
       sizeKg,
+      reservedQty,
       reorderLevel,
       criticalLevel,
       notes,
@@ -244,6 +245,54 @@ const updateRawStock = async (req, res) => {
         message: "name, category, unit, and sizeKg cannot be changed after creation",
       });
     }
+
+    // ── NEW: handle reservedQty ──
+    let reservedChanged = false;
+    if (reservedQty !== undefined) {
+      const reserved = Number(reservedQty);
+      if (isNaN(reserved) || reserved < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "reservedQty must be a non-negative number",
+        });
+      }
+      const qty = Number(item.quantity) || 0;
+      if (reserved > qty) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot reserve more than available (${qty} ${item.unit})`,
+        });
+      }
+      if (reserved !== (Number(item.reservedQty) || 0)) {
+        const before = Number(item.reservedQty) || 0;
+        item.reservedQty = reserved;
+        reservedChanged = true;
+
+        // Log the change on the movement trail
+        const logEntry = {
+          type: "adjustment",
+          quantity: Math.abs(reserved - before),
+          unitAtTime: item.unit,
+          beforeQty: Number(item.quantity) || 0,
+          afterQty: Number(item.quantity) || 0,
+          reason:
+            reserved > before
+              ? `Reserved increased by ${reserved - before}`
+              : `Reserved released by ${before - reserved}`,
+          notes: null,
+          refType: "Manual",
+          refId: null,
+          refLabel: "reserved-change",
+          by: req.user?._id || null,
+          at: new Date(),
+        };
+
+        const log = Array.isArray(item.movementLog) ? item.movementLog : [];
+        log.push(logEntry);
+        item.movementLog = log.slice(-MAX_MOVEMENT_LOG);
+      }
+    }
+
     if (reorderLevel !== undefined) {
       const reorder = Number(reorderLevel);
       if (isNaN(reorder) || reorder < 0) {

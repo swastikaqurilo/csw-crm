@@ -121,10 +121,37 @@ const attendanceSchema = new mongoose.Schema(
       default: true,
     },
 
+    // Kept for backward compatibility — derived from records on save.
     absentWorkers: [
       {
         type: mongoose.Schema.Types.ObjectId,
         ref: "Worker",
+      },
+    ],
+
+    // Per-worker detail: status + login/logout times.
+    records: [
+      {
+        worker: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Worker",
+          required: true,
+        },
+        status: {
+          type: String,
+          enum: ["Present", "Absent"],
+          default: "Present",
+        },
+        loginTime: {
+          type: String,
+          default: null,
+          match: [/^\d{2}:\d{2}$/, "loginTime must be HH:mm"],
+        },
+        logoutTime: {
+          type: String,
+          default: null,
+          match: [/^\d{2}:\d{2}$/, "logoutTime must be HH:mm"],
+        },
       },
     ],
 

@@ -870,12 +870,17 @@ const getDaysBetween = (start, end) => {
   return days;
 };
 
+const isSunday = (d) => new Date(d).getDay() === 0;
+
+const isWorkingDay = (d) => !isSunday(d);
+
 const calculateFixedSalary = async ({ worker, periodStart, periodEnd }) => {
   const joiningDate = startOfDay(worker.joiningDate);
 
   const effectiveStart = joiningDate > periodStart ? joiningDate : periodStart;
 
-  const dates = getDaysBetween(effectiveStart, periodEnd);
+  // Sundays are excluded
+  const dates = getDaysBetween(effectiveStart, periodEnd).filter(isWorkingDay);
   const workingDays = dates.length;
 
   if (workingDays <= 0) {
@@ -885,6 +890,7 @@ const calculateFixedSalary = async ({ worker, periodStart, periodEnd }) => {
         workingDays: 0,
         presentDays: 0,
         absentDays: 0,
+        halfDays: 0,
         dailyRate: 0,
         absenceDeduction: 0,
       },
@@ -896,21 +902,52 @@ const calculateFixedSalary = async ({ worker, periodStart, periodEnd }) => {
       $gte: getDateString(effectiveStart),
       $lte: getDateString(periodEnd),
     },
-  }).select("date allPresent absentWorkers");
+  }).select("date allPresent absentWorkers records");
 
   const attendanceMap = new Map();
-
   for (const attendance of attendanceDocs) {
     attendanceMap.set(attendance.date, attendance);
   }
 
   let absentDays = 0;
+  let halfDays = 0;
 
   for (const date of dates) {
     const dateString = getDateString(date);
     const attendance = attendanceMap.get(dateString);
 
+    // No record for the day → treated as full present
     if (!attendance) continue;
+
+    // Try the new per-worker records first
+    let record = null;
+    if (Array.isArray(attendance.records) && attendance.records.length) {
+      record = attendance.records.find(
+        (r) => String(r.worker) === String(worker._id)
+      );
+    }
+
+    if (record) {
+      if (record.status === "Absent") {
+        absentDays++;
+        continue;
+      }
+
+      // Present — check times
+      const login = record.loginTime || null;
+      const logout = record.logoutTime || null;
+
+      const isLate = login && login > LATE_LOGIN_CUTOFF;
+      const isEarly = logout && logout < EARLY_LOGOUT_CUTOFF;
+
+      // No stacking — one violation is half a day, both is still half a day
+      if (isLate || isEarly) {
+        halfDays++;
+      }
+      continue;
+    }
+
+    // Fall back to legacy absentWorkers for older records
     if (attendance.allPresent === true) continue;
 
     const isAbsent =
@@ -924,7 +961,10 @@ const calculateFixedSalary = async ({ worker, periodStart, periodEnd }) => {
 
   const monthlySalary = Number(worker.fixedPay?.amount) || 0;
   const dailyRate = monthlySalary / SALARY_DAY_DIVISOR;
-  const absenceDeduction = dailyRate * absentDays;
+
+  const deductionUnits = absentDays + halfDays * 0.5;
+  const absenceDeduction = dailyRate * deductionUnits;
+
   const adjustedBasic = Math.max(0, monthlySalary - absenceDeduction);
 
   return {
@@ -933,6 +973,7 @@ const calculateFixedSalary = async ({ worker, periodStart, periodEnd }) => {
       workingDays,
       presentDays: Math.max(workingDays - absentDays, 0),
       absentDays,
+      halfDays,
       dailyRate: roundMoney(dailyRate),
       absenceDeduction: roundMoney(absenceDeduction),
     },

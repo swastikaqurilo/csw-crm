@@ -16,7 +16,7 @@ import {
   Menu,
   X,
   BadgeIndianRupee,
-  ContactRound,
+  ContactRound,UserCheck,
 } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useEffect, useState } from "react";
@@ -38,6 +38,7 @@ const businessItems = [
 const employeeItems = [
   {name: "Workers", path: "/worker", icon: ContactRound},
   {name: "Salary", path: "/salary", icon: BadgeIndianRupee},
+  {name: "Attendance", path: "/attendance", icon: UserCheck},
 ];
 
 const financeItems = [

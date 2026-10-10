@@ -167,7 +167,13 @@ const getAccountingDashboard = async (req, res) => {
         $lte: asOf,
       },
     };
-    
+
+    // FIX: Draft orders are not real revenue / receivables.
+    // Only Confirmed-and-beyond orders count.
+    const orderRealStatusFilter = {
+      $nin: ['Draft', 'Cancelled'],
+    };
+
     const [
       revenueToDate,
       revenuePeriod,
@@ -191,8 +197,11 @@ const getAccountingDashboard = async (req, res) => {
 
       revenueAccrualPeriod,
       periodPurchaseAccrual,
-      periodSalariesAgg,
       salaryExpenseAgg,
+
+      // FIX: new — salary cash payments
+      salaryPeriodPayments,
+      salaryPaymentsToDate,
     ] = await Promise.all([
 
       Payment.aggregate([
@@ -336,7 +345,7 @@ const getAccountingDashboard = async (req, res) => {
       Expense.aggregate([
         {
           $match: {
-            isDeleted: false,  
+            isDeleted: false,
             paymentStatus: 'Paid',
             $or: [
               {
@@ -366,13 +375,12 @@ const getAccountingDashboard = async (req, res) => {
         },
       ]),
 
+      // Receivables — FIX: exclude Draft
       Order.aggregate([
         {
           $match: {
             isActive: true,
-            status: {
-              $ne: 'Cancelled',
-            },
+            status: orderRealStatusFilter,
             orderDate: {
               $lte: asOf,
             },
@@ -432,7 +440,7 @@ const getAccountingDashboard = async (req, res) => {
         .lean(),
 
       Expense.find({
-        isDeleted: false,  
+        isDeleted: false,
         paymentStatus: 'Paid',
         $or: [
           {
@@ -457,11 +465,10 @@ const getAccountingDashboard = async (req, res) => {
         .limit(500)
         .lean(),
 
+      // Open orders — FIX: exclude Draft
       Order.find({
         isActive: true,
-        status: {
-          $ne: 'Cancelled',
-        },
+        status: orderRealStatusFilter,
         orderDate: {
           $lte: asOf,
         },
@@ -621,11 +628,12 @@ const getAccountingDashboard = async (req, res) => {
         },
       ]),
 
+      // Revenue accrual — FIX: exclude Draft
       Order.aggregate([
         {
           $match: {
             isActive: true,
-            status: { $ne: 'Cancelled' },
+            status: orderRealStatusFilter,
             orderDate: { $gte: fyStart, $lte: asOf },
           },
         },
@@ -655,9 +663,7 @@ const getAccountingDashboard = async (req, res) => {
         },
       ]),
 
-            Promise.resolve([{ _id: null, total: 0, count: 0 }]),
-
-      // Chart-of-accounts only — salary accrued in FY
+      // Salary expense — accrued in FY
       Salary.aggregate([
         {
           $match: {
@@ -669,6 +675,45 @@ const getAccountingDashboard = async (req, res) => {
           $group: {
             _id: null,
             total: { $sum: '$netSalary' },
+            count: { $sum: 1 },
+          },
+        },
+      ]),
+
+      // FIX: salary cash payments in period
+      Salary.aggregate([
+        { $match: { isDeleted: false } },
+        { $unwind: '$payments' },
+        {
+          $match: {
+            'payments.paymentDate': {
+              $gte: fyStart,
+              $lte: asOf,
+            },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: '$payments.amount' },
+            count: { $sum: 1 },
+          },
+        },
+      ]),
+
+      // FIX: salary cash payments all-time (up to asOf)
+      Salary.aggregate([
+        { $match: { isDeleted: false } },
+        { $unwind: '$payments' },
+        {
+          $match: {
+            'payments.paymentDate': { $lte: asOf },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: '$payments.amount' },
             count: { $sum: 1 },
           },
         },
@@ -719,9 +764,14 @@ const getAccountingDashboard = async (req, res) => {
     const cashOutSupplierAllTime =
       money(purchaseSpendToDate[0]?.total);
 
+    // FIX: include salary cash out
+    const cashOutSalaryAllTime =
+      money(salaryPaymentsToDate[0]?.total);
+
     const cashOutAllTime = money(
       cashOutExpensesAllTime +
-      cashOutSupplierAllTime
+      cashOutSupplierAllTime +
+      cashOutSalaryAllTime
     );
 
     const accountsReceivable =
@@ -999,13 +1049,12 @@ const getAccountingDashboard = async (req, res) => {
       periodPurchaseAccrual[0]?.total || 0
     );
 
+    // FIX: use the real salary aggregation for both P&L and chart
     const accrualSalaries = money(
-      periodSalariesAgg[0]?.total || 0
-    );
-
-    const salaryExpenseForChart = money(
       salaryExpenseAgg[0]?.total || 0
     );
+
+    const salaryExpenseForChart = accrualSalaries;
 
     const factoryExpenseTotal = money(
       expenseByType['Factory Expense']
@@ -1030,6 +1079,13 @@ const getAccountingDashboard = async (req, res) => {
       totalExpensesPeriod + periodPurchaseSpend
     );
 
+    // FIX: salary cash out in period
+    const periodSalaryPaymentsTotal = money(
+      salaryPeriodPayments[0]?.total || 0
+    );
+    const periodSalaryPaymentsCount =
+      salaryPeriodPayments[0]?.count || 0;
+
     const accountGroups = [
       {
         name: 'Assets',
@@ -1045,7 +1101,7 @@ const getAccountingDashboard = async (req, res) => {
                 netCashPosition
               ),
             note:
-              'Completed customer payments − paid expenses − supplier payments',
+              'Completed customer payments − paid expenses − supplier payments − salary payments',
           },
 
           {
@@ -1054,7 +1110,7 @@ const getAccountingDashboard = async (req, res) => {
             balance:
               accountsReceivable,
             note:
-              'Unpaid balance on active orders',
+              'Unpaid balance on active (non-draft) orders',
           },
         ],
       },
@@ -1165,7 +1221,7 @@ const getAccountingDashboard = async (req, res) => {
             balance:
               salaryExpenseForChart,
             note:
-              'Salary accrued in period (chart only)',
+              'Salary accrued in period',
           },
         ],
       },
@@ -1400,7 +1456,7 @@ const getAccountingDashboard = async (req, res) => {
             cashBalance,
 
           note:
-            'All completed customer payments − paid expenses − supplier payments',
+            'All completed customer payments − paid expenses − supplier payments − salary payments',
 
           breakdown: {
             totalCollections:
@@ -1414,6 +1470,12 @@ const getAccountingDashboard = async (req, res) => {
             totalSupplierPayments:
               money(
                 cashOutSupplierAllTime
+              ),
+
+            // FIX: new
+            totalSalaryPayments:
+              money(
+                cashOutSalaryAllTime
               ),
 
             net:
@@ -1431,7 +1493,7 @@ const getAccountingDashboard = async (req, res) => {
             accountsReceivable,
 
           note:
-            'Outstanding on active orders',
+            'Outstanding on active (non-draft) orders',
         },
       ],
 
@@ -1512,6 +1574,12 @@ const getAccountingDashboard = async (req, res) => {
             cashOutSupplierAllTime
           ),
 
+        // FIX: new — salary cash movements all-time total
+        salaryPaymentsAllTime:
+          money(
+            cashOutSalaryAllTime
+          ),
+
         net:
           cashBalance,
       },
@@ -1566,13 +1634,28 @@ const getAccountingDashboard = async (req, res) => {
               count:
                 supplierPaymentRows.length,
             },
+
+            // FIX: new — salary payments
+            {
+              label:
+                'Salary payments',
+
+              amount:
+                money(
+                  -periodSalaryPaymentsTotal
+                ),
+
+              count:
+                periodSalaryPaymentsCount,
+            },
           ],
 
           total:
             money(
               totalRevenuePeriod -
                 totalPaidExpensesPeriod -
-                periodPurchaseSpend
+                periodPurchaseSpend -
+                periodSalaryPaymentsTotal
             ),
         },
       ],
@@ -1598,11 +1681,16 @@ const getAccountingDashboard = async (req, res) => {
         supplierPayments:
           periodPurchaseSpend,
 
+        // FIX: new
+        salaryPayments:
+          periodSalaryPaymentsTotal,
+
         net:
           money(
             totalRevenuePeriod -
               totalPaidExpensesPeriod -
-              periodPurchaseSpend
+              periodPurchaseSpend -
+              periodSalaryPaymentsTotal
           ),
       },
     };
@@ -1725,7 +1813,6 @@ const getAccountingDashboard = async (req, res) => {
       },
 
       profitLoss: {
-        /* Revenue is now accrual (orders placed in FY) */
         salesRevenue: accrualRevenue,
         otherRevenue: 0,
         totalRevenue: accrualRevenue,
@@ -1738,7 +1825,7 @@ const getAccountingDashboard = async (req, res) => {
         },
 
         employeeCosts: accrualSalaries,
-        factoryWages: 0,          
+        factoryWages: 0,
         factoryExpenses: factoryExpenseTotal,
         miscellaneous: miscExpenseTotal,
         rawMaterialPurchases: accrualRawMaterial,

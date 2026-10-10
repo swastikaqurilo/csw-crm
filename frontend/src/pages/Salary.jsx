@@ -630,7 +630,7 @@ function Salary() {
         </div>
 
         {/* Settlement progress bar */}
-        <div className="rounded-xl border border-slate-200/80 bg-white px-5 py-4 shadow-sm">
+        {/* <div className="rounded-xl border border-slate-200/80 bg-white px-5 py-4 shadow-sm">
           <div className="mb-2 flex items-center justify-between gap-3">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Settlement progress</p>
             <p className="text-xs font-medium tabular-nums text-slate-600">
@@ -645,7 +645,7 @@ function Salary() {
           {meta.total > salaries.length && (
             <p className="mt-2 text-[11px] text-slate-400">Based on records visible on this page only</p>
           )}
-        </div>
+        </div> */}
       </section>
 
       {/* ---------- filters ---------- */}

@@ -72,7 +72,7 @@ const getNotifications = async (req, res) => {
       isActive: true,
       paymentStatus: "Overdue",
     })
-      .select("orderNumber customerName grandTotal amountPaid paymentStatus")
+      .select("orderNumber customerName grandTotal amountPaid paymentStatus createdAt updatedAt")
       .sort({ createdAt: -1 })
       .limit(MAX_ALERTS_PER_TYPE)
       .lean();

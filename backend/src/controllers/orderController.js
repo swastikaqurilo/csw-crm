@@ -3,6 +3,7 @@ const Order = require("../models/Order");
 const ProductStock = require("../models/ProductStock");
 const Contact = require("../models/Contacts");
 const Invoice = require("../models/Invoice");
+const Payment = require("../models/Payment");
 const { getNextSequence } = require("../models/Counter");
 
 const MAX_LIMIT = 200;
@@ -1080,7 +1081,7 @@ const updateOrderStatus = async (req, res) => {
 
       const allowedTransitions = {
         Draft: ["Confirmed", "Cancelled"],
-        Confirmed: ["In Production", "Cancelled"],
+        Confirmed: ["In Production", "Ready for Dispatch", "Cancelled"],
         "In Production": ["Ready for Dispatch", "Cancelled"],
         "Ready for Dispatch": ["Dispatched", "Cancelled"],
         Dispatched: ["Delivered"],
@@ -1110,13 +1111,14 @@ const updateOrderStatus = async (req, res) => {
       const activePayments = await Payment.countDocuments({
         order: order._id,
         isActive: true,
-      });
+      }).session(session);                                    // ← add .session()
 
       if (activePayments > 0) {
-        return res.status(400).json({
-          success: false,
+        throw {                                               // ← throw, not return
+          status: 400,
+          code: "ORDER_HAS_PAYMENTS",
           message: "This order has payment records. Delete or reverse those payments first.",
-        });
+        };
       }
 
       if (status === "Confirmed" && currentStockStatus === "Pending") {

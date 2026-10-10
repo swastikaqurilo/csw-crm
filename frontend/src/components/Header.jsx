@@ -9,9 +9,11 @@ import {
   CheckCircle2,
   X,
   Loader2,
-  Inbox,
+  Settings as SettingsIcon,
+  LogOut,
+  ChevronDown,
 } from "lucide-react";
-import { getNotifications } from "../api/api";
+import { getNotifications, logout as logoutApi } from "../api/api";
 
 const POLL_INTERVAL = 60_000; // refresh every 60s
 const READ_STORAGE_KEY = "notifications:readIds";
@@ -63,9 +65,19 @@ const typeIcon = (type) => {
   }
 };
 
+const loadUser = () => {
+  try {
+    const raw = localStorage.getItem("user");
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+};
+
 function Header() {
   const navigate = useNavigate();
 
+  /* ---------- notifications ---------- */
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [alerts, setAlerts] = useState([]);
@@ -74,6 +86,15 @@ function Header() {
 
   const dropdownRef = useRef(null);
   const buttonRef = useRef(null);
+
+  /* ---------- profile menu ---------- */
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [confirmLogout, setConfirmLogout] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [user] = useState(() => loadUser());
+
+  const profileRef = useRef(null);
+  const profileBtnRef = useRef(null);
 
   /* ---------- fetch ---------- */
   const fetchAlerts = useCallback(async (silent = false) => {
@@ -96,7 +117,7 @@ function Header() {
     return () => clearInterval(t);
   }, [fetchAlerts]);
 
-  /* ---------- click outside to close ---------- */
+  /* ---------- click outside: notifications ---------- */
   useEffect(() => {
     if (!open) return;
     const onDocClick = (e) => {
@@ -117,6 +138,28 @@ function Header() {
       document.removeEventListener("keydown", onEsc);
     };
   }, [open]);
+
+  /* ---------- click outside: profile ---------- */
+  useEffect(() => {
+    if (!profileOpen) return;
+    const onDocClick = (e) => {
+      if (
+        profileRef.current &&
+        !profileRef.current.contains(e.target) &&
+        profileBtnRef.current &&
+        !profileBtnRef.current.contains(e.target)
+      ) {
+        setProfileOpen(false);
+      }
+    };
+    const onEsc = (e) => e.key === "Escape" && setProfileOpen(false);
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onEsc);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onEsc);
+    };
+  }, [profileOpen]);
 
   /* ---------- refresh when opening ---------- */
   const toggleOpen = () => {
@@ -151,6 +194,34 @@ function Header() {
     if (alert.href) navigate(alert.href);
   };
 
+  /* ---------- logout ---------- */
+  const openLogoutConfirm = () => {
+    setProfileOpen(false);
+    setConfirmLogout(true);
+  };
+
+  const performLogout = async () => {
+    try {
+      setLoggingOut(true);
+
+      localStorage.removeItem("token");
+      localStorage.removeItem("user");
+      localStorage.removeItem("notifications:readIds");
+
+      try {
+        await logoutApi();
+      } catch (err) {
+        console.warn("[logout] server call failed, continuing:", err);
+      }
+
+      navigate("/login", { replace: true });
+    } catch (err) {
+      console.error("[logout] failed:", err);
+      setLoggingOut(false);
+      setConfirmLogout(false);
+    }
+  };
+
   /* ---------- badge styling ---------- */
   const badgeColor =
     counts.critical > 0
@@ -158,6 +229,11 @@ function Header() {
       : counts.warning > 0
       ? "bg-amber-500"
       : "bg-slate-400";
+
+  /* ---------- user display ---------- */
+  const displayName = user?.name || "Admin";
+  const displayRole = user?.role || "Administrator";
+  const initial = (displayName || "A").charAt(0).toUpperCase();
 
   return (
     <header className="flex h-16 items-center justify-between border-b border-slate-200 bg-[#f5f7fa] px-6">
@@ -197,7 +273,6 @@ function Header() {
               ref={dropdownRef}
               className="absolute right-0 top-12 z-50 w-[380px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl"
             >
-              {/* Header */}
               <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
                 <div>
                   <h3 className="text-sm font-semibold text-slate-900">
@@ -219,7 +294,6 @@ function Header() {
                 )}
               </div>
 
-              {/* Body */}
               <div className="max-h-[420px] overflow-y-auto">
                 {loading && alerts.length === 0 ? (
                   <div className="flex items-center justify-center gap-2 py-10 text-xs text-slate-500">
@@ -287,7 +361,6 @@ function Header() {
                 )}
               </div>
 
-              {/* Footer */}
               {alerts.length > 0 && (
                 <div className="border-t border-slate-200 bg-slate-50/60 px-4 py-2.5">
                   <button
@@ -305,21 +378,136 @@ function Header() {
           )}
         </div>
 
-        {/* ---------- USER ---------- */}
-        <div className="flex h-10 items-center gap-3 rounded-lg border border-slate-200 bg-white px-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#002244] text-sm font-semibold text-white">
-            A
-          </div>
-          <div className="flex flex-col">
-            <strong className="text-sm font-semibold leading-tight text-slate-800">
-              Admin
-            </strong>
-            <span className="text-xs leading-tight text-slate-500">
-              Administrator
-            </span>
-          </div>
+        {/* ---------- USER / PROFILE MENU ---------- */}
+        <div className="relative">
+          <button
+            ref={profileBtnRef}
+            type="button"
+            onClick={() => setProfileOpen((p) => !p)}
+            className="flex h-10 items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 transition-colors hover:bg-slate-50"
+            aria-haspopup="menu"
+            aria-expanded={profileOpen}
+          >
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#002244] text-sm font-semibold text-white">
+              {initial}
+            </div>
+            <div className="flex flex-col items-start">
+              <strong className="text-sm font-semibold leading-tight text-slate-800">
+                {displayName}
+              </strong>
+              <span className="text-xs leading-tight text-slate-500">
+                {displayRole}
+              </span>
+            </div>
+            <ChevronDown
+              size={14}
+              className={`text-slate-400 transition-transform ${profileOpen ? "rotate-180" : ""}`}
+            />
+          </button>
+
+          {profileOpen && (
+            <div
+              ref={profileRef}
+              role="menu"
+              className="absolute right-0 top-12 z-50 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl"
+            >
+              <div className="border-b border-slate-100 px-4 py-3">
+                <p className="truncate text-sm font-semibold text-slate-900">
+                  {displayName}
+                </p>
+                <p className="mt-0.5 truncate text-[11px] text-slate-500">
+                  {user?.email || displayRole}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setProfileOpen(false);
+                  navigate("/settings");
+                }}
+                className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm text-slate-700 transition-colors hover:bg-slate-50"
+              >
+                <SettingsIcon size={15} className="text-slate-400" />
+                Settings
+              </button>
+
+              <button
+                type="button"
+                role="menuitem"
+                onClick={openLogoutConfirm}
+                className="flex w-full items-center gap-2.5 border-t border-slate-100 px-4 py-2.5 text-left text-sm text-red-600 transition-colors hover:bg-red-50"
+              >
+                <LogOut size={15} />
+                Log out
+              </button>
+            </div>
+          )}
         </div>
       </div>
+
+      {/* ---------- LOGOUT CONFIRM ---------- */}
+      {confirmLogout && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[2px]"
+          onClick={loggingOut ? undefined : () => setConfirmLogout(false)}
+        >
+          <div
+            className="w-full max-w-[400px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="flex items-start gap-3 px-5 py-5">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-600">
+                <LogOut size={18} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-base font-semibold text-slate-900">
+                  Log out?
+                </h3>
+                <p className="mt-1.5 text-sm leading-6 text-slate-500">
+                  You'll be signed out and will need to log in again to access
+                  the dashboard.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setConfirmLogout(false)}
+                disabled={loggingOut}
+                className="flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50/60 px-5 py-3">
+              <button
+                type="button"
+                onClick={() => setConfirmLogout(false)}
+                disabled={loggingOut}
+                className="inline-flex h-10 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-all hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={performLogout}
+                disabled={loggingOut}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-red-600 px-4 text-sm font-medium text-white shadow-sm transition-all hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {loggingOut ? (
+                  <Loader2 size={15} className="animate-spin" />
+                ) : (
+                  <LogOut size={15} />
+                )}
+                {loggingOut ? "Logging out…" : "Log out"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </header>
   );
 }

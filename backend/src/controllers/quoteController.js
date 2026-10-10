@@ -258,6 +258,13 @@ exports.createQuotation = async (req, res) => {
 
     const cleanQuoteDate = quoteDate && isDate(quoteDate) ? new Date(quoteDate) : new Date();
 
+    if (new Date(validTill) <= cleanQuoteDate) {
+      return res.status(400).json({
+        success: false,
+        message: "validTill must be after quoteDate.",
+      });
+    }
+
     const enquiry = await Enquiry.findById(enquiryId);
     if (!enquiry) {
       return res.status(404).json({ success: false, message: "Linked enquiry not found." });
@@ -389,6 +396,15 @@ exports.updateQuotation = async (req, res) => {
       quotation.validTill = new Date(validTill);
     }
 
+    const finalQuoteDate = quotation.quoteDate;
+    const finalValidTill = quotation.validTill;
+    if (finalValidTill <= finalQuoteDate) {
+      return res.status(400).json({
+        success: false,
+        message: "validTill must be after quoteDate.",
+      });
+    }
+
     if (terms !== undefined) {
       quotation.terms = {
         ...(quotation.terms ? quotation.terms.toObject() : {}),
@@ -473,6 +489,21 @@ exports.updateQuotationStatus = async (req, res) => {
     const quotation = await Quotation.findById(req.params.id);
     if (!quotation) {
       return res.status(404).json({ success: false, message: "Quotation not found." });
+    }
+
+    const allowedTransitions = {
+      Draft: [],
+      Sent: ["Accepted", "Rejected", "Expired"],
+      Expired: ["Accepted"],
+      Accepted: [],
+      Rejected: [],
+    };
+
+    if (!allowedTransitions[quotation.status]?.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot change quotation status from ${quotation.status} to ${status}.`,
+      });
     }
 
     quotation.status = status;

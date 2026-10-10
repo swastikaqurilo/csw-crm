@@ -318,13 +318,13 @@ const updateEnquiry = async (req, res) => {
           .json({ success: false, message: "Invalid status" });
       }
       enquiry.timeline = enquiry.timeline || [];
-      enquiry.timeline.push({
+      enquiry.timeline.unshift({
         date: new Date(),
         text: `Status changed from ${enquiry.status} to ${req.body.status}`,
-        createdBy: safeString(req.body.assignedTo, 100) || "System",
+        createdBy: req.user?.name || "System",
       });
       if (enquiry.timeline.length > MAX_TIMELINE_ENTRIES) {
-        enquiry.timeline = enquiry.timeline.slice(-MAX_TIMELINE_ENTRIES);
+        enquiry.timeline = enquiry.timeline.slice(0, MAX_TIMELINE_ENTRIES);
       }
     }
 
@@ -488,7 +488,7 @@ const addTimelineNote = async (req, res) => {
     enquiry.timeline.unshift({
       date: new Date(),
       text: cleanText,
-      createdBy: safeString(createdBy, 100) || "System",
+      createdBy: req.user?.name || req.user?.email || "System",
     });
 
     if (enquiry.timeline.length > MAX_TIMELINE_ENTRIES) {

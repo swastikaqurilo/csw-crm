@@ -35,6 +35,7 @@ const parseDate = (value) => {
   return Number.isNaN(date.getTime()) ? null : date;
 };
 
+
 /* =========================================================
    CREATE EXPENSE
 ========================================================= */
@@ -85,10 +86,10 @@ const createExpense = async (req, res) => {
       });
     }
 
-    if (finalAmount < 0) {
+    if (finalAmount < 0 || finalAmount > 100000000) {
       return res.status(400).json({
         success: false,
-        message: "Amount cannot be negative",
+        message: "Amount must be between 0 and 100000000",
       });
     }
 

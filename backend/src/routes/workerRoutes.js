@@ -1,4 +1,5 @@
 const express = require("express");
+const { restrictTo } = require("../middleware/auth");
 
 const {
   getWorkers,
@@ -13,16 +14,16 @@ const {
 
 const router = express.Router();
 
-// Static paths BEFORE /:id so they are not captured as ids
+// Static paths BEFORE /:id
 router.get("/attendance/history", getAttendanceHistory);
 router.get("/attendance", getAttendance);
-router.post("/attendance", saveAttendance);
+router.post("/attendance", restrictTo("Admin", "Sales Manager"), saveAttendance);
 
 router.get("/", getWorkers);
-router.post("/", createWorker);
+router.post("/", restrictTo("Admin", "Sales Manager"), createWorker);
 
 router.get("/:id", getWorker);
-router.put("/:id", updateWorker);
-router.delete("/:id", deleteWorker);
+router.put("/:id", restrictTo("Admin", "Sales Manager"), updateWorker);
+router.delete("/:id", restrictTo("Admin"), deleteWorker);
 
 module.exports = router;

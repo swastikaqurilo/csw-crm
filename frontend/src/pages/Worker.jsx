@@ -1,16 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Plus, Search, Pencil, Trash2, X, CalendarDays, CheckCircle2, AlertTriangle,
-  Loader2, ChevronLeft, ChevronRight, Info, UserCheck, UserX, RefreshCw, Save,
-  Inbox, ReceiptText, Users, Wallet, Layers, History,
+  Plus, Search, Pencil, Trash2, X, CheckCircle2, AlertTriangle,
+  ChevronLeft, ChevronRight, UserCheck, UserX, RefreshCw, Inbox,
+  ReceiptText, Users, Wallet, Layers,
 } from "lucide-react";
 import {
-  getWorkers, createWorker, updateWorker, deleteWorker,
-  getAttendance, saveAttendance, getSalaries, getAttendanceHistory,
+  getWorkers, createWorker, updateWorker, deleteWorker, getSalaries,
 } from "../api/api";
 
 const PAGE_SIZE = 10;
-const HIST_PAGE_SIZE = 8;
 const RATE_MIN = 2, RATE_MAX = 3;
 const PHONE_RE = /^[0-9+\-\s()]*$/;
 const RATE_FIELDS = [
@@ -43,10 +41,6 @@ const toInputDate = (v) => {
   return Number.isNaN(d.getTime()) ? "" : `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 };
 const todayISO = () => toInputDate(new Date());
-const shiftDate = (iso, days) => {
-  const [y, m, d] = iso.split("-").map(Number);
-  return toInputDate(new Date(y, m - 1, d + days));
-};
 const parseDate = (v) => {
   if (!v) return null;
   if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) {
@@ -60,23 +54,12 @@ const fmtDate = (v) => {
   const d = parseDate(v);
   return d ? d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—";
 };
-const fmtWeekday = (v) => {
-  const d = parseDate(v);
-  return d ? d.toLocaleDateString("en-IN", { weekday: "long" }) : "";
-};
-const fmtTime = (v) => {
-  if (!v) return "—";
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
-};
 const money = (v) => `₹${Number(v || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 const str = (v) => (v == null ? "" : String(v));
 const errMsg = (err, fb) => {
   const d = err?.response?.data;
   return Array.isArray(d?.errors) && d.errors.length ? d.errors.join(", ") : d?.message || fb;
 };
-const idsKey = (list) => list.map((a) => a._id).sort().join(",");
-const recordDateISO = (rec) => toInputDate(rec?.date ?? rec?.attendanceDate ?? rec?.createdAt);
 
 const blankForm = () => ({
   name: "", phone: "", role: "", department: "",
@@ -120,7 +103,7 @@ const Field = ({ label, hint, error, className = "", children }) => (
 );
 const Note = ({ tone = "info", children }) => {
   const warn = tone === "warn";
-  const Icon = warn ? AlertTriangle : Info;
+  const Icon = warn ? AlertTriangle : CheckCircle2;
   return (
     <div className={`flex gap-2.5 rounded-lg border px-3 py-2.5 text-xs leading-5 ${warn ? "border-amber-200 bg-amber-50 text-amber-800" : "border-slate-200 bg-slate-50 text-slate-600"}`}>
       <Icon size={14} className="mt-0.5 shrink-0" /><div>{children}</div>
@@ -128,29 +111,12 @@ const Note = ({ tone = "info", children }) => {
   );
 };
 
-/* Premium KPI / stat card — matches Raw Materials style */
 const StatCard = ({ label, value, sub, icon: Icon, tone = "navy", loading }) => {
   const tones = {
-    navy: {
-      top: "bg-gradient-to-r from-slate-500 to-[#0a1e3f]",
-      icon: "from-slate-100 to-slate-200 text-[#0a1e3f]",
-      value: "text-[#0a1e3f]",
-    },
-    emerald: {
-      top: "bg-gradient-to-r from-emerald-400 to-teal-600",
-      icon: "from-emerald-50 to-teal-100 text-emerald-700",
-      value: "text-emerald-700",
-    },
-    indigo: {
-      top: "bg-gradient-to-r from-indigo-400 to-violet-600",
-      icon: "from-indigo-50 to-violet-100 text-indigo-700",
-      value: "text-indigo-700",
-    },
-    sky: {
-      top: "bg-gradient-to-r from-sky-400 to-blue-600",
-      icon: "from-sky-50 to-blue-100 text-sky-700",
-      value: "text-sky-700",
-    },
+    navy: { top: "bg-gradient-to-r from-slate-500 to-[#0a1e3f]", icon: "from-slate-100 to-slate-200 text-[#0a1e3f]" },
+    emerald: { top: "bg-gradient-to-r from-emerald-400 to-teal-600", icon: "from-emerald-50 to-teal-100 text-emerald-700" },
+    indigo: { top: "bg-gradient-to-r from-indigo-400 to-violet-600", icon: "from-indigo-50 to-violet-100 text-indigo-700" },
+    sky: { top: "bg-gradient-to-r from-sky-400 to-blue-600", icon: "from-sky-50 to-blue-100 text-sky-700" },
   };
   const t = tones[tone] || tones.navy;
   return (
@@ -160,15 +126,9 @@ const StatCard = ({ label, value, sub, icon: Icon, tone = "navy", loading }) => 
         <div className="min-w-0 flex-1">
           <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">{label}</p>
           <p className="mt-2 truncate text-xl font-semibold tabular-nums tracking-tight !text-black">
-            {loading ? (
-              <span className="inline-block h-7 w-12 animate-pulse rounded bg-slate-100" />
-            ) : (
-              value
-            )}
+            {loading ? <span className="inline-block h-7 w-12 animate-pulse rounded bg-slate-100" /> : value}
           </p>
-          {sub && (
-            <p className="mt-1.5 truncate text-xs text-slate-500">{loading ? "…" : sub}</p>
-          )}
+          {sub && <p className="mt-1.5 truncate text-xs text-slate-500">{loading ? "…" : sub}</p>}
         </div>
         {Icon && (
           <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${t.icon} transition-transform duration-200 group-hover:scale-105`}>
@@ -189,14 +149,8 @@ const Row = ({ label, value, tone = "text-slate-900" }) => (
 const Segmented = ({ options, value, onChange, label, disabled }) => (
   <div className="inline-flex rounded-lg border border-slate-300 bg-white p-1" role="group" aria-label={label}>
     {options.map(([v, text]) => (
-      <button
-        key={v}
-        type="button"
-        disabled={disabled}
-        aria-pressed={value === v}
-        onClick={() => onChange(v)}
-        className={`h-8 rounded-md px-3 text-sm font-medium transition disabled:opacity-50 ${value === v ? "bg-gradient-to-b from-[#0f2a52] to-[#0a1e3f] text-white shadow-sm" : "text-slate-600 hover:bg-slate-100"}`}
-      >
+      <button key={v} type="button" disabled={disabled} aria-pressed={value === v} onClick={() => onChange(v)}
+        className={`h-8 rounded-md px-3 text-sm font-medium transition disabled:opacity-50 ${value === v ? "bg-gradient-to-b from-[#0f2a52] to-[#0a1e3f] text-white shadow-sm" : "text-slate-600 hover:bg-slate-100"}`}>
         {text}
       </button>
     ))}
@@ -263,11 +217,8 @@ function PayCell({ worker }) {
         const v = worker.variablePay?.[f.key];
         const has = v != null;
         return (
-          <span
-            key={f.key}
-            title={has ? `${f.label} reel, per kg` : `No ${f.label} rate set`}
-            className={`rounded-md px-1.5 py-0.5 text-[11px] font-medium tabular-nums ring-1 ring-inset ${has ? "bg-white text-slate-700 ring-slate-200" : "bg-white text-slate-300 ring-slate-100"}`}
-          >
+          <span key={f.key} title={has ? `${f.label} reel, per kg` : `No ${f.label} rate set`}
+            className={`rounded-md px-1.5 py-0.5 text-[11px] font-medium tabular-nums ring-1 ring-inset ${has ? "bg-white text-slate-700 ring-slate-200" : "bg-white text-slate-300 ring-slate-100"}`}>
             {f.label} {has ? money(v) : "—"}
           </span>
         );
@@ -276,158 +227,7 @@ function PayCell({ worker }) {
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  Attendance history table                                          */
-/* ------------------------------------------------------------------ */
-function AttendanceHistory({ hist, onReload, onOpenDate, busy }) {
-  return (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.06),0_8px_24px_-12px_rgba(15,23,42,0.08)]">
-      <div className="flex flex-col gap-2 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2.5">
-          <History size={18} className="text-slate-500" />
-          <div>
-            <h2 className="text-sm font-semibold text-slate-900">Attendance history</h2>
-            <p className="text-xs text-slate-500">Every day that has been marked, newest first. Open a day to correct it.</p>
-          </div>
-        </div>
-        <button type="button" className={`${SECONDARY} h-9 px-3`} onClick={() => onReload(hist.page)}
-          disabled={hist.loading || busy} title="Refresh history">
-          <RefreshCw size={14} className={hist.loading ? "animate-spin" : ""} />Refresh
-        </button>
-      </div>
-
-      {hist.error ? (
-        <div className="flex items-center justify-between gap-3 px-5 py-4 text-sm text-red-700">
-          <span>{hist.error}</span>
-          <button type="button" onClick={() => onReload(1)} className="shrink-0 font-medium underline underline-offset-2">Retry</button>
-        </div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[820px] border-separate border-spacing-0 bg-white text-left">
-            <thead>
-              <tr className="bg-white">
-                <th className={`${TH2} border-b border-slate-200`}>Date</th>
-                <th className={`${TH2} border-b border-slate-200`}>Present</th>
-                <th className={`${TH2} border-b border-slate-200`}>Absent</th>
-                <th className={`${TH2} border-b border-slate-200`}>Who was absent</th>
-                <th className={`${TH2} border-b border-slate-200`}>Marked at</th>
-                <th className={`${TH2} border-b border-slate-200 text-right`}>Action</th>
-              </tr>
-            </thead>
-            <tbody className="bg-white">
-              {hist.loading ? (
-                Array.from({ length: 4 }).map((_, i) => (
-                  <tr key={i} aria-hidden="true">
-                    <td colSpan={6} className="border-b border-slate-100 px-5 py-4">
-                      <div className="h-3 w-full animate-pulse rounded bg-slate-100" />
-                    </td>
-                  </tr>
-                ))
-              ) : hist.items.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="px-4 py-14 text-center">
-                    <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-slate-200 bg-white shadow-sm">
-                      <CalendarDays size={20} className="text-slate-400" />
-                    </div>
-                    <p className="mt-3 text-sm font-semibold text-slate-800">No attendance marked yet</p>
-                    <p className="mt-1 text-sm text-slate-500">Save a day above and it will show up here.</p>
-                  </td>
-                </tr>
-              ) : (
-                hist.items.map((rec, idx) => {
-                  const iso = recordDateISO(rec);
-                  const absentList = Array.isArray(rec.absentWorkers) ? rec.absentWorkers : [];
-                  const absentN = absentList.length;
-                  const allPresent = Boolean(rec.allPresent);
-                  const presentN =
-                    rec.presentCount ??
-                    (Array.isArray(rec.presentWorkers) ? rec.presentWorkers.length : null) ??
-                    (rec.totalWorkers != null ? Math.max(0, rec.totalWorkers - absentN) : null);
-                  const isToday = iso === todayISO();
-                  return (
-                    <tr key={rec._id || iso || idx} className="group bg-white transition-colors duration-150 hover:bg-slate-50/70">
-                      <td className="border-b border-slate-100 px-5 py-3.5 group-last:border-0">
-                        <div className="flex items-center gap-2">
-                          <span className="whitespace-nowrap text-sm font-semibold text-slate-900">{fmtDate(iso || rec.date)}</span>
-                          {isToday && (
-                            <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-700 ring-1 ring-inset ring-sky-200">Today</span>
-                          )}
-                        </div>
-                        <p className="mt-0.5 text-xs text-slate-400">{fmtWeekday(iso || rec.date)}</p>
-                      </td>
-                      <td className="border-b border-slate-100 px-5 py-3.5 text-sm tabular-nums group-last:border-0">
-                        {presentN != null ? (
-                          <span className="font-semibold text-slate-900">{presentN}</span>
-                        ) : allPresent ? (
-                          <span className="font-medium text-emerald-700">All present</span>
-                        ) : (
-                          <span className="text-slate-400">—</span>
-                        )}
-                      </td>
-                      <td className="border-b border-slate-100 px-5 py-3.5 text-sm tabular-nums group-last:border-0">
-                        {absentN === 0
-                          ? <span className="text-slate-400">0</span>
-                          : <span className="font-semibold text-red-700">{absentN}</span>}
-                      </td>
-                      <td className="border-b border-slate-100 px-5 py-3.5 group-last:border-0">
-                        {absentN === 0 ? (
-                          <span className="text-sm text-slate-400">Nobody</span>
-                        ) : (
-                          <div className="flex flex-wrap gap-1">
-                            {absentList.slice(0, 3).map((w, i) => (
-                              <span key={w?._id || i} className="rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700 ring-1 ring-inset ring-red-200">
-                                {w?.name || w?.workerName || "Unknown"}
-                              </span>
-                            ))}
-                            {absentN > 3 && (
-                              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">+{absentN - 3} more</span>
-                            )}
-                          </div>
-                        )}
-                      </td>
-                      <td className="whitespace-nowrap border-b border-slate-100 px-5 py-3.5 text-xs text-slate-500 group-last:border-0">
-                        {fmtTime(rec.updatedAt || rec.createdAt)}
-                      </td>
-                      <td className="border-b border-slate-100 px-5 py-3.5 text-right group-last:border-0">
-                        <button type="button" onClick={() => onOpenDate(iso)} disabled={busy || !iso}
-                          className={`${SECONDARY} h-8 px-2.5 text-xs`} title="Open this day in the editor above">
-                          <Pencil size={13} />Open
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {!hist.error && hist.items.length > 0 && (
-        <div className="flex flex-col gap-3 border-t border-slate-100 bg-white px-5 py-3.5 sm:flex-row sm:items-center sm:justify-between">
-          <span className="text-sm text-slate-500">
-            Page <span className="font-semibold tabular-nums text-slate-800">{hist.page}</span> of{" "}
-            <span className="font-semibold tabular-nums text-slate-800">{hist.totalPages}</span>
-            {hist.total > 0 && <> · <span className="font-semibold tabular-nums text-slate-800">{hist.total}</span> day{hist.total === 1 ? "" : "s"} marked</>}
-          </span>
-          <div className="flex items-center gap-2">
-            <button type="button" className={`${SECONDARY} h-9 px-3`}
-              disabled={hist.loading || hist.page <= 1} onClick={() => onReload(hist.page - 1)}>
-              <ChevronLeft size={14} />Newer
-            </button>
-            <button type="button" className={`${SECONDARY} h-9 px-3`}
-              disabled={hist.loading || hist.page >= hist.totalPages} onClick={() => onReload(hist.page + 1)}>
-              Older<ChevronRight size={14} />
-            </button>
-          </div>
-        </div>
-      )}
-    </section>
-  );
-}
-
 function Workers() {
-  /* ---------- list ---------- */
   const [workers, setWorkers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -436,29 +236,12 @@ function Workers() {
   const [payFilter, setPayFilter] = useState("All");
   const [page, setPage] = useState(1);
 
-  /* ---------- shared ---------- */
   const [saving, setSaving] = useState(false);
   const [toasts, setToasts] = useState([]);
   const [confirm, setConfirm] = useState(null);
-
-  /* ---------- modals (grouped) ---------- */
   const [formState, setFormState] = useState(null);
   const [viewState, setViewState] = useState(null);
-  const [picker, setPicker] = useState(null);
 
-  /* ---------- attendance (one object) ---------- */
-  const [att, setAtt] = useState({
-    date: todayISO(), allPresent: true, absent: [],
-    saved: { exists: false, allPresent: true, ids: "" },
-    loading: true, failed: false, saving: false,
-  });
-
-  /* ---------- attendance history ---------- */
-  const [hist, setHist] = useState({
-    items: [], loading: true, error: "", page: 1, totalPages: 1, total: 0,
-  });
-
-  /* ---------- toasts ---------- */
   const toast = useCallback((type, message) => {
     const id = Date.now() + Math.random();
     setToasts((t) => [...t, { id, type, message }]);
@@ -466,7 +249,6 @@ function Workers() {
   }, []);
   const dismissToast = useCallback((id) => setToasts((t) => t.filter((x) => x.id !== id)), []);
 
-  /* ---------- load workers ---------- */
   const loadWorkers = useCallback(async () => {
     try {
       setLoading(true);
@@ -488,64 +270,6 @@ function Workers() {
 
   useEffect(() => { loadWorkers(); }, [loadWorkers]);
 
-  /* ---------- load attendance for the selected day ---------- */
-  const attReq = useRef(0);
-  const loadAttendance = useCallback(async () => {
-    const id = ++attReq.current;
-    try {
-      setAtt((a) => ({ ...a, loading: true, failed: false }));
-      const { data } = await getAttendance(att.date);
-      if (id !== attReq.current) return;
-      const rec = data?.success ? data.data : null;
-      if (rec) {
-        const list = (rec.absentWorkers || []).map((w) => ({ _id: w._id, name: w.name, role: w.role }));
-        setAtt((a) => ({
-          ...a, allPresent: Boolean(rec.allPresent), absent: list,
-          saved: { exists: true, allPresent: Boolean(rec.allPresent), ids: rec.allPresent ? "" : idsKey(list) },
-          loading: false,
-        }));
-      } else {
-        setAtt((a) => ({
-          ...a, allPresent: true, absent: [],
-          saved: { exists: false, allPresent: true, ids: "" }, loading: false,
-        }));
-      }
-    } catch (err) {
-      if (id !== attReq.current) return;
-      setAtt((a) => ({ ...a, failed: true, loading: false }));
-      toast("error", errMsg(err, "Couldn't load attendance for this date."));
-    }
-  }, [att.date, toast]);
-
-  useEffect(() => { loadAttendance(); }, [loadAttendance]);
-
-  /* ---------- load attendance history ---------- */
-  const loadHistory = useCallback(async (targetPage = 1) => {
-    const wanted = Math.max(1, Number(targetPage) || 1);
-    try {
-      setHist((h) => ({ ...h, loading: true, error: "" }));
-      const { data } = await getAttendanceHistory({ page: wanted, limit: HIST_PAGE_SIZE });
-      const payload = data?.data ?? {};
-      const items = Array.isArray(payload)
-        ? payload
-        : (payload.attendance || payload.records || payload.history || []);
-      const pg = data?.pagination || payload.pagination || {};
-      setHist({
-        items,
-        loading: false,
-        error: "",
-        page: pg.page || wanted,
-        totalPages: Math.max(1, pg.totalPages || 1),
-        total: pg.total ?? items.length,
-      });
-    } catch (err) {
-      setHist((h) => ({ ...h, loading: false, error: errMsg(err, "Couldn't load attendance history.") }));
-    }
-  }, []);
-
-  useEffect(() => { loadHistory(1); }, [loadHistory]);
-
-  /* ---------- derived ---------- */
   const stats = useMemo(() => {
     let active = 0, fixed = 0, variable = 0;
     for (const w of workers) {
@@ -561,7 +285,7 @@ function Workers() {
     return workers.filter((w) =>
       (statusFilter === "All" || (w.status || "Active") === statusFilter) &&
       (payFilter === "All" || w.payType === payFilter) &&
-      (!q || [w.name, w.workerId, w.phone, w.role, w.department].some((v) => String(v || "").toLowerCase().includes(q)))
+      (!q || [w.name, w.phone, w.role, w.department].some((v) => String(v || "").toLowerCase().includes(q)))
     );
   }, [workers, search, statusFilter, payFilter]);
 
@@ -570,79 +294,6 @@ function Workers() {
   const rows = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
   const hasFilters = Boolean(search.trim() || statusFilter !== "All" || payFilter !== "All");
   const resetFilters = () => { setSearch(""); setStatusFilter("All"); setPayFilter("All"); setPage(1); };
-
-  const eligible = useMemo(
-    () => workers.filter((w) => w.status !== "Inactive" && (!w.joiningDate || toInputDate(w.joiningDate) <= att.date)),
-    [workers, att.date]
-  );
-  const eligibleIds = useMemo(() => new Set(eligible.map((w) => w._id)), [eligible]);
-
-  const pickerList = useMemo(() => {
-    const map = new Map(eligible.map((w) => [w._id, w]));
-    att.absent.forEach((a) => { if (!map.has(a._id)) map.set(a._id, a); });
-    const q = (picker?.search || "").trim().toLowerCase();
-    return [...map.values()].filter((w) =>
-      !q || String(w.name || "").toLowerCase().includes(q) || String(w.workerId || "").toLowerCase().includes(q)
-    );
-  }, [eligible, att.absent, picker?.search]);
-
-  const absentEligible = att.absent.filter((a) => eligibleIds.has(a._id)).length;
-  const presentCount = Math.max(0, eligible.length - (att.allPresent ? 0 : absentEligible));
-  const dirty = !att.loading && !att.failed &&
-    (att.allPresent !== att.saved.allPresent || (att.allPresent ? "" : idsKey(att.absent)) !== att.saved.ids);
-
-  /* ---------- attendance actions ---------- */
-  const goToDate = (next) => {
-    if (!next || next > todayISO() || next === att.date) return;
-    if (dirty) {
-      setConfirm({
-        title: "Discard unsaved attendance?",
-        body: `You have unsaved changes for ${fmtDate(att.date)}.`,
-        label: "Discard changes", tone: "danger",
-        onConfirm: () => { setAtt((a) => ({ ...a, date: next })); setConfirm(null); },
-      });
-      return;
-    }
-    setAtt((a) => ({ ...a, date: next }));
-  };
-
-  const openHistoryDate = (iso) => {
-    if (!iso) return;
-    goToDate(iso);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  };
-
-  const setMode = (mode) => {
-    if (mode === "present") setAtt((a) => ({ ...a, allPresent: true }));
-    else {
-      setAtt((a) => ({ ...a, allPresent: false }));
-      if (att.absent.length === 0) setPicker({ open: true, search: "" });
-    }
-  };
-  const toggleAbsent = (w) => setAtt((a) => ({
-    ...a,
-    absent: a.absent.some((x) => x._id === w._id)
-      ? a.absent.filter((x) => x._id !== w._id)
-      : [...a.absent, { _id: w._id, name: w.name, role: w.role }],
-  }));
-  const closePicker = () => {
-    setPicker(null);
-    setAtt((a) => (a.absent.length === 0 ? { ...a, allPresent: true } : a));
-  };
-  const saveAtt = async () => {
-    if (!att.allPresent && att.absent.length === 0)
-      return toast("error", "Choose who is absent, or switch to Everyone present.");
-    try {
-      setAtt((a) => ({ ...a, saving: true }));
-      await saveAttendance({ date: att.date, allPresent: att.allPresent, absentWorkerIds: att.allPresent ? [] : att.absent.map((a) => a._id) });
-      setAtt((a) => ({ ...a, saving: false, saved: { exists: true, allPresent: a.allPresent, ids: a.allPresent ? "" : idsKey(a.absent) } }));
-      toast("success", `Attendance saved for ${fmtDate(att.date)}.`);
-      loadHistory(1);
-    } catch (err) {
-      setAtt((a) => ({ ...a, saving: false }));
-      toast("error", errMsg(err, "Couldn't save attendance."));
-    }
-  };
 
   /* ---------- worker form ---------- */
   const openCreate = () => setFormState({ editing: null, data: blankForm(), errors: {} });
@@ -729,7 +380,6 @@ function Workers() {
     } finally { setSaving(false); }
   };
 
-  /* ---------- status + delete ---------- */
   const setStatus = async (w, next) => {
     try {
       setSaving(true);
@@ -762,7 +412,6 @@ function Workers() {
     },
   });
 
-  /* ---------- view ---------- */
   const openView = useCallback(async (w) => {
     setViewState({ worker: w, salaries: [], loading: true });
     try {
@@ -774,29 +423,20 @@ function Workers() {
   }, []);
   const closeView = () => { if (!saving) setViewState(null); };
 
-  /* ---------- form previews ---------- */
   const form = formState?.data;
   const monthlyAmount = form ? Number(form.fixedPay.amount) : 0;
   const dailyRate = form && form.payType === "Fixed" && form.fixedPay.cycle === "Monthly" && monthlyAmount > 0
     ? monthlyAmount / 30 : null;
 
-  const pillText = att.loading ? "Loading" : att.failed ? "Couldn't load"
-    : dirty ? "Unsaved changes" : att.saved.exists ? "Saved" : "Not marked yet";
-  const pillClass = att.failed ? "bg-red-50 text-red-700 ring-red-200"
-    : dirty ? "bg-sky-50 text-sky-700 ring-sky-200"
-    : att.saved.exists ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-    : "bg-amber-50 text-amber-700 ring-amber-200";
-
   return (
     <div className="w-full space-y-5 pb-10">
       <Toasts items={toasts} dismiss={dismissToast} />
 
-      {/* ---------- header ---------- */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-[#0a1e3f]">Workers</h1>
           <p className="mt-1 max-w-xl text-sm text-slate-500">
-            Mark daily attendance and keep worker details and pay structure up to date.
+            Keep worker details and pay structure up to date.
           </p>
         </div>
         <div className="flex gap-2">
@@ -814,151 +454,18 @@ function Workers() {
         </div>
       )}
 
-      {/* ================================================================
-       *  SUMMARY KPI CARDS  (now at the top)
-       * ================================================================ */}
       <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          label="Total workers"
-          value={stats.total}
-          sub="Everyone on the roster"
-          icon={Users}
-          tone="navy"
-          loading={loading}
-        />
-        <StatCard
-          label="Active"
-          value={stats.active}
-          sub={stats.total - stats.active > 0 ? `${stats.total - stats.active} inactive` : "All active"}
-          icon={UserCheck}
-          tone="emerald"
-          loading={loading}
-        />
-        <StatCard
-          label="Fixed pay"
-          value={stats.fixed}
-          sub="Monthly / weekly salary"
-          icon={Wallet}
-          tone="sky"
-          loading={loading}
-        />
-        <StatCard
-          label="Variable pay"
-          value={stats.variable}
-          sub="Paid by production"
-          icon={Layers}
-          tone="indigo"
-          loading={loading}
-        />
+        <StatCard label="Total workers" value={stats.total} sub="Everyone on the roster" icon={Users} tone="navy" loading={loading} />
+        <StatCard label="Active" value={stats.active} sub={stats.total - stats.active > 0 ? `${stats.total - stats.active} inactive` : "All active"} icon={UserCheck} tone="emerald" loading={loading} />
+        <StatCard label="Fixed pay" value={stats.fixed} sub="Monthly / weekly salary" icon={Wallet} tone="sky" loading={loading} />
+        <StatCard label="Variable pay" value={stats.variable} sub="Paid by production" icon={Layers} tone="indigo" loading={loading} />
       </section>
 
-      {/* ================================================================
-       *  DAILY ATTENDANCE
-       * ================================================================ */}
-      <section className="rounded-xl border border-slate-200 bg-white">
-        <div className="flex flex-col gap-2 border-b border-slate-100 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-2.5">
-            <CalendarDays size={18} className="text-slate-500" />
-            <div>
-              <h2 className="text-sm font-semibold text-slate-900">Daily attendance</h2>
-              <p className="text-xs text-slate-500">Each absence takes one day off a fixed-pay worker's salary.</p>
-            </div>
-          </div>
-          <Badge className={pillClass}>{pillText}</Badge>
-        </div>
-
-        <div className="space-y-4 px-4 py-4">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-            <div className="flex items-center gap-1.5">
-              <button type="button" className={`${SECONDARY} w-10 px-0`} aria-label="Previous day"
-                onClick={() => goToDate(shiftDate(att.date, -1))} disabled={att.saving}>
-                <ChevronLeft size={16} />
-              </button>
-              <input type="date" aria-label="Attendance date" className={`${inp(false)} w-44`}
-                value={att.date} max={todayISO()} disabled={att.saving}
-                onChange={(e) => goToDate(e.target.value)} />
-              <button type="button" className={`${SECONDARY} w-10 px-0`} aria-label="Next day"
-                onClick={() => goToDate(shiftDate(att.date, 1))} disabled={att.saving || att.date >= todayISO()}>
-                <ChevronRight size={16} />
-              </button>
-              {att.date !== todayISO() && (
-                <button type="button" className="ml-1 text-sm font-medium text-slate-600 underline underline-offset-2 hover:text-slate-900"
-                  onClick={() => goToDate(todayISO())}>Today</button>
-              )}
-            </div>
-
-            <Segmented label="Attendance" value={att.allPresent ? "present" : "absent"} onChange={setMode}
-              disabled={att.loading || att.failed || att.saving}
-              options={[["present", "Everyone present"], ["absent", "Some absent"]]} />
-
-            <div className="flex items-center gap-3 lg:ml-auto">
-              {att.failed && (
-                <button type="button" onClick={loadAttendance} className="text-sm font-medium text-red-600 underline underline-offset-2">Retry</button>
-              )}
-              <button type="button" className={PRIMARY} onClick={saveAtt}
-                disabled={att.loading || att.failed || att.saving || (att.saved.exists && !dirty)}>
-                {att.saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                {att.saving ? "Saving…" : "Save attendance"}
-              </button>
-            </div>
-          </div>
-
-          {att.allPresent ? (
-            <p className="text-sm text-slate-600">
-              {att.loading ? "Loading attendance…"
-                : `All ${eligible.length} active worker${eligible.length === 1 ? "" : "s"} present.`}
-            </p>
-          ) : (
-            <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
-              <div className="mb-2 flex items-center justify-between gap-3">
-                <p className="text-sm text-slate-700">
-                  <span className="font-semibold">{presentCount}</span> present,{" "}
-                  <span className="font-semibold text-red-700">{att.absent.length}</span> absent
-                </p>
-                <button type="button" onClick={() => setPicker({ open: true, search: "" })}
-                  className="text-sm font-medium text-slate-700 underline underline-offset-2 hover:text-slate-900">
-                  {att.absent.length === 0 ? "Choose absent workers" : "Edit"}
-                </button>
-              </div>
-              {att.absent.length === 0 ? (
-                <p className="text-sm text-slate-400">Nobody selected yet.</p>
-              ) : (
-                <div className="flex flex-wrap gap-1.5">
-                  {att.absent.map((a) => (
-                    <span key={a._id} className="inline-flex items-center gap-1 rounded-full bg-red-50 py-0.5 pl-2.5 pr-1 text-xs font-medium text-red-700 ring-1 ring-inset ring-red-200">
-                      {a.name}
-                      <button type="button" onClick={() => toggleAbsent(a)} aria-label={`Remove ${a.name} from absent list`} className="rounded-full p-0.5 hover:bg-red-100">
-                        <X size={11} />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {!att.loading && !att.failed && !att.saved.exists && (
-            <Note>Attendance hasn't been saved for this day. When salaries are generated, an unmarked day counts as everyone present.</Note>
-          )}
-        </div>
-      </section>
-
-      {/* ================================================================
-       *  ATTENDANCE HISTORY
-       * ================================================================ */}
-      <AttendanceHistory
-        hist={hist}
-        busy={att.saving || saving}
-        onReload={loadHistory}
-        onOpenDate={openHistoryDate}
-      />
-
-      {/* ---------- filters ---------- */}
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
         <div className="relative min-w-0 flex-1">
           <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-            placeholder="Search by name, worker ID, phone or role" aria-label="Search workers"
+            placeholder="Search by name, phone or role" aria-label="Search workers"
             className={`${inp(false)} pl-9`} />
         </div>
         <Segmented label="Status" value={statusFilter} onChange={(v) => { setStatusFilter(v); setPage(1); }}
@@ -970,7 +477,6 @@ function Workers() {
         )}
       </div>
 
-      {/* ---------- worker table ---------- */}
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.06),0_8px_24px_-12px_rgba(15,23,42,0.08)]">
         <div className="flex flex-col gap-1 border-b border-slate-100 bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2.5">
@@ -1019,7 +525,7 @@ function Workers() {
                       {hasFilters ? "No workers match these filters" : "No workers yet"}
                     </p>
                     <p className="mx-auto mt-1 max-w-sm text-sm text-slate-500">
-                      {hasFilters ? "Try a different search or clear the filters." : "Add your first worker to start tracking attendance and pay."}
+                      {hasFilters ? "Try a different search or clear the filters." : "Add your first worker to start tracking pay."}
                     </p>
                     <div className="mt-5 flex justify-center gap-2">
                       {hasFilters && <button type="button" className={SECONDARY} onClick={resetFilters}>Clear filters</button>}
@@ -1046,12 +552,12 @@ function Workers() {
                           <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br text-sm font-bold shadow-sm ring-2 ring-white ${avatarTone(name)}`}>
                             {name.charAt(0).toUpperCase()}
                           </span>
-                          <div className="min-w-0">
+                          {/* <div className="min-w-0">
                             <p className="max-w-[220px] truncate text-sm font-semibold text-slate-900">{name}</p>
                             <p className="mt-0.5 inline-flex rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-slate-500">
                               {w.workerId || "No ID"}
                             </p>
-                          </div>
+                          </div> */}
                         </div>
                       </td>
 
@@ -1109,7 +615,7 @@ function Workers() {
         return (
           <Modal
             title={view.name}
-            subtitle={view.workerId || "No worker ID"}
+            // subtitle={view.workerId || "No worker ID"}
             width="max-w-2xl"
             busy={saving}
             onClose={closeView}
@@ -1153,7 +659,7 @@ function Workers() {
                   <div className="space-y-2.5 rounded-lg border border-slate-200 bg-slate-50/50 p-4">
                     <Row label={`Fixed amount (${(view.fixedPay?.cycle || "monthly").toLowerCase()})`} value={money(view.fixedPay?.amount)} />
                     {view.fixedPay?.cycle === "Monthly" && Number(view.fixedPay?.amount) > 0 && (
-                      <Row label="Daily rate (monthly ÷ 30)" value={money(Number(view.fixedPay.amount) / 30)} tone="text-slate-600" />
+                      <Row label="Daily rate" value={money(Number(view.fixedPay.amount) / 30)} tone="text-slate-600" />
                     )}
                   </div>
                 ) : (
@@ -1163,7 +669,7 @@ function Workers() {
                         <tr className="bg-slate-50 text-xs font-medium text-slate-500">
                           <th className="px-3 py-2 text-left">Reel size</th>
                           <th className="px-3 py-2 text-right">Per kg</th>
-                          <th className="px-3 py-2 text-right">Per reel</th>
+                          {/* <th className="px-3 py-2 text-right">Per reel</th> */}
                         </tr>
                       </thead>
                       <tbody>
@@ -1174,7 +680,7 @@ function Workers() {
                             <tr key={f.key} className="border-t border-slate-100">
                               <td className="px-3 py-2 text-slate-700">{f.label} reel</td>
                               <td className="px-3 py-2 text-right tabular-nums">{has ? money(v) : <span className="text-slate-400">—</span>}</td>
-                              <td className="px-3 py-2 text-right tabular-nums">{has ? money(Number(v) * f.kg) : <span className="text-slate-400">—</span>}</td>
+                              {/* <td className="px-3 py-2 text-right tabular-nums">{has ? money(Number(v) * f.kg) : <span className="text-slate-400">—</span>}</td> */}
                             </tr>
                           );
                         })}
@@ -1222,7 +728,7 @@ function Workers() {
       {formState && (
         <Modal
           title={formState.editing ? "Edit worker" : "Add worker"}
-          subtitle={formState.editing ? formState.editing.workerId || "Update details, pay structure or status." : "A worker ID is generated automatically."}
+          subtitle={formState.editing ? "Update details, pay structure or status." : "Add a new worker to the roster."}
           width="max-w-2xl"
           busy={saving}
           onClose={closeForm}
@@ -1322,44 +828,6 @@ function Workers() {
               )}
             </section>
           </form>
-        </Modal>
-      )}
-
-      {picker?.open && (
-        <Modal
-          title="Who is absent?"
-          subtitle={`${fmtDate(att.date)}. Only active workers who had joined by then are listed.`}
-          width="max-w-md"
-          onClose={closePicker}
-          footer={<>
-            <span className="mr-auto self-center text-sm text-slate-500">{att.absent.length} selected</span>
-            <button type="button" className={PRIMARY} onClick={closePicker}>Done</button>
-          </>}
-        >
-          <input className={`${inp(false)} mb-3`} placeholder="Search workers" aria-label="Search workers"
-            value={picker.search} onChange={(e) => setPicker((p) => ({ ...p, search: e.target.value }))} />
-          {pickerList.length === 0 ? (
-            <p className="py-6 text-center text-sm text-slate-500">No workers found.</p>
-          ) : (
-            <ul className="max-h-80 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
-              {pickerList.map((w) => {
-                const checked = att.absent.some((a) => a._id === w._id);
-                return (
-                  <li key={w._id}>
-                    <label className={`flex cursor-pointer items-center gap-3 px-3 py-2.5 text-sm hover:bg-slate-50 ${checked ? "bg-red-50/60" : ""}`}>
-                      <input type="checkbox" checked={checked} onChange={() => toggleAbsent(w)} className="h-4 w-4 accent-red-600" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium text-slate-900">{w.name}</span>
-                        {w.role && <span className="block truncate text-xs text-slate-500">{w.role}</span>}
-                      </span>
-                      {w.payType && <TypeBadge type={w.payType} />}
-                    </label>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          <p className="mt-3 text-xs text-slate-500">Absences only change fixed-pay salaries. Variable-pay workers are paid for what they produce.</p>
         </Modal>
       )}
 

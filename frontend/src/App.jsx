@@ -20,6 +20,7 @@ import Expenses from "./pages/Expenses";
 import RawMaterials from "./pages/RawMaterials";
 import Salary from "./pages/Salary";
 import Workers from "./pages/Worker";
+import Attendance from "./pages/Attendance";
 
 
 function App() {
@@ -52,6 +53,7 @@ function App() {
             <Route path="rawmats" element={<RawMaterials/>} />
             <Route path="salary" element={<Salary/>} />
             <Route path="worker" element={<Workers/>} />
+            <Route path="attendance" element={<Attendance/>} />
           </Route>
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

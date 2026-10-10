@@ -247,9 +247,9 @@ function ModalFooter({ onCancel, formId, busy, saveLabel = "Save", icon: Icon = 
  *  KPI CONFIG
  * ================================================================ */
 const KPIS = [
-  { key: "stockTotal", label: "Total Stock (all sizes)", icon: Package, top: "bg-gradient-to-r from-sky-400 to-blue-600", bg: "bg-gradient-to-br from-sky-50 to-blue-100 text-blue-700" },
-  { key: "totalKg", label: "Total Kg Produced", icon: Boxes, top: "bg-gradient-to-r from-emerald-400 to-teal-600", bg: "bg-gradient-to-br from-emerald-50 to-teal-100 text-emerald-700" },
-  { key: "stockReserved", label: "Reserved", icon: Layers, top: "bg-gradient-to-r from-indigo-400 to-violet-600", bg: "bg-gradient-to-br from-indigo-50 to-violet-100 text-violet-700" },
+  { id: "stockTotal", label: "Total Stock (all sizes)", icon: Package, top: "bg-gradient-to-r from-sky-400 to-blue-600", bg: "bg-gradient-to-br from-sky-50 to-blue-100 text-blue-700" },
+  { id: "totalKg", label: "Total Kg Produced", icon: Boxes, top: "bg-gradient-to-r from-emerald-400 to-teal-600", bg: "bg-gradient-to-br from-emerald-50 to-teal-100 text-emerald-700" },
+  { id: "stockReserved", label: "Reserved", icon: Layers, top: "bg-gradient-to-r from-indigo-400 to-violet-600", bg: "bg-gradient-to-br from-indigo-50 to-violet-100 text-violet-700" },
 ];
 
 /* ================================================================
@@ -412,25 +412,25 @@ function Products() {
         notes: entry.notes || "",
       },
       workerRows: (entry.workers || []).map((item) => ({
-        worker: typeof item.worker === "object" ? item.worker._id : item.worker,
-        production: {
-          "2kg": item.production?.["2kg"] || 0,
-          "5kg": item.production?.["5kg"] || 0,
-          "8kg": item.production?.["8kg"] || 0,
-          "10kg": item.production?.["10kg"] || 0,
-        },
+      worker: typeof item.worker === "object" ? item.worker._id : item.worker,
+      production: {
+        "2kg": item.production?.["2kg"] === 0 ? "" : (item.production?.["2kg"] ?? ""),
+        "5kg": item.production?.["5kg"] === 0 ? "" : (item.production?.["5kg"] ?? ""),
+        "8kg": item.production?.["8kg"] === 0 ? "" : (item.production?.["8kg"] ?? ""),
+        "10kg": item.production?.["10kg"] === 0 ? "" : (item.production?.["10kg"] ?? ""),
+      },
       })),
     });
   };
 
   const closeProdModal = () => { if (!saving) setProdModal(null); };
   const setFormField = (patch) => setProdModal((m) => ({ ...m, form: { ...m.form, ...patch } }));
-  const addWorkerRow = () => setProdModal((m) => ({ ...m, workerRows: [...m.workerRows, { worker: "", production: { "2kg": 0, "5kg": 0, "8kg": 0, "10kg": 0 } }] }));
+  const addWorkerRow = () => setProdModal((m) => ({ ...m, workerRows: [...m.workerRows, { worker: "", production: { "2kg": "", "5kg": "", "8kg": "", "10kg": "" } }] }));
   const removeWorkerRow = (i) => setProdModal((m) => ({ ...m, workerRows: m.workerRows.filter((_, idx) => idx !== i) }));
   const updateWorkerRow = (i, worker) => setProdModal((m) => ({ ...m, workerRows: m.workerRows.map((r, idx) => idx === i ? { ...r, worker } : r) }));
   const updateWorkerProd = (i, size, value) => setProdModal((m) => ({
     ...m,
-    workerRows: m.workerRows.map((r, idx) => idx === i ? { ...r, production: { ...r.production, [size]: Number(value) || 0 } } : r),
+    workerRows: m.workerRows.map((r, idx) => idx === i ? { ...r, production: { ...r.production, [size]: value || 0 } } : r),
   }));
 
   const validateWorkerProduction = () => {
@@ -446,7 +446,7 @@ function Products() {
       }
       seen.add(row.worker);
       for (const size of SIZES) {
-        const qty = Number(row.production?.[size] || 0);
+        const qty = Number(row.production?.[size]) || 0;
         if (!Number.isInteger(qty) || qty < 0) return `${size} production must be a whole number.`;
         assigned[size] += qty;
         if (assigned[size] > daily[size]) return `${size} worker production cannot exceed today's production.`;
@@ -475,10 +475,10 @@ function Products() {
       workers: workerRows.map((row) => ({
         worker: row.worker,
         production: {
-          "2kg": Number(row.production["2kg"] || 0),
-          "5kg": Number(row.production["5kg"] || 0),
-          "8kg": Number(row.production["8kg"] || 0),
-          "10kg": Number(row.production["10kg"] || 0),
+          "2kg": Number(row.production["2kg"]) || 0,
+          "5kg": Number(row.production["5kg"]) || 0,
+          "8kg": Number(row.production["8kg"]) || 0,
+          "10kg": Number(row.production["10kg"]) || 0,
         },
       })),
     };
@@ -816,7 +816,7 @@ function Products() {
       {/* KPI */}
       <div className="grid grid-cols-2 gap-2.5 sm:gap-3 xl:grid-cols-4">
         {KPIS.map((k) => (
-          <KpiCard key={k.key} {...k} value={fmtNum(kpi[k.key])} />
+          <KpiCard key={k.id} {...k} value={fmtNum(kpi[k.id])} />
         ))}
         <KpiCard
           icon={AlertTriangle}
@@ -1094,7 +1094,7 @@ function Products() {
       {prodModal && (
         <Modal onClose={closeProdModal} busy={saving} width="sm:max-w-3xl">
           <ModalHeader icon={Package} title={prodModal.editing ? "Edit Production Entry" : "Add Today's Stock"} subtitle={prodModal.editing ? "Update the reel counts produced for this date." : "Record reel counts produced. Raw materials auto-deduct on save."} onClose={closeProdModal} busy={saving} />
-          <form onSubmit={submitProduction} className="flex min-h-0 flex-1 flex-col">
+          <form id="prod-form" onSubmit={submitProduction} className="flex min-h-0 flex-1 flex-col">
             <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-5 sm:px-6">
               <Field label="Date" required>
                 <input type="date" value={prodModal.form.date} onChange={(e) => setFormField({ date: e.target.value })} required className={INPUT} />
@@ -1187,7 +1187,9 @@ function Products() {
                         </div>
                         <div className="mt-3 flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2">
                           <span className="text-[10px] font-medium text-slate-500">Worker total</span>
-                          <span className="text-xs font-bold tabular-nums text-slate-800">{SIZES.reduce((t, s) => t + Number(row.production[s] || 0), 0)} reels</span>
+                          <span className="text-xs font-bold tabular-nums text-slate-800">
+                            {SIZES.reduce((t, s) => t + (Number(row.production[s]) || 0), 0)} reels
+                          </span>
                         </div>
                       </div>
                     ))}
@@ -1200,7 +1202,7 @@ function Products() {
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                       {SIZES.map((size) => {
                         const key = `qty${size}`;
-                        const assigned = prodModal.workerRows.reduce((s, r) => s + Number(r.production[size] || 0), 0);
+                        const assigned = prodModal.workerRows.reduce((s, r) => s + (Number(r.production[size]) || 0), 0);
                         const total = Number(prodModal.form[key] || 0);
                         const complete = assigned === total;
                         const over = assigned > total;

@@ -23,7 +23,7 @@ router.get("/:id", getSalary);
 router.post("/generate", restrictTo("Admin", "Sales Manager"), generateSalaries);
 router.post("/", restrictTo("Admin", "Sales Manager"), createSalary);
 router.put("/:id", restrictTo("Admin", "Sales Manager"), updateSalary);
-router.post("/advance", restrictTo("Admin", "Sales Manager"), recordSalaryAdvance);
+router.post("/:id/advance", restrictTo("Admin", "Sales Manager"), recordSalaryAdvance);
 router.delete("/:id/advance/:advanceId", restrictTo("Admin", "Sales Manager"), deleteSalaryAdvance);
 router.post("/:id/payment", restrictTo("Admin", "Sales Manager"), recordSalaryPayment);
 router.delete("/:id", restrictTo("Admin", "Sales Manager"), deleteSalary);

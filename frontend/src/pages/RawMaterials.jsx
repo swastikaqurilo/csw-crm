@@ -206,8 +206,8 @@ function RawMaterials() {
   const [viewing, setViewing] = useState(null);   
   const [payment, setPayment] = useState(null);   
   const [conflict, setConflict] = useState(null); 
+  const [confirm, setConfirm] = useState(null);
   const [saving, setSaving] = useState(false);
-
   /* ── flash auto-clear ── */
   useEffect(() => {
     if (!success) return;
@@ -433,16 +433,38 @@ function RawMaterials() {
     } catch (err) { setError(errMsg(err, "Failed to save purchase")); }
   };
 
-  const handleReceive = async (p) => {
-    if (!window.confirm(`Mark "${p.material?.name}" (${num(p.quantity)} ${p.unit}) as received? Stock will increase.`)) return;
-    try { await withSave(() => receiveRawPurchase(p._id), "Purchase received — stock updated"); }
-    catch (err) { setError(errMsg(err, "Failed to receive purchase")); }
+    const handleReceive = (p) => {
+    setConfirm({
+      title: "Mark as received?",
+      message: `"${p.material?.name}" (${num(p.quantity)} ${p.unit}) will be added to stock.`,
+      confirmLabel: "Yes, Receive",
+      tone: "emerald",
+      onConfirm: async () => {
+        setConfirm(null);
+        try {
+          await withSave(() => receiveRawPurchase(p._id), "Purchase received — stock updated");
+        } catch (err) {
+          setError(errMsg(err, "Failed to receive purchase"));
+        }
+      },
+    });
   };
 
-  const handleCancelPurchase = async (p) => {
-    if (!window.confirm("Cancel this purchase order?")) return;
-    try { await withSave(() => cancelRawPurchase(p._id), "Purchase cancelled"); }
-    catch (err) { setError(errMsg(err, "Failed to cancel purchase")); }
+    const handleCancelPurchase = (p) => {
+    setConfirm({
+      title: "Cancel purchase order?",
+      message: `"${p.material?.name}" (${num(p.quantity)} ${p.unit}) — this cannot be undone.`,
+      confirmLabel: "Yes, Cancel Purchase",
+      tone: "danger",
+      onConfirm: async () => {
+        setConfirm(null);
+        try {
+          await withSave(() => cancelRawPurchase(p._id), "Purchase cancelled");
+        } catch (err) {
+          setError(errMsg(err, "Failed to cancel purchase"));
+        }
+      },
+    });
   };
 
   /* ── PAYMENT ── */
@@ -1232,6 +1254,42 @@ function RawMaterials() {
               </Field>
             </div>
           </form>
+        </Modal>
+      )}
+
+            {/* ============ CONFIRM MODAL ============ */}
+      {confirm && (
+        <Modal
+          title={confirm.title}
+          onClose={() => setConfirm(null)}
+          busy={saving}
+          width="max-w-md"
+          tone={confirm.tone === "danger" ? "warn" : "default"}
+          footer={
+            <div className="flex flex-col-reverse gap-2 border-t border-slate-200 bg-slate-50/50 px-5 py-3.5 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setConfirm(null)}
+                disabled={saving}
+                className={`${BTN_SECONDARY} w-full sm:w-auto`}
+              >
+                No, Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirm.onConfirm}
+                disabled={saving}
+                className={`${confirm.tone === "danger" ? BTN_DANGER : BTN_PRIMARY} w-full sm:w-auto`}
+              >
+                {saving ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                {confirm.confirmLabel || "Confirm"}
+              </button>
+            </div>
+          }
+        >
+          <div className="px-5 py-5">
+            <p className="text-sm text-slate-700">{confirm.message}</p>
+          </div>
         </Modal>
       )}
     </div>

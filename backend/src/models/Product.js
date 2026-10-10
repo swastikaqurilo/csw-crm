@@ -1,10 +1,3 @@
-/**
- * NOTE: This file is named Product.js for historical reasons, but it only
- * defines the *ProductProduction* model (daily production records).
- * Finished-goods inventory lives in ProductStock.js.
- * Controllers should import it as:
- *   const ProductProduction = require("../models/Product");
- */
 const mongoose = require("mongoose");
 
 const SIZES = ["2kg", "5kg", "8kg", "10kg"];
@@ -59,9 +52,7 @@ const productProductionSchema = new mongoose.Schema(
   {
     date: {
       type: Date,
-      required: [true, "Date is required"],
-      unique: true,
-      index: true,
+      required: true,
     },
 
     qty2kg: { type: Number, default: 0, min: 0 },
@@ -97,7 +88,19 @@ const productProductionSchema = new mongoose.Schema(
           unit: String,
         },
       ],
-
+      tape: {
+        rawStock: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "RawStock",
+        },
+        name: String,
+        quantity: Number,
+        reservedUsed: {
+          type: Number,
+          default: 0,
+        },
+        unit: String,
+      },
       deductedAt: Date,
     },
 
@@ -145,6 +148,15 @@ productProductionSchema.set("toObject", { virtuals: true });
 const ProductProduction = mongoose.model(
   "ProductProduction",
   productProductionSchema
+);
+
+productProductionSchema.index(
+  { date: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { isActive: true },
+    name: "unique_active_production_date",
+  }
 );
 
 module.exports = ProductProduction;

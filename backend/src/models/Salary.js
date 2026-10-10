@@ -170,7 +170,7 @@ const salarySchema = new mongoose.Schema(
       default: 0,
     },
 
-    attendance: {
+        attendance: {
       workingDays: {
         type: Number,
         default: 0,
@@ -184,6 +184,12 @@ const salarySchema = new mongoose.Schema(
       },
 
       absentDays: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      halfDays: {
         type: Number,
         default: 0,
         min: 0,

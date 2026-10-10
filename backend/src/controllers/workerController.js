@@ -2,6 +2,9 @@ const mongoose = require("mongoose");
 const { Worker, Attendance } = require("../models/Worker");
 const Salary = require("../models/Salary");
 
+const LATE_LOGIN_CUTOFF = "13:00";   
+const EARLY_LOGOUT_CUTOFF = "15:00"; 
+
 const isValidId = (id) => mongoose.isValidObjectId(id);
 
 const safeString = (value, max = 150) => {
@@ -527,10 +530,9 @@ const getAttendance = async (req, res) => {
       });
     }
 
-    const record = await Attendance.findOne({ date }).populate(
-      "absentWorkers",
-      "name workerId role"
-    );
+    const record = await Attendance.findOne({ date })
+      .populate("absentWorkers", "name workerId role")
+      .populate("records.worker", "name workerId role");
 
     if (!record) {
       return res.json({ success: true, data: null });
@@ -542,6 +544,7 @@ const getAttendance = async (req, res) => {
         date: record.date,
         allPresent: record.allPresent,
         absentWorkers: record.absentWorkers,
+        records: record.records || [],
       },
     });
   } catch (err) {
@@ -552,7 +555,7 @@ const getAttendance = async (req, res) => {
 
 const saveAttendance = async (req, res) => {
   try {
-    const { date, allPresent, absentWorkerIds = [] } = req.body;
+    const { date, allPresent, absentWorkerIds = [], records } = req.body;
 
     if (!date || !DATE_RE.test(date)) {
       return res.status(400).json({
@@ -561,23 +564,71 @@ const saveAttendance = async (req, res) => {
       });
     }
 
-    if (!Array.isArray(absentWorkerIds)) {
-      return res.status(400).json({
-        success: false,
-        message: "absentWorkerIds must be an array",
-      });
-    }
+    let cleanedRecords = [];
+    let cleanAbsent = [];
+    let finalAllPresent;
 
-    const cleanAbsent = allPresent ? [] : absentWorkerIds;
-
-    if (cleanAbsent.length) {
-      const count = await Worker.countDocuments({ _id: { $in: cleanAbsent } });
-      if (count !== cleanAbsent.length) {
+    if (Array.isArray(records) && records.length > 0) {
+      // ---- NEW PATH: full records with times ----
+      const workerIds = records.map((r) => r.worker).filter(Boolean);
+      if (workerIds.length !== records.length) {
         return res.status(400).json({
           success: false,
-          message: "One or more absent worker IDs are invalid",
+          message: "Every record must have a worker ID",
         });
       }
+
+      const count = await Worker.countDocuments({ _id: { $in: workerIds } });
+      if (count !== workerIds.length) {
+        return res.status(400).json({
+          success: false,
+          message: "One or more worker IDs in records are invalid",
+        });
+      }
+
+      cleanedRecords = records.map((r) => {
+        const isAbsent = r.status === "Absent";
+        const cleanTime = (t) =>
+          typeof t === "string" && /^\d{2}:\d{2}$/.test(t.slice(0, 5))
+            ? t.slice(0, 5)
+            : null;
+
+        return {
+          worker: r.worker,
+          status: isAbsent ? "Absent" : "Present",
+          loginTime: isAbsent ? null : cleanTime(r.loginTime),
+          logoutTime: isAbsent ? null : cleanTime(r.logoutTime),
+        };
+      });
+
+      cleanAbsent = cleanedRecords
+        .filter((r) => r.status === "Absent")
+        .map((r) => r.worker);
+
+      finalAllPresent = cleanAbsent.length === 0;
+    } else {
+      // ---- LEGACY PATH: only absentWorkerIds ----
+      if (!Array.isArray(absentWorkerIds)) {
+        return res.status(400).json({
+          success: false,
+          message: "absentWorkerIds must be an array",
+        });
+      }
+
+      cleanAbsent = allPresent ? [] : absentWorkerIds;
+
+      if (cleanAbsent.length) {
+        const count = await Worker.countDocuments({ _id: { $in: cleanAbsent } });
+        if (count !== cleanAbsent.length) {
+          return res.status(400).json({
+            success: false,
+            message: "One or more absent worker IDs are invalid",
+          });
+        }
+      }
+
+      finalAllPresent = !!allPresent;
+      cleanedRecords = [];
     }
 
     const record = await Attendance.findOneAndUpdate(
@@ -585,13 +636,16 @@ const saveAttendance = async (req, res) => {
       {
         $set: {
           date,
-          allPresent: !!allPresent,
+          allPresent: finalAllPresent,
           absentWorkers: cleanAbsent,
+          records: cleanedRecords,
           markedBy: req.user?._id || null,
         },
       },
       { new: true, upsert: true, setDefaultsOnInsert: true }
-    ).populate("absentWorkers", "name workerId role");
+    )
+      .populate("absentWorkers", "name workerId role")
+      .populate("records.worker", "name workerId role");
 
     return res.json({
       success: true,
@@ -600,6 +654,7 @@ const saveAttendance = async (req, res) => {
         date: record.date,
         allPresent: record.allPresent,
         absentWorkers: record.absentWorkers,
+        records: record.records,
       },
     });
   } catch (err) {
