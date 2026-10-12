@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Building2, CreditCard, FileText, Hash, Settings as SettingsIcon,
-  Save, X, Loader2, CheckCircle2, AlertCircle, LogOut,
+  Save, X, Loader2, CheckCircle2, AlertCircle, LogOut, Clock,
 } from "lucide-react";
 import { getSettings, updateSettings, logout } from "../api/api";
 
@@ -12,6 +12,7 @@ const TABS = [
   { id: "invoice",     label: "Invoice Defaults", icon: FileText },
   { id: "numbering",   label: "Numbering",        icon: Hash },
   { id: "preferences", label: "Preferences",      icon: SettingsIcon },
+  { id: "attendance",  label: "Attendance Policy", icon: Clock },
 ];
 
 const inputClass =
@@ -43,6 +44,11 @@ const EMPTY = {
     currency: "INR", timezone: "Asia/Kolkata", dateFormat: "DD MMM YYYY",
     financialYearStart: "04-01", lowStockThreshold: 10,
   },
+   attendance: {
+    lateLoginCutoff: "09:30",
+    earlyLogoutCutoff: "18:00",
+    stackViolations: false,
+  },
 };
 
 function Settings() {
@@ -70,6 +76,7 @@ function Settings() {
         invoice: { ...EMPTY.invoice, ...(d.invoice || {}) },
         numbering: { ...EMPTY.numbering, ...(d.numbering || {}) },
         preferences: { ...EMPTY.preferences, ...(d.preferences || {}) },
+        attendance: { ...EMPTY.attendance, ...(d.attendance || {}) },
       });
       setDirty(false);
     } catch (err) {
@@ -395,6 +402,46 @@ function Settings() {
           </Section>
         )}
       </div>
+
+              {activeTab === "attendance" && (
+          <Section
+            title="Attendance Policy"
+            subtitle="Workers outside these windows are marked as a half day"
+          >
+            <Grid>
+              <Field
+                label="Late Login Cutoff"
+                type="time"
+                value={form.attendance.lateLoginCutoff}
+                onChange={(v) => onChange("attendance", "lateLoginCutoff", v)}
+              />
+              <Field
+                label="Early Logout Cutoff"
+                type="time"
+                value={form.attendance.earlyLogoutCutoff}
+                onChange={(v) => onChange("attendance", "earlyLogoutCutoff", v)}
+              />
+
+              <div className="sm:col-span-2">
+                <Toggle
+                  label="Treat late login + early logout on the same day as a full day absent"
+                  checked={form.attendance.stackViolations}
+                  onChange={(v) => onChange("attendance", "stackViolations", v)}
+                />
+              </div>
+            </Grid>
+
+            <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50/60 px-4 py-3">
+              <p className="text-[11px] leading-5 text-slate-500">
+                <span className="font-semibold text-slate-700">How this works:</span>{" "}
+                On each working day, if a worker's <em>login</em> is after the late
+                cutoff, or their <em>logout</em> is before the early cutoff, the day
+                is counted as a half day. If <em>stack violations</em> is on, both
+                violations together count as a full day absent instead.
+              </p>
+            </div>
+          </Section>
+        )}
 
       {/* ============ STICKY SAVE BAR ============ */}
       <div className="sticky bottom-4 z-20 flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-lg">

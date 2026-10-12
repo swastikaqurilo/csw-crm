@@ -308,6 +308,7 @@ const blankForm = (start, end) => ({
 function Salary() {
   const [salaries, setSalaries] = useState([]);
   const [meta, setMeta] = useState({ total: 0, totalPages: 1 });
+  const [summary, setSummary] = useState({ net: 0, paid: 0, advance: 0, outstanding: 0, open: 0 });
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState("");
@@ -355,6 +356,7 @@ function Salary() {
       const list = body.salaries || [];
       setSalaries(list);
       setMeta({ total: body.pagination?.total ?? list.length, totalPages: Math.max(body.pagination?.totalPages || 1, 1) });
+      setSummary(body.summary || { net: 0, paid: 0, advance: 0, outstanding: 0, open: 0 });
     } catch (err) {
       if (id !== reqId.current) return;
       setListError(errMsg(err, "Couldn't load salaries. Check the server connection and retry."));
@@ -379,18 +381,6 @@ function Salary() {
 
   const activeWorkers = useMemo(() => workers.filter((w) => w.status !== "Inactive"), [workers]);
   const fixedWorkers = useMemo(() => activeWorkers.filter((w) => w.payType === "Fixed"), [activeWorkers]);
-
-  /* ---------- summary ---------- */
-  const totals = useMemo(() => {
-    let net = 0, paid = 0, advance = 0, open = 0;
-    for (const s of salaries) {
-      net += Number(s.netSalary || 0);
-      paid += Number(s.paidAmount || 0);
-      advance += advanceOf(s);
-      if (s.paymentStatus !== "Paid") open += 1;
-    }
-    return { net, paid, advance, outstanding: Math.max(0, net - paid - advance), open };
-  }, [salaries]);
 
   /* ---------- filters ---------- */
   const stepMonth = (delta) => {
@@ -556,7 +546,6 @@ function Salary() {
   /* ---------- derived ---------- */
   const firstShown = meta.total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const lastShown = Math.min(page * PAGE_SIZE, meta.total);
-  const settled = totals.paid + totals.advance;
   const genCounts = gen && {
     created: gen.results.filter((r) => r.status === "created").length,
     updated: gen.results.filter((r) => r.status === "updated").length,
@@ -593,35 +582,35 @@ function Salary() {
       )}
 
       {/* ---------- summary KPI cards ---------- */}
-      <section className="space-y-3">
+            <section className="space-y-3">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard
             label="Net payroll"
-            value={money(totals.net)}
-            sub={`${salaries.length} of ${meta.total} record${meta.total === 1 ? "" : "s"} on this page`}
+            value={money(summary.net)}
+            sub={`${meta.total} total record${meta.total === 1 ? "" : "s"}`}
             icon={IndianRupee}
             tone="navy"
             loading={loading}
           />
           <StatCard
             label="Paid out"
-            value={money(totals.paid)}
-            sub={totals.advance > 0 ? `+ ${money(totals.advance)} in advances` : "No advances this page"}
+            value={money(summary.paid)}
+            sub={summary.advance > 0 ? `+ ${money(summary.advance)} in advances` : "No advances"}
             icon={CircleDollarSign}
             tone="emerald"
             loading={loading}
           />
           <StatCard
             label="Still owed"
-            value={money(totals.outstanding)}
-            sub={totals.outstanding > 0 ? "Outstanding balance" : "All settled"}
+            value={money(summary.outstanding)}
+            sub={summary.outstanding > 0 ? "Outstanding balance" : "All settled"}
             icon={TrendingUp}
             tone="amber"
             loading={loading}
           />
           <StatCard
             label="Awaiting payment"
-            value={totals.open}
+            value={summary.open}
             sub="Pending or part-paid records"
             icon={Users}
             tone="sky"

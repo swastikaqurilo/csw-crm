@@ -5,9 +5,6 @@ const KEY = 'global';
 
 const getSettings = async (req, res) => {
   try {
-    // Atomic upsert — safe under concurrent requests.
-    // If two requests arrive at once on a fresh DB, MongoDB handles
-    // the race; only one doc is created, both get the same result.
     const settings = await Settings.findOneAndUpdate(
       { key: KEY },
       {
@@ -21,6 +18,11 @@ const getSettings = async (req, res) => {
             gstin: '07ABCDE1234F1Z5',
           },
           invoice: { defaultHsn: '7217' },
+          attendance: {
+            lateLoginCutoff: '09:30',
+            earlyLogoutCutoff: '18:00',
+            stackViolations: false,
+          },
         },
       },
       {
@@ -42,7 +44,14 @@ const getSettings = async (req, res) => {
 
 const updateSettings = async (req, res) => {
   try {
-    const allowed = ['seller', 'bank', 'invoice', 'numbering', 'preferences'];
+    const allowed = [
+      'seller',
+      'bank',
+      'invoice',
+      'numbering',
+      'preferences',
+      'attendance',
+    ];
     const updates = {};
 
     for (const k of allowed) {

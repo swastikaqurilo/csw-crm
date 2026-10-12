@@ -59,6 +59,30 @@ const settingsSchema = new mongoose.Schema(
       lowStockThreshold:  { type: Number, default: 10, min: 0, max: 100000 },
     },
 
+        attendance: {
+      lateLoginCutoff: {
+        type: String,
+        default: '09:30',
+        trim: true,
+        match: [/^([01]\d|2[0-3]):([0-5]\d)$/, 'Must be HH:MM 24-hour format'],
+      },
+
+      earlyLogoutCutoff: {
+        type: String,
+        default: '18:00',
+        trim: true,
+        match: [/^([01]\d|2[0-3]):([0-5]\d)$/, 'Must be HH:MM 24-hour format'],
+      },
+
+      // How violations are counted when a worker is BOTH late and leaves early
+      // false = still half a day (default, matches your current comment)
+      // true  = full day absent
+      stackViolations: {
+        type: Boolean,
+        default: false,
+      },
+    },
+
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   },
   { timestamps: true }

@@ -744,7 +744,7 @@ function Products() {
         <td className="px-4 py-3">
           <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
             <button type="button" title="Reserve / Edit reserved" onClick={(e) => { e.stopPropagation(); openReserve(item); }} className="flex h-7 w-7 items-center justify-center rounded-md text-indigo-500 hover:bg-indigo-50"><Layers size={14} /></button>
-            <button type="button" title="Record Scrap" onClick={(e) => { e.stopPropagation(); openScrap(item); }} className="flex h-7 w-7 items-center justify-center rounded-md text-rose-500 hover:bg-rose-50"><PackageX size={14} /></button>
+            {/* <button type="button" title="Record Scrap" onClick={(e) => { e.stopPropagation(); openScrap(item); }} className="flex h-7 w-7 items-center justify-center rounded-md text-rose-500 hover:bg-rose-50"><PackageX size={14} /></button> */}
           </div>
         </td>
       </tr>

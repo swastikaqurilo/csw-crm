@@ -133,10 +133,11 @@ function Sidebar() {
   const [isDesktop, setIsDesktop] = useState(false);
 
   const [openSections, setOpenSections] = useState({
-    main: true,
-    business: true,
-    finance: true,
-    system: true,
+    main: false,
+    business: false,
+    finance: false,
+    system: false,
+    employee: false,
   });
 
   const location = useLocation();

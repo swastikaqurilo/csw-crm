@@ -142,13 +142,9 @@ productProductionSchema.virtual("totalKg").get(function () {
   );
 });
 
+
 productProductionSchema.set("toJSON", { virtuals: true });
 productProductionSchema.set("toObject", { virtuals: true });
-
-const ProductProduction = mongoose.model(
-  "ProductProduction",
-  productProductionSchema
-);
 
 productProductionSchema.index(
   { date: 1 },
@@ -157,6 +153,11 @@ productProductionSchema.index(
     partialFilterExpression: { isActive: true },
     name: "unique_active_production_date",
   }
+);
+
+const ProductProduction = mongoose.model(
+  "ProductProduction",
+  productProductionSchema
 );
 
 module.exports = ProductProduction;

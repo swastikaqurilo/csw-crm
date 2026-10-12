@@ -2,29 +2,28 @@ const mongoose = require("mongoose");
 const Salary = require("../models/Salary");
 const { Worker, Attendance } = require("../models/Worker");
 const ProductProduction = require("../models/Product");
+const { getGlobalSettings } = require("../utils/getSettings");
 
-const isValidId = (value) => mongoose.isValidObjectId(value);
+const {
+  SALARY_DAY_DIVISOR,
+  SIZES,
+  REEL_WEIGHTS,
+  isValidId,
+  safeString,
+  roundMoney,
+  calculateNetSalary,
+  calculatePaymentStatus,
+  startOfDay,
+  endOfDay,
+  getDateString,
+  getDaysBetween,
+  isWorkingDay,
+  toMinutes,
+} = require("../utils/salary");
 
-const safeString = (value, max = 1000) => {
-  if (value === undefined || value === null) return "";
-  return String(value).trim().slice(0, max);
-};
-
-const calculateNetSalary = (basicSalary, allowances = 0, deductions = 0) => {
-  const basic = Number(basicSalary) || 0;
-  const allowance = Number(allowances) || 0;
-  const deduction = Number(deductions) || 0;
-
-  return Math.max(0, basic + allowance - deduction);
-};
-
-const calculatePaymentStatus = (netSalary, paidAmount, advanceAmount = 0) => {
-  const totalPaid = Number(paidAmount || 0) + Number(advanceAmount || 0);
-
-  if (totalPaid <= 0) return "Pending";
-  if (totalPaid >= netSalary) return "Paid";
-  return "Partial";
-};
+/* ------------------------------------------------------------------ */
+/*  CREATE                                                             */
+/* ------------------------------------------------------------------ */
 
 const createSalary = async (req, res) => {
   try {
@@ -155,6 +154,10 @@ const createSalary = async (req, res) => {
   }
 };
 
+/* ------------------------------------------------------------------ */
+/*  LIST                                                               */
+/* ------------------------------------------------------------------ */
+
 const getSalaries = async (req, res) => {
   try {
     const {
@@ -232,7 +235,6 @@ const getSalaries = async (req, res) => {
         const requested = filter.worker;
         const match = ids.some((id) => String(id) === String(requested));
 
-        // If the requested worker isn't in the search result, no matches.
         if (!match) {
           return res.status(200).json({
             success: true,
@@ -250,7 +252,7 @@ const getSalaries = async (req, res) => {
       }
     }
 
-    const [salaries, total] = await Promise.all([
+    const [salaries, total, summaryAgg] = await Promise.all([
       Salary.find(filter)
         .populate(
           "worker",
@@ -261,11 +263,38 @@ const getSalaries = async (req, res) => {
         .limit(limitNumber),
 
       Salary.countDocuments(filter),
+
+      Salary.aggregate([
+        { $match: filter },
+        {
+          $group: {
+            _id: null,
+            net: { $sum: "$netSalary" },
+            paid: { $sum: "$paidAmount" },
+            advance: { $sum: "$advanceAmount" },
+            open: {
+              $sum: { $cond: [{ $ne: ["$paymentStatus", "Paid"] }, 1, 0] },
+            },
+          },
+        },
+      ]),
     ]);
+
+    const s = summaryAgg[0] || { net: 0, paid: 0, advance: 0, open: 0 };
 
     return res.status(200).json({
       success: true,
       salaries,
+      summary: {
+        net: s.net || 0,
+        paid: s.paid || 0,
+        advance: s.advance || 0,
+        outstanding: Math.max(
+          0,
+          (s.net || 0) - (s.paid || 0) - (s.advance || 0)
+        ),
+        open: s.open || 0,
+      },
       pagination: {
         page: pageNumber,
         limit: limitNumber,
@@ -283,6 +312,10 @@ const getSalaries = async (req, res) => {
     });
   }
 };
+
+/* ------------------------------------------------------------------ */
+/*  GET ONE                                                            */
+/* ------------------------------------------------------------------ */
 
 const getSalary = async (req, res) => {
   try {
@@ -325,6 +358,10 @@ const getSalary = async (req, res) => {
   }
 };
 
+/* ------------------------------------------------------------------ */
+/*  UPDATE                                                             */
+/* ------------------------------------------------------------------ */
+
 const updateSalary = async (req, res) => {
   try {
     const { id } = req.params;
@@ -336,7 +373,10 @@ const updateSalary = async (req, res) => {
       });
     }
 
-    const salary = await Salary.findById(id);
+    const salary = await Salary.findOne({
+      _id: id,
+      isDeleted: false,
+    });
 
     if (!salary) {
       return res.status(404).json({
@@ -399,10 +439,14 @@ const updateSalary = async (req, res) => {
 
     const netSalary = calculateNetSalary(basic, allowance, deduction);
 
-    if (netSalary < salary.paidAmount) {
+    const totalCommitted =
+      Number(salary.paidAmount || 0) + Number(salary.advanceAmount || 0);
+
+    if (netSalary < totalCommitted) {
       return res.status(400).json({
         success: false,
-        message: "Net salary cannot be lower than the amount already paid",
+        message:
+          "Net salary cannot be lower than the combined amount already paid and advanced",
       });
     }
 
@@ -446,7 +490,13 @@ const updateSalary = async (req, res) => {
   }
 };
 
+/* ------------------------------------------------------------------ */
+/*  RECORD PAYMENT                                                     */
+/* ------------------------------------------------------------------ */
+
 const recordSalaryPayment = async (req, res) => {
+  const session = await mongoose.startSession();
+
   try {
     const { id } = req.params;
 
@@ -465,33 +515,12 @@ const recordSalaryPayment = async (req, res) => {
       });
     }
 
-    const salary = await Salary.findById(id);
-
-    if (!salary) {
-      return res.status(404).json({
-        success: false,
-        message: "Salary record not found",
-      });
-    }
-
     const paymentAmount = Number(amount);
 
     if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) {
       return res.status(400).json({
         success: false,
         message: "Payment amount must be greater than zero",
-      });
-    }
-
-    const remainingAmount =
-      Number(salary.netSalary || 0) -
-      Number(salary.paidAmount || 0) -
-      Number(salary.advanceAmount || 0);
-
-    if (paymentAmount > remainingAmount + 0.001) {
-      return res.status(400).json({
-        success: false,
-        message: `Payment cannot exceed remaining salary of ₹${remainingAmount}`,
       });
     }
 
@@ -535,27 +564,58 @@ const recordSalaryPayment = async (req, res) => {
       });
     }
 
-    salary.payments.push({
-      amount: paymentAmount,
-      paymentDate: parsedPaymentDate,
-      paymentMode,
-      transactionId: cleanTransactionId,
-      notes: safeString(notes, 500),
+    let paymentEntry;
+
+    await session.withTransaction(async () => {
+      const salary = await Salary.findOne({
+        _id: id,
+        isDeleted: false,
+      }).session(session);
+
+      if (!salary) {
+        const error = new Error("Salary record not found");
+        error.statusCode = 404;
+        throw error;
+      }
+
+      const netSalary = Number(salary.netSalary || 0);
+      const paidAmount = Number(salary.paidAmount || 0);
+      const advanceAmount = Number(salary.advanceAmount || 0);
+
+      const remainingAmount = netSalary - paidAmount - advanceAmount;
+
+      if (paymentAmount > remainingAmount + 0.001) {
+        const error = new Error(
+          `Payment cannot exceed remaining salary of ₹${remainingAmount}`
+        );
+        error.statusCode = 400;
+        throw error;
+      }
+
+      salary.payments.push({
+        amount: paymentAmount,
+        paymentDate: parsedPaymentDate,
+        paymentMode,
+        transactionId: cleanTransactionId,
+        notes: safeString(notes, 500),
+      });
+
+      salary.paidAmount = paidAmount + paymentAmount;
+
+      salary.paymentStatus = calculatePaymentStatus(
+        salary.netSalary,
+        salary.paidAmount,
+        salary.advanceAmount
+      );
+
+      salary.lastPaymentDate = parsedPaymentDate;
+
+      await salary.save({ session });
+
+      paymentEntry = salary.payments[salary.payments.length - 1];
     });
 
-    salary.paidAmount += paymentAmount;
-
-    salary.paymentStatus = calculatePaymentStatus(
-      salary.netSalary,
-      salary.paidAmount,
-      salary.advanceAmount
-    );
-
-    salary.lastPaymentDate = parsedPaymentDate;
-
-    await salary.save();
-
-    const populatedSalary = await Salary.findById(salary._id).populate(
+    const populatedSalary = await Salary.findById(id).populate(
       "worker",
       "workerId name phone role department payType fixedPay"
     );
@@ -564,18 +624,31 @@ const recordSalaryPayment = async (req, res) => {
       success: true,
       message: "Salary payment recorded successfully",
       salary: populatedSalary,
-      payment: salary.payments[salary.payments.length - 1],
+      payment: paymentEntry,
     });
   } catch (error) {
     console.error("[recordSalaryPayment]", error);
+
+    if (error.statusCode === 400 || error.statusCode === 404) {
+      return res.status(error.statusCode).json({
+        success: false,
+        message: error.message,
+      });
+    }
 
     return res.status(500).json({
       success: false,
       message: "Failed to record salary payment",
       error: error.message,
     });
+  } finally {
+    await session.endSession();
   }
 };
+
+/* ------------------------------------------------------------------ */
+/*  RECORD ADVANCE                                                     */
+/* ------------------------------------------------------------------ */
 
 const recordSalaryAdvance = async (req, res) => {
   try {
@@ -649,7 +722,9 @@ const recordSalaryAdvance = async (req, res) => {
     const cleanTransactionId = safeString(transactionId, 150);
 
     if (
-      ["UPI", "Bank Transfer", "NEFT", "RTGS", "Cheque"].includes(paymentMode) &&
+      ["UPI", "Bank Transfer", "NEFT", "RTGS", "Cheque"].includes(
+        paymentMode
+      ) &&
       !cleanTransactionId
     ) {
       return res.status(400).json({
@@ -706,6 +781,10 @@ const recordSalaryAdvance = async (req, res) => {
   }
 };
 
+/* ------------------------------------------------------------------ */
+/*  DELETE ADVANCE                                                     */
+/* ------------------------------------------------------------------ */
+
 const deleteSalaryAdvance = async (req, res) => {
   try {
     const { id, advanceId } = req.params;
@@ -735,14 +814,19 @@ const deleteSalaryAdvance = async (req, res) => {
     if (Number(salary.paidAmount) > 0) {
       return res.status(400).json({
         success: false,
-        message: "Cannot delete advance — regular salary payments already exist",
+        message:
+          "Cannot delete advance — regular salary payments already exist",
       });
     }
 
     const removed = Number(adv.amount) || 0;
     adv.deleteOne();
 
-    salary.advanceAmount = Math.max(Number(salary.advanceAmount || 0) - removed, 0);
+    salary.advanceAmount = Math.max(
+      Number(salary.advanceAmount || 0) - removed,
+      0
+    );
+
     salary.paymentStatus = calculatePaymentStatus(
       salary.netSalary,
       salary.paidAmount,
@@ -764,6 +848,10 @@ const deleteSalaryAdvance = async (req, res) => {
     });
   }
 };
+
+/* ------------------------------------------------------------------ */
+/*  DELETE SALARY                                                      */
+/* ------------------------------------------------------------------ */
 
 const deleteSalary = async (req, res) => {
   try {
@@ -798,7 +886,8 @@ const deleteSalary = async (req, res) => {
     if (Number(salary.advanceAmount) > 0) {
       return res.status(400).json({
         success: false,
-        message: "Salary records with advances cannot be deleted. Delete the advances first.",
+        message:
+          "Salary records with advances cannot be deleted. Delete the advances first.",
       });
     }
 
@@ -822,64 +911,20 @@ const deleteSalary = async (req, res) => {
   }
 };
 
-const SALARY_DAY_DIVISOR = 30;
-const SIZES = ["2kg", "5kg", "8kg", "10kg"];
+/* ------------------------------------------------------------------ */
+/*  CALCULATION HELPERS                                                */
+/* ------------------------------------------------------------------ */
 
-const REEL_WEIGHTS = {
-  "2kg": 2,
-  "5kg": 5,
-  "8kg": 8,
-  "10kg": 10,
-};
-
-const roundMoney = (value) => Math.round((Number(value) || 0) * 100) / 100;
-
-const startOfDay = (date) => {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  return d;
-};
-
-const endOfDay = (date) => {
-  const d = new Date(date);
-  d.setHours(23, 59, 59, 999);
-  return d;
-};
-
-const getDateString = (date) => {
-  const d = new Date(date);
-
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
-};
-
-const getDaysBetween = (start, end) => {
-  const days = [];
-
-  const current = startOfDay(start);
-  const last = startOfDay(end);
-
-  while (current <= last) {
-    days.push(new Date(current));
-    current.setDate(current.getDate() + 1);
-  }
-
-  return days;
-};
-
-const isSunday = (d) => new Date(d).getDay() === 0;
-
-const isWorkingDay = (d) => !isSunday(d);
-
-const calculateFixedSalary = async ({ worker, periodStart, periodEnd }) => {
+const calculateFixedSalary = async ({
+  worker,
+  periodStart,
+  periodEnd,
+  settings,
+}) => {
   const joiningDate = startOfDay(worker.joiningDate);
+  const effectiveStart =
+    joiningDate > periodStart ? joiningDate : periodStart;
 
-  const effectiveStart = joiningDate > periodStart ? joiningDate : periodStart;
-
-  // Sundays are excluded
   const dates = getDaysBetween(effectiveStart, periodEnd).filter(isWorkingDay);
   const workingDays = dates.length;
 
@@ -909,6 +954,16 @@ const calculateFixedSalary = async ({ worker, periodStart, periodEnd }) => {
     attendanceMap.set(attendance.date, attendance);
   }
 
+  // Cutoffs come from Settings (falls back to defaults)
+  const resolved = settings || (await getGlobalSettings());
+
+  const lateCutoff = toMinutes(
+    resolved?.attendance?.lateLoginCutoff || "09:30"
+  );
+  const earlyCutoff = toMinutes(
+    resolved?.attendance?.earlyLogoutCutoff || "18:00"
+  );
+
   let absentDays = 0;
   let halfDays = 0;
 
@@ -916,10 +971,8 @@ const calculateFixedSalary = async ({ worker, periodStart, periodEnd }) => {
     const dateString = getDateString(date);
     const attendance = attendanceMap.get(dateString);
 
-    // No record for the day → treated as full present
     if (!attendance) continue;
 
-    // Try the new per-worker records first
     let record = null;
     if (Array.isArray(attendance.records) && attendance.records.length) {
       record = attendance.records.find(
@@ -933,21 +986,25 @@ const calculateFixedSalary = async ({ worker, periodStart, periodEnd }) => {
         continue;
       }
 
-      // Present — check times
-      const login = record.loginTime || null;
-      const logout = record.logoutTime || null;
+      const loginMinutes = toMinutes(record.loginTime);
+      const logoutMinutes = toMinutes(record.logoutTime);
 
-      const isLate = login && login > LATE_LOGIN_CUTOFF;
-      const isEarly = logout && logout < EARLY_LOGOUT_CUTOFF;
+      const isLate =
+        loginMinutes !== null &&
+        lateCutoff !== null &&
+        loginMinutes > lateCutoff;
 
-      // No stacking — one violation is half a day, both is still half a day
+      const isEarly =
+        logoutMinutes !== null &&
+        earlyCutoff !== null &&
+        logoutMinutes < earlyCutoff;
+
       if (isLate || isEarly) {
         halfDays++;
       }
       continue;
     }
 
-    // Fall back to legacy absentWorkers for older records
     if (attendance.allPresent === true) continue;
 
     const isAbsent =
@@ -967,11 +1024,16 @@ const calculateFixedSalary = async ({ worker, periodStart, periodEnd }) => {
 
   const adjustedBasic = Math.max(0, monthlySalary - absenceDeduction);
 
+  const effectivePresentDays = Math.max(
+    workingDays - absentDays - halfDays * 0.5,
+    0
+  );
+
   return {
     basicSalary: roundMoney(adjustedBasic),
     attendance: {
       workingDays,
-      presentDays: Math.max(workingDays - absentDays, 0),
+      presentDays: roundMoney(effectivePresentDays),
       absentDays,
       halfDays,
       dailyRate: roundMoney(dailyRate),
@@ -1045,6 +1107,10 @@ const calculateVariableSalary = async ({ worker, periodStart, periodEnd }) => {
   };
 };
 
+/* ------------------------------------------------------------------ */
+/*  GENERATE                                                           */
+/* ------------------------------------------------------------------ */
+
 const generateSalaries = async (req, res) => {
   try {
     const { periodStart, periodEnd, workerIds = [] } = req.body;
@@ -1101,6 +1167,9 @@ const generateSalaries = async (req, res) => {
       });
     }
 
+    // Load cutoffs once for the whole batch
+    const settings = await getGlobalSettings();
+
     const results = [];
 
     for (const worker of workers) {
@@ -1111,6 +1180,7 @@ const generateSalaries = async (req, res) => {
           worker,
           periodStart: start,
           periodEnd: end,
+          settings,
         });
       } else {
         calculation = await calculateVariableSalary({
@@ -1143,7 +1213,11 @@ const generateSalaries = async (req, res) => {
       const allowances = existingSalary?.allowances || 0;
       const deductions = existingSalary?.deductions || 0;
 
-      const netSalary = calculateNetSalary(basicSalary, allowances, deductions);
+      const netSalary = calculateNetSalary(
+        basicSalary,
+        allowances,
+        deductions
+      );
 
       let salary;
 
