@@ -34,7 +34,6 @@ const formatDate = (v) => {
   });
 };
 
-/* FIX: guard against invalid dates so we never render "NaNd late" */
 const daysAgo = (d) => {
   if (!d) return 0;
   const t = new Date(d).getTime();
@@ -42,7 +41,6 @@ const daysAgo = (d) => {
   return Math.max(0, Math.floor((Date.now() - t) / 86400_000));
 };
 
-/* FIX: guard against invalid dates so we never render "NaNd ago" */
 const timeAgo = (date) => {
   if (!date) return "";
   const t = new Date(date).getTime();
@@ -60,9 +58,13 @@ const safeArr = (res) => {
   if (Array.isArray(d?.data)) return d.data;
   return [];
 };
+
 const safeObj = (res) => res?.data?.data || res?.data || null;
 
-const ORDER_ACTIVE = ["confirmed", "processing", "ready for dispatch", "dispatched"];
+const ORDER_ACTIVE = [
+  "confirmed", "in production", "processing",
+  "ready for dispatch", "dispatched",
+];
 const ORDER_DONE = ["delivered", "cancelled", "canceled", "closed"];
 const ENQUIRY_OPEN = ["new", "contacted", "in progress", "in discussion", "quoted"];
 const ENQUIRY_CLOSED = ["converted", "lost"];
@@ -79,6 +81,7 @@ function normalizeStockItem(item, source) {
   const critical = num(item.criticalLevel);
 
   let severity = "ok";
+
   if (source === "raw") {
     if (item.isCritical === true || (critical > 0 && qty <= critical)) severity = "critical";
     else if (item.isLowStock === true || (reorder > 0 && qty <= reorder)) severity = "low";
@@ -86,6 +89,7 @@ function normalizeStockItem(item, source) {
     if (critical > 0 && qty <= critical) severity = "critical";
     else if (reorder > 0 && qty <= reorder) severity = "low";
   }
+
   if (qty === 0 && (reorder > 0 || critical > 0)) severity = "out";
 
   const name =
@@ -122,19 +126,25 @@ function normalizeStockItem(item, source) {
 function Sparkline({ values = [], h = 36 }) {
   const uid = useId();
   const gid = `spark-${uid.replace(/:/g, "")}`;
-  const data = values.length > 1 ? values : [0, 1, 0.5, 1.5, 1, 2, 1.5, 2];
+
+  const data =
+    values.length > 1 ? values : [0, 1, 0.5, 1.5, 1, 2, 1.5, 2];
+
   const w = 200;
   const min = Math.min(...data);
   const max = Math.max(...data);
   const range = max - min || 1;
   const step = w / (data.length - 1);
+
   const pts = data.map((v, i) => [
     i * step,
     h - ((v - min) / range) * (h - 6) - 3,
   ]);
+
   const d = pts
     .map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`)
     .join(" ");
+
   const areaPath = `${d} L${w},${h} L0,${h} Z`;
 
   return (
@@ -189,12 +199,31 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
         getAccountingDashboard({}),
         getRawStock(),
         getProductStock(),
-        getOrders({ limit: 50, sort: "-createdAt" }),
+        // FIX: bumped from 50 to 500 so active/delayed/unpaid counts aren't truncated
+        getOrders({ limit: 500, sort: "-createdAt" }),
         getEnquiries({ limit: 200, sort: "-createdAt" }),
         getPayments({ limit: 100, sort: "-createdAt" }),
         getFollowups({ limit: 100 }),
       ]);
+
+      const endpointNames = [
+        "accounting",
+        "raw-material stock",
+        "product stock",
+        "orders",
+        "enquiries",
+        "payments",
+        "follow-ups",
+      ];
+
+      const failedEndpoints = r
+        .map((result, index) =>
+          result.status === "rejected" ? endpointNames[index] : null
+        )
+        .filter(Boolean);
+
       const v = (x) => (x.status === "fulfilled" ? x.value : null);
+
       setData({
         accounting: safeObj(v(r[0])),
         rawStock: safeArr(v(r[1])),
@@ -204,6 +233,12 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
         payments: safeArr(v(r[5])),
         followups: safeArr(v(r[6])),
       });
+
+      setError(
+        failedEndpoints.length
+          ? `Some dashboard data could not be loaded: ${failedEndpoints.join(", ")}. Figures that depend on these endpoints may be incomplete.`
+          : ""
+      );
     } catch (err) {
       console.error("Dashboard fetch failed:", err);
       setError(err?.message || "Failed to load dashboard data.");
@@ -220,7 +255,6 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
     }
   }, [fetchAll, autoRefreshMs]);
 
-  /* FIX: memoize all derived data so we only recompute when `data` changes */
   const derived = useMemo(() => {
     /* ── Normalized stock ──────────────────────────────────────── */
     const stockItems = [
@@ -238,6 +272,7 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
     const cash = {
       net: num(o.netCashPosition),
       payables: num(o.totalPayables),
+      salaryPayables: num(o.totalSalaryPayables), // NEW
       receivables: num(o.accountsReceivable),
       netProfit: num(o.netProfit),
     };
@@ -246,6 +281,7 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
     const activeOrders = data.orders.filter((ord) =>
       ORDER_ACTIVE.includes(String(ord.status || "").toLowerCase())
     );
+
     const orderBook = {
       count: activeOrders.length,
       total: activeOrders.reduce((s, ord) => s + num(ord.grandTotal), 0),
@@ -258,13 +294,16 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
     const closedEnq = data.enquiries.filter((e) =>
       ENQUIRY_CLOSED.includes(String(e.status || "").toLowerCase())
     );
+
     const won = closedEnq.filter(
       (e) => String(e.status || "").toLowerCase() === "converted"
     ).length;
+
     const pipeline = {
       count: openEnq.length,
       total: openEnq.reduce((s, e) => s + num(e.estimatedValue), 0),
-      convRate: closedEnq.length > 0 ? Math.round((won / closedEnq.length) * 100) : 0,
+      convRate:
+        closedEnq.length > 0 ? Math.round((won / closedEnq.length) * 100) : 0,
     };
 
     /* ── Stock health ──────────────────────────────────────────── */
@@ -272,32 +311,40 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
     const criticalCount = criticalStock.length;
     const lowCount = lowStock.length;
     const healthy = Math.max(totalRecords - criticalCount - lowCount, 0);
+
     const stockHealth = {
       totalRecords,
       lowCount,
       criticalCount,
-      pct: totalRecords > 0 ? Math.round((healthy / totalRecords) * 100) : 100,
+      pct:
+        totalRecords > 0
+          ? Math.round((healthy / totalRecords) * 100)
+          : 100,
     };
 
     /* ── Revenue series ────────────────────────────────────────── */
-    const revenueSeries = (data.accounting?.profitLoss?.monthlyData || []).map((m) => ({
-      label: m.month || m.label || "",
-      revenue: num(m.revenue),
-      expenses: num(m.expenses),
-      net: num(m.netProfit),
-    }));
+    const revenueSeries = (data.accounting?.profitLoss?.monthlyData || []).map(
+      (m) => ({
+        label: m.month || m.label || "",
+        revenue: num(m.revenue),
+        expenses: num(m.expenses),
+        net: num(m.netProfit),
+      })
+    );
 
     /* ── Alerts ────────────────────────────────────────────────── */
     const now = Date.now();
 
     const delayedOrders = data.orders.filter((ord) => {
-      if (ORDER_DONE.includes(String(ord.status || "").toLowerCase())) return false;
+      if (ORDER_DONE.includes(String(ord.status || "").toLowerCase()))
+        return false;
       const due = ord.expectedDeliveryDate;
       return due && new Date(due).getTime() < now;
     });
 
     const unpaidOrders = data.orders.filter((ord) => {
-      if (ORDER_DONE.includes(String(ord.status || "").toLowerCase())) return false;
+      if (ORDER_DONE.includes(String(ord.status || "").toLowerCase()))
+        return false;
       const paid = num(ord.amountPaid);
       const total = num(ord.grandTotal);
       if (total <= 0 || paid >= total - 0.01) return false;
@@ -306,8 +353,10 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
     });
 
     const cutoff = now - 7 * 86400_000;
+
     const stuckEnquiries = data.enquiries.filter((e) => {
-      if (ENQUIRY_CLOSED.includes(String(e.status || "").toLowerCase())) return false;
+      if (ENQUIRY_CLOSED.includes(String(e.status || "").toLowerCase()))
+        return false;
       const last = e.updatedAt || e.createdAt;
       return last && new Date(last).getTime() < cutoff;
     });
@@ -324,6 +373,7 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
       todayStart.getDate()
     ).getTime();
     const end = start + 86400_000;
+
     const todayFollowups = data.followups.filter((f) => {
       if (String(f.status || "") !== "Pending") return false;
       if (!f.scheduledAt) return false;
@@ -356,7 +406,10 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
   return { data, loading, error, refetch: fetchAll, derived };
 }
 
-/* FIX: actually render the sparkline that ControlStrip already passes in */
+/* ══════════════════════════════════════════════════════════════════
+   HERO METRIC
+   ══════════════════════════════════════════════════════════════════ */
+
 function HeroMetric({
   label,
   value,
@@ -405,37 +458,62 @@ function HeroMetric({
   );
 }
 
-function ControlStrip({ loading, cash, orderBook, pipeline, stockHealth, revenueSeries }) {
+/* ══════════════════════════════════════════════════════════════════
+   CONTROL STRIP
+   ══════════════════════════════════════════════════════════════════ */
+
+function ControlStrip({
+  loading,
+  cash,
+  orderBook,
+  pipeline,
+  stockHealth,
+  revenueSeries,
+}) {
+  // Only the Cash card gets a revenue sparkline — other metrics aren't
+  // revenue-related so the series was misleading.
   const spark = revenueSeries.map((r) => r.revenue);
+
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <HeroMetric
         label="Cash Position"
         value={formatINR(cash.net)}
-        context={cash.payables > 0 ? `${formatINR(cash.payables)} payables` : "No payables"}
+        context={
+          cash.payables > 0
+            ? `${formatINR(cash.payables)} payables`
+            : "No payables"
+        }
         icon={Wallet}
         tint="bg-slate-100 text-slate-700 border-slate-200"
         sparkValues={spark}
         loading={loading}
       />
+
       <HeroMetric
         label="Order Book"
         value={formatINR(orderBook.total)}
-        context={`${orderBook.count} active order${orderBook.count !== 1 ? "s" : ""}`}
+        context={`${orderBook.count} active order${
+          orderBook.count !== 1 ? "s" : ""
+        }`}
         icon={Package}
         tint="bg-blue-50 text-blue-600 border-blue-100"
-        sparkValues={spark}
+        sparkValues={[]}
         loading={loading}
       />
+
       <HeroMetric
         label="Pipeline"
         value={formatINR(pipeline.total)}
-        context={`${pipeline.count} enquir${pipeline.count !== 1 ? "ies" : "y"} open · ${pipeline.convRate}% conv`}
+        context={`${pipeline.count} enquir${
+          pipeline.count !== 1 ? "ies" : "y"
+        } open · ${pipeline.convRate}% conv`}
         icon={TrendingUp}
         tint="bg-indigo-50 text-indigo-600 border-indigo-100"
-        sparkValues={spark}
+        sparkValues={[]}
         loading={loading}
       />
+
       <HeroMetric
         label="Stock Health"
         value={`${stockHealth.pct}%`}
@@ -454,12 +532,16 @@ function ControlStrip({ loading, cash, orderBook, pipeline, stockHealth, revenue
             ? "bg-amber-50 text-amber-600 border-amber-100"
             : "bg-red-50 text-red-600 border-red-100"
         }
-        sparkValues={spark}
+        sparkValues={[]}
         loading={loading}
       />
     </div>
   );
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   ACTION QUEUE
+   ══════════════════════════════════════════════════════════════════ */
 
 const SEVERITY_DOT = {
   critical: "bg-red-500",
@@ -471,15 +553,26 @@ function buildActionQueue(d) {
   const items = [];
 
   if (d.criticalStock.length > 0) {
-    const names = d.criticalStock.slice(0, 2).map((c) => c.name).filter(Boolean);
+    const names = d.criticalStock
+      .slice(0, 2)
+      .map((c) => c.name)
+      .filter(Boolean);
+
     items.push({
       id: "critical-stock",
       severity: "critical",
       icon: AlertTriangle,
-      title: `${d.criticalStock.length} item${d.criticalStock.length !== 1 ? "s" : ""} at critical stock`,
-      detail: names.length > 0
-        ? `${names.join(", ")}${d.criticalStock.length > 2 ? ` +${d.criticalStock.length - 2} more` : ""}`
-        : "Production may stop",
+      title: `${d.criticalStock.length} item${
+        d.criticalStock.length !== 1 ? "s" : ""
+      } at critical stock`,
+      detail:
+        names.length > 0
+          ? `${names.join(", ")}${
+              d.criticalStock.length > 2
+                ? ` +${d.criticalStock.length - 2} more`
+                : ""
+            }`
+          : "Production may stop",
       action: "Order now",
       route: "/rawmats",
     });
@@ -490,26 +583,37 @@ function buildActionQueue(d) {
     const first = d.delayedOrders[0];
     const customer = first.contact?.company || first.contact?.name || "";
     const late = daysAgo(first.expectedDeliveryDate);
+
     items.push({
       id: "delayed-orders",
       severity: "critical",
       icon: Truck,
-      title: `${d.delayedOrders.length} order${d.delayedOrders.length !== 1 ? "s" : ""} past delivery date`,
-      detail: `${formatINR(value)} at risk · ${customer ? `${customer} ${late}d late` : "Reschedule"}`,
+      title: `${d.delayedOrders.length} order${
+        d.delayedOrders.length !== 1 ? "s" : ""
+      } past delivery date`,
+      detail: `${formatINR(value)} at risk · ${
+        customer ? `${customer} ${late}d late` : "Reschedule"
+      }`,
       action: "Dispatch",
-      route: "/rawmats",
+      // FIX: was "/rawmats" — orders actions belong on the orders page
+      route: "/orders",
     });
   }
 
   if (d.overdueFollowups.length > 0) {
     const oldest = d.overdueFollowups[0];
     const late = daysAgo(oldest.scheduledAt);
+
     items.push({
       id: "overdue-followups",
       severity: "critical",
       icon: Clock,
-      title: `${d.overdueFollowups.length} overdue follow-up${d.overdueFollowups.length !== 1 ? "s" : ""}`,
-      detail: oldest.contact?.name ? `${oldest.contact.name} · ${late}d late` : `${late}d late`,
+      title: `${d.overdueFollowups.length} overdue follow-up${
+        d.overdueFollowups.length !== 1 ? "s" : ""
+      }`,
+      detail: oldest.contact?.name
+        ? `${oldest.contact.name} · ${late}d late`
+        : `${late}d late`,
       action: "Call",
       route: "/follow-ups",
     });
@@ -520,14 +624,30 @@ function buildActionQueue(d) {
       (s, o) => s + Math.max(num(o.grandTotal) - num(o.amountPaid), 0),
       0
     );
+
     items.push({
       id: "unpaid-orders",
       severity: "warning",
       icon: IndianRupee,
-      title: `${d.unpaidOrders.length} order${d.unpaidOrders.length !== 1 ? "s" : ""} with balance past delivery`,
+      title: `${d.unpaidOrders.length} order${
+        d.unpaidOrders.length !== 1 ? "s" : ""
+      } with balance past delivery`,
       detail: `${formatINR(due)} receivable at risk`,
       action: "Collect",
       route: "/payments",
+    });
+  }
+
+  // NEW: salaries accrued but not yet paid
+  if (d.salaryPayables > 0) {
+    items.push({
+      id: "salary-payables",
+      severity: "warning",
+      icon: IndianRupee,
+      title: `Salaries payable: ${formatINR(d.salaryPayables)}`,
+      detail: "Accrued but unpaid salary balances",
+      action: "Pay",
+      route: "/salary",
     });
   }
 
@@ -536,7 +656,9 @@ function buildActionQueue(d) {
       id: "low-stock",
       severity: "warning",
       icon: AlertTriangle,
-      title: `${d.lowStock.length} item${d.lowStock.length !== 1 ? "s" : ""} below reorder`,
+      title: `${d.lowStock.length} item${
+        d.lowStock.length !== 1 ? "s" : ""
+      } below reorder`,
       detail: "Purchase or reorder recommended",
       action: "Review",
       route: "/rawmats",
@@ -546,11 +668,14 @@ function buildActionQueue(d) {
   if (d.stuckEnquiries.length > 0) {
     const oldest = d.stuckEnquiries[0];
     const stuck = daysAgo(oldest.updatedAt || oldest.createdAt);
+
     items.push({
       id: "stuck-enquiries",
       severity: "warning",
       icon: PauseCircle,
-      title: `${d.stuckEnquiries.length} enquir${d.stuckEnquiries.length !== 1 ? "ies" : "y"} stuck 7d+`,
+      title: `${d.stuckEnquiries.length} enquir${
+        d.stuckEnquiries.length !== 1 ? "ies" : "y"
+      } stuck 7d+`,
       detail: `Oldest: ${oldest.customerName || "—"} (${stuck}d)`,
       action: "Follow up",
       route: "/enquiries",
@@ -562,7 +687,9 @@ function buildActionQueue(d) {
       id: "ready-to-dispatch",
       severity: "warning",
       icon: Package,
-      title: `${d.readyForDispatch.length} order${d.readyForDispatch.length !== 1 ? "s" : ""} ready for dispatch`,
+      title: `${d.readyForDispatch.length} order${
+        d.readyForDispatch.length !== 1 ? "s" : ""
+      } ready for dispatch`,
       detail: "Awaiting pickup or invoice",
       action: "Dispatch",
       route: "/orders",
@@ -570,12 +697,18 @@ function buildActionQueue(d) {
   }
 
   if (d.todayFollowups.length > 0) {
-    const names = d.todayFollowups.slice(0, 2).map((f) => f.contact?.name).filter(Boolean);
+    const names = d.todayFollowups
+      .slice(0, 2)
+      .map((f) => f.contact?.name)
+      .filter(Boolean);
+
     items.push({
       id: "today-followups",
       severity: "neutral",
       icon: Clock,
-      title: `${d.todayFollowups.length} follow-up${d.todayFollowups.length !== 1 ? "s" : ""} today`,
+      title: `${d.todayFollowups.length} follow-up${
+        d.todayFollowups.length !== 1 ? "s" : ""
+      } today`,
       detail: names.length > 0 ? names.join(", ") : "Open schedule",
       action: "Open",
       route: "/follow-ups",
@@ -595,6 +728,7 @@ function ActionQueue({
   overdueFollowups = [],
   todayFollowups = [],
   readyForDispatch = [],
+  salaryPayables = 0, // NEW
 }) {
   const navigate = useNavigate();
 
@@ -607,7 +741,9 @@ function ActionQueue({
     overdueFollowups,
     todayFollowups,
     readyForDispatch,
+    salaryPayables, // NEW
   });
+
   const criticalCount = queue.filter((q) => q.severity === "critical").length;
 
   return (
@@ -622,9 +758,12 @@ function ActionQueue({
               ? "Scanning across the business…"
               : queue.length === 0
               ? "All clear — nothing needs attention"
-              : `${queue.length} item${queue.length !== 1 ? "s" : ""} need${queue.length === 1 ? "s" : ""} action`}
+              : `${queue.length} item${queue.length !== 1 ? "s" : ""} need${
+                  queue.length === 1 ? "s" : ""
+                } action`}
           </p>
         </div>
+
         {!loading && queue.length > 0 && (
           <span
             className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-semibold tabular-nums ${
@@ -679,6 +818,7 @@ function ActionQueue({
                     }`}
                   />
                 </div>
+
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-xs font-semibold text-black">
                     {item.title}
@@ -687,6 +827,7 @@ function ActionQueue({
                     {item.detail}
                   </p>
                 </div>
+
                 <button
                   onClick={() => navigate(item.route)}
                   className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-semibold text-black transition hover:border-slate-300 hover:bg-slate-50 active:translate-y-px"
@@ -719,6 +860,10 @@ function ActionQueue({
   );
 }
 
+/* ══════════════════════════════════════════════════════════════════
+   STAT TILE
+   ══════════════════════════════════════════════════════════════════ */
+
 function StatTile({ label, value, sub, icon: Icon, tint }) {
   return (
     <div className="group relative overflow-hidden rounded-xl border border-slate-200 bg-white p-4 transition duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md hover:shadow-slate-200/50">
@@ -743,8 +888,13 @@ function StatTile({ label, value, sub, icon: Icon, tint }) {
   );
 }
 
+/* ══════════════════════════════════════════════════════════════════
+   FINANCIAL SNAPSHOT
+   ══════════════════════════════════════════════════════════════════ */
+
 function FinancialSnapshot({ loading, accounting }) {
   const navigate = useNavigate();
+
   const o = accounting?.overview || {};
   const pl = accounting?.profitLoss || {};
   const meta = accounting?.meta || {};
@@ -753,6 +903,7 @@ function FinancialSnapshot({ loading, accounting }) {
   const payables = num(o.totalPayables);
   const receivables = num(o.accountsReceivable);
   const netProfit = num(o.netProfit);
+
   const monthly = pl.monthlyData || [];
   const ytdRev = num(pl.totalRevenue);
   const ytdExp = num(pl.totalExpenses);
@@ -767,10 +918,13 @@ function FinancialSnapshot({ loading, accounting }) {
           </h2>
           <p className="mt-1 text-xs text-slate-500">
             {meta.fiscalYearStart
-              ? `${formatDate(meta.fiscalYearStart)} → ${formatDate(meta.asOf)}`
+              ? `${formatDate(meta.fiscalYearStart)} → ${formatDate(
+                  meta.asOf
+                )}`
               : "Current fiscal period"}
           </p>
         </div>
+
         <button
           onClick={() => navigate("/accounting")}
           className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-semibold text-black transition hover:border-slate-300 hover:bg-slate-50"
@@ -781,26 +935,31 @@ function FinancialSnapshot({ loading, accounting }) {
       </div>
 
       {loading ? (
-          <div className="grid grid-cols-2 gap-3 p-4">
-            {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="rounded-xl border border-slate-200 bg-white p-4">
-                <div className="shimmer h-9 w-9 rounded-xl" />
-                <div className="shimmer mt-3.5 h-2.5 w-20 rounded" />
-                <div className="shimmer mt-2 h-5 w-24 rounded" />
-                <div className="shimmer mt-2 h-2.5 w-28 rounded" />
-              </div>
-            ))}
-          </div>
-        ) : (
+        <div className="grid grid-cols-2 gap-3 p-4">
+          {[1, 2, 3, 4].map((i) => (
+            <div
+              key={i}
+              className="rounded-xl border border-slate-200 bg-white p-4"
+            >
+              <div className="shimmer h-9 w-9 rounded-xl" />
+              <div className="shimmer mt-3.5 h-2.5 w-20 rounded" />
+              <div className="shimmer mt-2 h-5 w-24 rounded" />
+              <div className="shimmer mt-2 h-2.5 w-28 rounded" />
+            </div>
+          ))}
+        </div>
+      ) : (
         <>
           <div className="grid grid-cols-2 gap-3 p-4">
             <StatTile
               label="Cash Position"
               value={formatINR(cash)}
-              sub="Payments − paid expenses"
+              // FIX: was "Payments − paid expenses" — now includes suppliers and salaries
+              sub="Cash in − all cash out"
               icon={Wallet}
               tint="bg-slate-100 text-slate-700 border-slate-200"
             />
+
             <StatTile
               label="Receivables"
               value={formatINR(receivables)}
@@ -808,17 +967,24 @@ function FinancialSnapshot({ loading, accounting }) {
               icon={ArrowDownToLine}
               tint="bg-blue-50 text-blue-600 border-blue-100"
             />
+
             <StatTile
               label="Payables"
               value={formatINR(payables)}
-              sub="Unpaid expenses"
+              // FIX: was "Unpaid expenses" — now includes suppliers + salaries
+              sub="Suppliers · expenses · salaries"
               icon={ArrowUpFromLine}
               tint="bg-amber-50 text-amber-600 border-amber-100"
             />
+
             <StatTile
               label="Net Profit"
               value={formatINR(netProfit)}
-              sub={ytdRev > 0 ? `${margin}% margin on ${formatINR(ytdRev)}` : "No revenue yet"}
+              sub={
+                ytdRev > 0
+                  ? `${margin}% margin on ${formatINR(ytdRev)}`
+                  : "No revenue yet"
+              }
               icon={netProfit >= 0 ? TrendingUp : TrendingDown}
               tint={
                 netProfit >= 0
@@ -827,6 +993,7 @@ function FinancialSnapshot({ loading, accounting }) {
               }
             />
           </div>
+
           <div className="grid grid-cols-2 divide-x divide-slate-100 border-t border-slate-100 bg-slate-50/50">
             <div className="px-5 py-2.5">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
@@ -850,7 +1017,11 @@ function FinancialSnapshot({ loading, accounting }) {
 
       <div className="mt-auto flex items-center justify-between border-t border-slate-100 bg-slate-50/50 px-5 py-2.5">
         <span className="text-[10px] text-slate-500">
-          {loading ? "Loading…" : `${monthly.length} month${monthly.length !== 1 ? "s" : ""} of data`}
+          {loading
+            ? "Loading…"
+            : `${monthly.length} month${
+                monthly.length !== 1 ? "s" : ""
+              } of data`}
         </span>
         <button
           onClick={() => navigate("/accounting")}
@@ -864,7 +1035,7 @@ function FinancialSnapshot({ loading, accounting }) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   ZONE 4 — PIPELINE VELOCITY
+   PIPELINE VELOCITY
    ══════════════════════════════════════════════════════════════════ */
 
 function PipelineVelocity({ loading, enquiries, orders }) {
@@ -873,20 +1044,20 @@ function PipelineVelocity({ loading, enquiries, orders }) {
   const enqCount = enquiries.length;
   const orderCount = orders.length;
 
-  /* FIX: case-insensitive status comparison (was brittle "delivered"/"Delivered") */
   const delivered = orders.filter(
     (o) => String(o.status || "").toLowerCase() === "delivered"
   ).length;
 
   const counts = [enqCount, orderCount, delivered];
+
   const conv = [
     null,
     enqCount > 0 ? Math.round((orderCount / enqCount) * 100) : 0,
     orderCount > 0 ? Math.round((delivered / orderCount) * 100) : 0,
   ];
+
   const max = Math.max(...counts, 1);
 
-  /* FIX: same case-insensitive fix for enquiries */
   const stuck = enquiries
     .filter((e) => {
       const s = String(e.status || "").toLowerCase();
@@ -929,10 +1100,13 @@ function PipelineVelocity({ loading, enquiries, orders }) {
                 </span>
               </div>
             </div>
+
             <div className="h-2 overflow-hidden rounded-full bg-slate-100">
               <div
                 className="h-full rounded-full bg-[#0f172a] transition-all duration-500"
-                style={{ width: loading ? "0%" : `${(counts[i] / max) * 100}%` }}
+                style={{
+                  width: loading ? "0%" : `${(counts[i] / max) * 100}%`,
+                }}
               />
             </div>
           </div>
@@ -951,6 +1125,7 @@ function PipelineVelocity({ loading, enquiries, orders }) {
             {stuck.length}
           </span>
         </div>
+
         {loading ? (
           <div className="space-y-2 px-5 pb-4">
             {[1, 2].map((i) => (
@@ -976,6 +1151,7 @@ function PipelineVelocity({ loading, enquiries, orders }) {
                     {s.stage} · {s.days}d inactive
                   </p>
                 </div>
+
                 <button className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-semibold text-black transition hover:bg-slate-50">
                   Chase
                   <ArrowRight size={10} />
@@ -990,7 +1166,7 @@ function PipelineVelocity({ loading, enquiries, orders }) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   ZONE 5 — ACTIVITY STREAM
+   ACTIVITY STREAM
    ══════════════════════════════════════════════════════════════════ */
 
 const TONE_TILE = {
@@ -1001,32 +1177,49 @@ const TONE_TILE = {
 
 function buildFeed({ orders, payments, enquiries }) {
   const feed = [];
+
   orders.slice(0, 8).forEach((o) => {
     feed.push({
-      id: `o-${o._id}`, icon: Package, tone: "blue",
+      id: `o-${o._id}`,
+      icon: Package,
+      tone: "blue",
       text: `Order ${o.orderNumber || ""} · ${o.status}`,
-      meta: `${o.contact?.company || o.contact?.name || "Customer"} · ${formatINR(o.grandTotal)}`,
+      meta: `${o.contact?.company || o.contact?.name || "Customer"} · ${formatINR(
+        o.grandTotal
+      )}`,
       at: o.updatedAt || o.createdAt,
     });
   });
+
   payments.slice(0, 8).forEach((p) => {
     feed.push({
-      id: `p-${p._id}`, icon: IndianRupee, tone: "emerald",
-      text: p.status === "Completed"
-        ? `Payment received · ${formatINR(p.amount)}`
-        : `Payment ${p.status?.toLowerCase()} · ${formatINR(p.amount)}`,
-      meta: p.contact?.company || p.contact?.name || p.order?.contact?.company || "Customer",
+      id: `p-${p._id}`,
+      icon: IndianRupee,
+      tone: "emerald",
+      text:
+        p.status === "Completed"
+          ? `Payment received · ${formatINR(p.amount)}`
+          : `Payment ${p.status?.toLowerCase()} · ${formatINR(p.amount)}`,
+      meta:
+        p.contact?.company ||
+        p.contact?.name ||
+        p.order?.contact?.company ||
+        "Customer",
       at: p.updatedAt || p.createdAt,
     });
   });
+
   (enquiries || []).slice(0, 8).forEach((e) => {
     feed.push({
-      id: `e-${e._id}`, icon: Inbox, tone: "amber",
+      id: `e-${e._id}`,
+      icon: Inbox,
+      tone: "amber",
       text: `Enquiry · ${e.status || "New"}`,
       meta: e.customerName || "Customer",
       at: e.updatedAt || e.createdAt,
     });
   });
+
   return feed
     .filter((f) => f.at)
     .sort((a, b) => new Date(b.at) - new Date(a.at))
@@ -1077,9 +1270,12 @@ function ActivityStream({ loading, orders, payments, enquiries }) {
                 key={f.id}
                 className="flex items-start gap-3 px-5 py-3 transition hover:bg-slate-50"
               >
-                <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border ${tone}`}>
+                <div
+                  className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border ${tone}`}
+                >
                   <Icon size={13} />
                 </div>
+
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-xs font-semibold text-black">
                     {f.text}
@@ -1088,6 +1284,7 @@ function ActivityStream({ loading, orders, payments, enquiries }) {
                     {f.meta}
                   </p>
                 </div>
+
                 <span className="shrink-0 whitespace-nowrap text-[10px] text-slate-400">
                   {timeAgo(f.at)}
                 </span>
@@ -1101,7 +1298,7 @@ function ActivityStream({ loading, orders, payments, enquiries }) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   ZONE 6 — LOW STOCK ALERT
+   LOW STOCK PANEL
    ══════════════════════════════════════════════════════════════════ */
 
 const SEV_BADGE = {
@@ -1111,11 +1308,9 @@ const SEV_BADGE = {
 };
 
 const SEV_LABEL = { out: "Out", critical: "Critical", low: "Low" };
-
 const SEV_ORDER = { out: 0, critical: 1, low: 2 };
 
 function LowStockPanel({ loading, stockItems }) {
-  /* FIX: use router navigation instead of window.location.href (was a full page reload) */
   const navigate = useNavigate();
   const [filter, setFilter] = useState("all");
 
@@ -1150,7 +1345,9 @@ function LowStockPanel({ loading, stockItems }) {
                 ? "Scanning…"
                 : alertItems.length === 0
                 ? "All items above reorder level"
-                : `${alertItems.length} item${alertItems.length !== 1 ? "s" : ""} need${alertItems.length === 1 ? "s" : ""} attention`}
+                : `${alertItems.length} item${
+                    alertItems.length !== 1 ? "s" : ""
+                  } need${alertItems.length === 1 ? "s" : ""} attention`}
             </p>
           </div>
         </div>
@@ -1193,7 +1390,9 @@ function LowStockPanel({ loading, stockItems }) {
           <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
             <CheckCircle2 size={20} />
           </div>
-          <h4 className="mt-3 text-sm font-semibold text-black">Stock is healthy</h4>
+          <h4 className="mt-3 text-sm font-semibold text-black">
+            Stock is healthy
+          </h4>
           <p className="mt-1 max-w-[260px] text-xs text-slate-500">
             {filter === "all"
               ? "No items below reorder level right now."
@@ -1301,7 +1500,9 @@ function LowStockPanel({ loading, stockItems }) {
         <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50/50 px-5 py-2.5">
           <span className="text-[10px] text-slate-500">
             {criticalCount > 0
-              ? `${criticalCount} critical · ${alertItems.length - criticalCount} low`
+              ? `${criticalCount} critical · ${
+                  alertItems.length - criticalCount
+                } low`
               : `${alertItems.length} low`}
           </span>
           <button
@@ -1317,6 +1518,10 @@ function LowStockPanel({ loading, stockItems }) {
     </div>
   );
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   DASHBOARD
+   ══════════════════════════════════════════════════════════════════ */
 
 export default function Dashboard() {
   const { data, loading, error, refetch, derived } = useDashboardData({
@@ -1337,19 +1542,15 @@ export default function Dashboard() {
         <div>
           <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-black">
             <span>COMMAND CONSOLE</span>
-
             <span className="text-slate-300">/</span>
-
             <span className="flex items-center gap-1.5">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
               Live Operations
             </span>
           </div>
-
           <h1 className="text-[28px] font-semibold tracking-tight text-black">
             Good morning, Admin
           </h1>
-
           <p className="mt-1.5 text-sm text-black">
             {today} · Here's what needs your attention.
           </p>
@@ -1361,10 +1562,7 @@ export default function Dashboard() {
             className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900"
             title="Refresh"
           >
-            <RefreshCw
-              size={15}
-              className={loading ? "animate-spin" : ""}
-            />
+            <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
           </button>
         </div>
       </div>
@@ -1400,8 +1598,8 @@ export default function Dashboard() {
           overdueFollowups={derived.overdueFollowups}
           todayFollowups={derived.todayFollowups}
           readyForDispatch={derived.readyForDispatch}
+          salaryPayables={derived.cash.salaryPayables} // NEW
         />
-
         <FinancialSnapshot
           loading={loading}
           accounting={data.accounting}
@@ -1410,10 +1608,7 @@ export default function Dashboard() {
 
       {/* ZONE 4 — LOW STOCK */}
       <div className="mb-6">
-        <LowStockPanel
-          loading={loading}
-          stockItems={derived.stockItems}
-        />
+        <LowStockPanel loading={loading} stockItems={derived.stockItems} />
       </div>
 
       {/* ZONES 5 + 6 — PIPELINE + ACTIVITY */}
@@ -1423,7 +1618,6 @@ export default function Dashboard() {
           enquiries={data.enquiries}
           orders={data.orders}
         />
-
         <ActivityStream
           loading={loading}
           orders={data.orders}

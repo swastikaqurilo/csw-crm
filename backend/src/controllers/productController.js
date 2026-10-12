@@ -3,7 +3,7 @@ const ProductProduction = require("../models/Product");
 const ProductStock = require("../models/ProductStock");
 const { RawStock } = require("../models/RawMaterial");
 const { computeConsumption, REEL_COMPOSITION } = require("../utils/reelComposition");
-const { Worker } = require("../models/Worker");
+const { Worker, Attendance } = require("../models/Worker");
 const REEL_WEIGHTS = {
   "2kg": 2,
   "5kg": 5,
@@ -57,29 +57,44 @@ const parseNum = (v, field, max = MAX_QTY) => {
   return n;
 };
 
-const findSteelStock = () =>
-  RawStock.findOne({ category: "Steel", isActive: true }).sort({ createdAt: 1 });
+/* ------------------------------------------------------------------ */
+/*  STOCK FINDERS — accept an optional session                        */
+/* ------------------------------------------------------------------ */
 
-const findTapeStock = () =>
-  RawStock.findOne({ category: "Tape", isActive: true }).sort({ createdAt: 1 });
+const findSteelStock = (session = null) => {
+  const q = RawStock.findOne({ category: "Steel", isActive: true }).sort({ createdAt: 1 });
+  return session ? q.session(session) : q;
+};
 
-const findReelStock = (size) => {
+const findTapeStock = (session = null) => {
+  const q = RawStock.findOne({ category: "Tape", isActive: true }).sort({ createdAt: 1 });
+  return session ? q.session(session) : q;
+};
+
+const findReelStock = (size, session = null) => {
   const kg = Number(String(size).replace("kg", ""));
   if (!Number.isFinite(kg) || kg <= 0) return null;
 
-  return RawStock.findOne({
+  const q = RawStock.findOne({
     category: "Reel",
     isActive: true,
     name: { $regex: new RegExp(`(^|\\D)${kg}\\s*kg(\\D|$)`, "i") },
   });
+
+  return session ? q.session(session) : q;
 };
+
+/* ------------------------------------------------------------------ */
+/*  VERIFY — pass session through to the finders                      */
+/* ------------------------------------------------------------------ */
 
 const verifyStockAvailable = async (
   { steelNeeded, reelsBySize, tapeNeeded = 0 },
-  allowReserved = false
+  allowReserved = false,
+  session = null
 ) => {
   if (steelNeeded > 0) {
-    const steel = await findSteelStock();
+    const steel = await findSteelStock(session);
     if (!steel) {
       throw { status: 400, message: "No Steel raw material configured. Add one under Raw Materials first." };
     }
@@ -111,7 +126,7 @@ const verifyStockAvailable = async (
 
   for (const [size, qty] of Object.entries(reelsBySize)) {
     if (!qty || qty <= 0) continue;
-    const reel = await findReelStock(size);
+    const reel = await findReelStock(size, session);
     if (!reel) {
       throw { status: 400, message: `No ${size} Reel raw material found. Add it under Raw Materials first.` };
     }
@@ -143,7 +158,7 @@ const verifyStockAvailable = async (
   }
 
   if (tapeNeeded > 0) {
-    const tape = await findTapeStock();
+    const tape = await findTapeStock(session);
     if (!tape) {
       throw { status: 400, message: "No Tape raw material configured. Add one under Raw Materials first." };
     }
@@ -575,8 +590,7 @@ const revertProductionFromStock = async ({ qtys, productionId, userId, session =
   }
 };
 
-// NEW: apply only the difference between old and new production quantities.
-// This is what updateProduction uses instead of revert-all-then-apply-all.
+// Apply only the difference between old and new production quantities.
 const adjustProductionStockByDelta = async ({ oldQtys, newQtys, productionId, userId, session = null }) => {
   for (const size of SIZES) {
     const oldQty = Number(oldQtys[size] || 0);
@@ -673,7 +687,7 @@ const buildQtys = (entry) => ({
   "10kg": Number(entry.qty10kg || 0),
 });
 
-const buildWorkerProduction = async (workers, dailyQtys) => {
+const buildWorkerProduction = async (workers, dailyQtys, productionDate) => {
   if (workers === undefined || workers === null) {
     return [];
   }
@@ -682,10 +696,22 @@ const buildWorkerProduction = async (workers, dailyQtys) => {
     throw { status: 400, message: "workers must be an array" };
   }
 
+  let attendance = null;
+
+  if (productionDate) {
+    const date = new Date(productionDate);
+    const dateString = [
+      date.getFullYear(),
+      String(date.getMonth() + 1).padStart(2, "0"),
+      String(date.getDate()).padStart(2, "0"),
+    ].join("-");
+
+    attendance = await Attendance.findOne({ date: dateString })
+      .select("allPresent absentWorkers records");
+  }
+
   const seenWorkers = new Set();
-
   const assigned = { "2kg": 0, "5kg": 0, "8kg": 0, "10kg": 0 };
-
   const result = [];
 
   for (const item of workers) {
@@ -717,6 +743,23 @@ const buildWorkerProduction = async (workers, dailyQtys) => {
       throw { status: 400, message: "Worker not found or worker is inactive." };
     }
 
+    const markedAbsent =
+      attendance?.records?.some(
+        (record) =>
+          String(record.worker) === workerId &&
+          record.status === "Absent"
+      ) ||
+      attendance?.absentWorkers?.some(
+        (id) => String(id) === workerId
+      );
+
+    if (markedAbsent) {
+      throw {
+        status: 400,
+        message: `${worker.name} is marked absent on the production date and cannot be assigned production.`,
+      };
+    }
+
     if (worker.payType !== "Variable") {
       throw {
         status: 400,
@@ -725,7 +768,6 @@ const buildWorkerProduction = async (workers, dailyQtys) => {
     }
 
     const production = item?.production || {};
-
     const cleanProduction = { "2kg": 0, "5kg": 0, "8kg": 0, "10kg": 0 };
 
     const rates = {
@@ -1283,7 +1325,11 @@ const createProduction = async (req, res) => {
       "10kg": payload.qty10kg,
     };
 
-    payload.workers = await buildWorkerProduction(workers, dailyQtys);
+    payload.workers = await buildWorkerProduction(
+      workers,
+      dailyQtys,
+      cleanDate
+    );
 
     const consumption = computeConsumption(payload);
     consumption.steelNeeded = Math.round((consumption.steelNeeded + Number(payload.scrapKg || 0)) * 1000) / 1000;
@@ -1341,44 +1387,70 @@ const createProduction = async (req, res) => {
   }
 };
 
+
 const updateProduction = async (req, res) => {
   const session = await mongoose.startSession();
+
   try {
     if (!isValidId(req.params.id)) {
-      return res.status(400).json({ success: false, message: "Invalid ID" });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid ID",
+      });
     }
 
     const { allowReserved = false } = req.body;
 
     const existing = await ProductProduction.findById(req.params.id);
+
     if (!existing || !existing.isActive) {
-      return res.status(404).json({ success: false, message: "Entry not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Entry not found",
+      });
     }
 
     const oldQtys = buildQtys(existing);
     const oldTape = Number(existing.tapeUsedBox || 0);
+
     const oldConsumed = existing.consumed
-      ? (typeof existing.consumed.toObject === "function" ? existing.consumed.toObject() : existing.consumed)
+      ? typeof existing.consumed.toObject === "function"
+        ? existing.consumed.toObject()
+        : existing.consumed
       : null;
 
     let nextDate = existing.date;
+
     if (req.body.date !== undefined) {
       const d = new Date(req.body.date);
+
       if (isNaN(d.getTime())) {
-        return res.status(400).json({ success: false, message: "Invalid date" });
+        return res.status(400).json({
+          success: false,
+          message: "Invalid date",
+        });
       }
+
       nextDate = startOfDay(d);
+
       if (nextDate.getTime() !== existing.date.getTime()) {
         const clash = await ProductProduction.findOne({
           date: nextDate,
           isActive: true,
           _id: { $ne: existing._id },
         });
+
         if (clash) {
-          return res.status(409).json({ success: false, message: "Another entry already exists for that date." });
+          return res.status(409).json({
+            success: false,
+            message: "Another entry already exists for that date.",
+          });
         }
       }
     }
+
+    const productionDateChanged =
+      nextDate.getTime() !== new Date(existing.date).getTime();
 
     let nextQtys = { ...oldQtys };
     let nextTape = oldTape;
@@ -1387,22 +1459,87 @@ const updateProduction = async (req, res) => {
     let nextWorkers = existing.workers;
 
     try {
-      if (req.body.qty2kg !== undefined) nextQtys["2kg"] = parseNum(req.body.qty2kg, "2kg quantity");
-      if (req.body.qty5kg !== undefined) nextQtys["5kg"] = parseNum(req.body.qty5kg, "5kg quantity");
-      if (req.body.qty8kg !== undefined) nextQtys["8kg"] = parseNum(req.body.qty8kg, "8kg quantity");
-      if (req.body.qty10kg !== undefined) nextQtys["10kg"] = parseNum(req.body.qty10kg, "10kg quantity");
-      if (req.body.tapeUsedBox !== undefined) nextTape = parseNum(req.body.tapeUsedBox, "tape used (boxes)");
-      if (req.body.scrapKg !== undefined) nextScrap = parseNum(req.body.scrapKg, "scrap (kg)");
+      if (req.body.qty2kg !== undefined) {
+        nextQtys["2kg"] = parseNum(req.body.qty2kg, "2kg quantity");
+      }
+
+      if (req.body.qty5kg !== undefined) {
+        nextQtys["5kg"] = parseNum(req.body.qty5kg, "5kg quantity");
+      }
+
+      if (req.body.qty8kg !== undefined) {
+        nextQtys["8kg"] = parseNum(req.body.qty8kg, "8kg quantity");
+      }
+
+      if (req.body.qty10kg !== undefined) {
+        nextQtys["10kg"] = parseNum(req.body.qty10kg, "10kg quantity");
+      }
+
+      if (req.body.tapeUsedBox !== undefined) {
+        nextTape = parseNum(
+          req.body.tapeUsedBox,
+          "tape used (boxes)"
+        );
+      }
+
+      if (req.body.scrapKg !== undefined) {
+        nextScrap = parseNum(req.body.scrapKg, "scrap (kg)");
+      }
     } catch (validationErr) {
-      return res.status(validationErr.status || 400).json({ success: false, message: validationErr.message });
+      return res.status(validationErr.status || 400).json({
+        success: false,
+        message: validationErr.message,
+      });
     }
 
     if (req.body.notes !== undefined) {
       nextNotes = safeString(req.body.notes, 1000) || undefined;
     }
 
+    // If workers were explicitly submitted, validate and rebuild assignments.
     if (req.body.workers !== undefined) {
-      nextWorkers = await buildWorkerProduction(req.body.workers, nextQtys);
+      nextWorkers = await buildWorkerProduction(
+        req.body.workers,
+        nextQtys,
+        nextDate
+      );
+    } else if (productionDateChanged && nextWorkers.length > 0) {
+      // The date changed, but the existing worker assignments were retained.
+      // Validate attendance without recalculating their wages.
+      const attendanceDate = new Date(nextDate);
+
+      const dateString = [
+        attendanceDate.getFullYear(),
+        String(attendanceDate.getMonth() + 1).padStart(2, "0"),
+        String(attendanceDate.getDate()).padStart(2, "0"),
+      ].join("-");
+
+      const attendance = await Attendance.findOne({
+        date: dateString,
+      }).select("absentWorkers records");
+
+      for (const assignment of nextWorkers) {
+        const workerId = String(assignment.worker);
+
+        const markedAbsent =
+          attendance?.records?.some(
+            (record) =>
+              String(record.worker) === workerId &&
+              record.status === "Absent"
+          ) ||
+          attendance?.absentWorkers?.some(
+            (id) => String(id) === workerId
+          );
+
+        if (markedAbsent) {
+          const err = new Error(
+            "A worker assigned to this production is marked absent on the new production date."
+          );
+
+          err.status = 400;
+          throw err;
+        }
+      }
     }
 
     const newConsumption = computeConsumption({
@@ -1411,24 +1548,33 @@ const updateProduction = async (req, res) => {
       qty8kg: nextQtys["8kg"],
       qty10kg: nextQtys["10kg"],
     });
-    newConsumption.steelNeeded = Math.round((newConsumption.steelNeeded + nextScrap) * 1000) / 1000;
-    newConsumption.reelsBySize = Object.fromEntries(
-      Object.entries(newConsumption.reelsBySize || {}).filter(([, q]) => Number(q) > 0)
-    );
-    newConsumption.tapeNeeded = nextTape;
 
-    await verifyStockAvailable(newConsumption, allowReserved);
+    newConsumption.steelNeeded = Math.round(
+      (newConsumption.steelNeeded + nextScrap) * 1000
+    ) / 1000;
+
+    newConsumption.reelsBySize = Object.fromEntries(
+      Object.entries(newConsumption.reelsBySize || {}).filter(
+        ([, q]) => Number(q) > 0
+      )
+    );
+
+    newConsumption.tapeNeeded = nextTape;
 
     let saved = null;
 
     await session.withTransaction(async () => {
-      const entry = await ProductProduction.findById(req.params.id).session(session);
+      const entry = await ProductProduction.findById(
+        req.params.id
+      ).session(session);
+
       if (!entry || !entry.isActive) {
         const err = new Error("Entry not found");
         err.status = 404;
         throw err;
       }
 
+      // 1. Restore the previous raw-material consumption.
       await refundRawMaterials({
         consumed: oldConsumed,
         productionId: entry._id,
@@ -1437,6 +1583,14 @@ const updateProduction = async (req, res) => {
         session,
       });
 
+      // 2. Validate the new consumption against restored stock.
+      await verifyStockAvailable(
+        newConsumption,
+        allowReserved,
+        session
+      );
+
+      // 3. Apply the updated production details.
       entry.date = nextDate;
       entry.qty2kg = nextQtys["2kg"];
       entry.qty5kg = nextQtys["5kg"];
@@ -1453,6 +1607,7 @@ const updateProduction = async (req, res) => {
         userId: req.user?._id,
         session,
       });
+
       entry.consumed = newConsumed;
 
       await adjustProductionStockByDelta({
@@ -1464,6 +1619,7 @@ const updateProduction = async (req, res) => {
       });
 
       entry.updatedBy = req.user?._id || null;
+
       await entry.save({ session });
       saved = entry;
     });
@@ -1479,6 +1635,7 @@ const updateProduction = async (req, res) => {
     await session.endSession();
   }
 };
+
 
 const deleteProduction = async (req, res) => {
   const session = await mongoose.startSession();

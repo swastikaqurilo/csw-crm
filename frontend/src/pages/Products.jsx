@@ -282,11 +282,38 @@ function Products() {
   const [conflict, setConflict] = useState(null); // { info, pending }
 
   /* ── fetchers ── */
-  const fetchEntries = useCallback(async () => {
-    try { setEntriesLoading(true); setEntries((await getProductProductions({ limit: 500 })).data?.data || []); }
-    catch (err) { flashMsg({ error: errMsg(err, "Failed to load production entries") }); }
-    finally { setEntriesLoading(false); }
-  }, []);
+  
+const fetchEntries = useCallback(async () => {
+  try {
+    setEntriesLoading(true);
+
+    const allEntries = [];
+    let page = 1;
+    let totalPages = 1;
+
+    do {
+      const response = await getProductProductions({
+        page,
+        limit: 200,
+      });
+
+      const body = response?.data;
+      const batch = Array.isArray(body?.data) ? body.data : [];
+
+      allEntries.push(...batch);
+      totalPages = Math.max(Number(body?.pages) || 1, 1);
+      page += 1;
+    } while (page <= totalPages);
+
+    setEntries(allEntries);
+  } catch (err) {
+    flashMsg({
+      error: errMsg(err, "Failed to load production entries"),
+    });
+  } finally {
+    setEntriesLoading(false);
+  }
+}, []);
 
   const fetchStock = useCallback(async () => {
     try { setStockLoading(true); setStock((await getProductStock()).data?.data || []); }

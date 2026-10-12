@@ -239,6 +239,13 @@ const getSalaries = async (req, res) => {
           return res.status(200).json({
             success: true,
             salaries: [],
+            summary: {
+              net: 0,
+              paid: 0,
+              advance: 0,
+              outstanding: 0,
+              open: 0,
+            },
             pagination: {
               page: pageNumber,
               limit: limitNumber,
@@ -773,6 +780,31 @@ const recordSalaryAdvance = async (req, res) => {
     });
   } catch (error) {
     console.error("[recordSalaryAdvance]", error);
+
+    if (error.name === "ValidationError") {
+      const msg = Object.values(error.errors)
+        .map((e) => e.message)
+        .join("; ");
+      return res.status(400).json({
+        success: false,
+        message: msg,
+      });
+    }
+
+    if (error.name === "CastError") {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid value for ${error.path}`,
+      });
+    }
+
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: "Duplicate advance detected",
+      });
+    }
+
     return res.status(500).json({
       success: false,
       message: "Failed to record advance",
@@ -780,10 +812,6 @@ const recordSalaryAdvance = async (req, res) => {
     });
   }
 };
-
-/* ------------------------------------------------------------------ */
-/*  DELETE ADVANCE                                                     */
-/* ------------------------------------------------------------------ */
 
 const deleteSalaryAdvance = async (req, res) => {
   try {
@@ -921,12 +949,33 @@ const calculateFixedSalary = async ({
   periodEnd,
   settings,
 }) => {
-  const joiningDate = startOfDay(worker.joiningDate);
+  
+const joiningDate = startOfDay(worker.joiningDate);
+
   const effectiveStart =
     joiningDate > periodStart ? joiningDate : periodStart;
 
-  const dates = getDaysBetween(effectiveStart, periodEnd).filter(isWorkingDay);
-  const workingDays = dates.length;
+  const calendarDaysInPeriod =
+    getDaysBetween(periodStart, periodEnd).length;
+
+  const calendarDaysEmployed =
+    effectiveStart <= periodEnd
+      ? getDaysBetween(effectiveStart, periodEnd).length
+      : 0;
+
+  // Attendance deductions still use working days only.
+  const employedDates =
+    calendarDaysEmployed > 0
+      ? getDaysBetween(effectiveStart, periodEnd).filter(isWorkingDay)
+      : [];
+
+  const workingDays = employedDates.length;
+
+  const fullPeriodWorkingDays = getDaysBetween(
+    periodStart,
+    periodEnd
+  ).filter(isWorkingDay).length;
+
 
   if (workingDays <= 0) {
     return {
@@ -967,7 +1016,7 @@ const calculateFixedSalary = async ({
   let absentDays = 0;
   let halfDays = 0;
 
-  for (const date of dates) {
+  for (const date of employedDates) {
     const dateString = getDateString(date);
     const attendance = attendanceMap.get(dateString);
 
@@ -1019,10 +1068,18 @@ const calculateFixedSalary = async ({
   const monthlySalary = Number(worker.fixedPay?.amount) || 0;
   const dailyRate = monthlySalary / SALARY_DAY_DIVISOR;
 
+  const proratedBase = Math.min(
+    monthlySalary,
+    dailyRate * calendarDaysEmployed
+  );
+
   const deductionUnits = absentDays + halfDays * 0.5;
   const absenceDeduction = dailyRate * deductionUnits;
 
-  const adjustedBasic = Math.max(0, monthlySalary - absenceDeduction);
+  const adjustedBasic = Math.max(
+    0,
+    proratedBase - absenceDeduction
+  );
 
   const effectivePresentDays = Math.max(
     workingDays - absentDays - halfDays * 0.5,
@@ -1033,6 +1090,9 @@ const calculateFixedSalary = async ({
     basicSalary: roundMoney(adjustedBasic),
     attendance: {
       workingDays,
+      fullPeriodWorkingDays,
+      calendarDaysEmployed,
+      proratedBase: roundMoney(proratedBase),
       presentDays: roundMoney(effectivePresentDays),
       absentDays,
       halfDays,
@@ -1218,6 +1278,28 @@ const generateSalaries = async (req, res) => {
         allowances,
         deductions
       );
+
+      if (existingSalary) {
+        const totalCommitted =
+          Number(existingSalary.paidAmount || 0) +
+          Number(existingSalary.advanceAmount || 0);
+
+        if (netSalary < totalCommitted - 0.001) {
+          results.push({
+            worker: worker._id,
+            name: worker.name,
+            status: "skipped",
+            reason: `Recalculated net salary (₹${netSalary.toFixed(
+              2
+            )}) is below amount already paid/advanced (₹${totalCommitted.toFixed(
+              2
+            )}). Adjust the salary record manually or remove the advance first.`,
+            salary: existingSalary,
+          });
+
+          continue;
+        }
+      }
 
       let salary;
 
