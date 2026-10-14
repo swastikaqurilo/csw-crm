@@ -135,10 +135,10 @@ const register = async (req, res) => {
       });
     }
 
-    if (typeof password !== "string" || password.length < 8) {
+    if (typeof password !== "string" || password.length < 6) {
       return res.status(400).json({
         success: false,
-        message: "Password must be at least 8 characters",
+        message: "Password must be at least 6 characters",
       });
     }
 
@@ -160,7 +160,6 @@ const register = async (req, res) => {
       });
     }
 
-    // 🔒 Enforce max account limit
     const userCount = await User.countDocuments();
     if (userCount >= MAX_ACCOUNTS) {
       return res.status(403).json({
@@ -358,10 +357,10 @@ const resetPassword = async (req, res) => {
       });
     }
 
-    if (password.length < 8) {
+    if (password.length < 6) {
       return res.status(400).json({
         success: false,
-        message: "Password must be at least 8 characters.",
+        message: "Password must be at least 6 characters.",
       });
     }
 
