@@ -627,6 +627,8 @@ const createPurchase = async (req, res) => {
     const {
       material,
       supplier,
+      supplierName,
+      supplierPhone,
       quantity,
       unit,
       unitPrice,
@@ -642,8 +644,26 @@ const createPurchase = async (req, res) => {
     if (!isValidId(material)) {
       return res.status(400).json({ success: false, message: "Valid material ID required" });
     }
-    if (!isValidId(supplier)) {
-      return res.status(400).json({ success: false, message: "Valid supplier ID required" });
+
+    const hasSupplierId = supplier && isValidId(supplier);
+    const cleanName = safeString(supplierName, 100);
+    const phoneResult = normalizePhone(supplierPhone);
+    const cleanPhone = typeof phoneResult === "string" ? phoneResult : null;
+
+    if (supplier && !hasSupplierId) {
+      return res.status(400).json({ success: false, message: "Invalid supplier ID" });
+    }
+
+    if (phoneResult && typeof phoneResult === "object" && phoneResult.error) {
+      return res.status(400).json({ success: false, message: "Invalid supplier phone number" });
+    }
+
+    // Must have at least one identifier
+    if (!hasSupplierId && !cleanName && !cleanPhone) {
+      return res.status(400).json({
+        success: false,
+        message: "Provide a supplier name, phone, or ID",
+      });
     }
 
     const mat = await RawStock.findById(material);
@@ -651,9 +671,13 @@ const createPurchase = async (req, res) => {
       return res.status(404).json({ success: false, message: "Material not found" });
     }
 
-    const sup = await Contact.findById(supplier);
-    if (!sup || sup.status !== "active") {
-      return res.status(404).json({ success: false, message: "Supplier not found or inactive" });
+    // Only look up the Contact if an ID was given
+    let sup = null;
+    if (hasSupplierId) {
+      sup = await Contact.findById(supplier);
+      if (!sup || sup.status !== "active") {
+        return res.status(404).json({ success: false, message: "Supplier not found or inactive" });
+      }
     }
 
     const qty = Number(quantity);
@@ -697,7 +721,9 @@ const createPurchase = async (req, res) => {
 
     const purchase = await RawPurchase.create({
       material,
-      supplier,
+      supplier: hasSupplierId ? supplier : null,   // null when no ID was given
+      supplierName: cleanName || (sup?.name ?? null),
+      supplierPhone: cleanPhone || (sup?.phone ?? null),
       quantity: qty,
       unit: purchaseUnit,
       unitPrice: price,
