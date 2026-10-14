@@ -34,7 +34,8 @@ app.use(
       "http://localhost:5173",
       "http://192.168.88.6:5173",
       "https://4nq08695-5173.inc1.devtunnels.ms",
-      "https://csw-crm-4l2j.vercel.app"
+      "https://csw-crm-4l2j.vercel.app",
+      "https://crm.corvexsteelwires.com"
     ],
     credentials: true,
   })
