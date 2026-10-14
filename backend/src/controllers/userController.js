@@ -153,6 +153,7 @@ const register = async (req, res) => {
 
     const existing = await User.findOne({ email: cleanEmail });
     if (existing) {
+      console.log("verify error:")
       return res.status(409).json({
         success: false,
         message: "An account with that email already exists",
@@ -193,6 +194,7 @@ const register = async (req, res) => {
     console.error("[register]", error);
 
     if (error.code === 11000) {
+      console.log("catch error:",error.message)
       return res.status(409).json({
         success: false,
         message: "An account with that email already exists 1",
