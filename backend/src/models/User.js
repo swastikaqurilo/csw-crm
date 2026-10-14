@@ -28,14 +28,14 @@ const userSchema = new mongoose.Schema(
       select: false,
     },
 
-    role: {
-      type: String,
-      enum: {
-        values: ["Admin", "Sales Manager", "Sales Executive", "Viewer"],
-        message: "{VALUE} is not a valid role",
-      },
-      default: "Sales Executive",
-    },
+    // role: {
+    //   type: String,
+    //   enum: {
+    //     values: ["Admin", "Sales Manager", "Sales Executive", "Viewer"],
+    //     message: "{VALUE} is not a valid role",
+    //   },
+    //   default: "Sales Executive",
+    // },
 
     isActive: {
       type: Boolean,

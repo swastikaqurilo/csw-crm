@@ -116,6 +116,8 @@ const login = async (req, res) => {
   }
 };
 
+const MAX_ACCOUNTS = 2; // 🔒 max accounts allowed
+
 const register = async (req, res) => {
   try {
     const { name, email, password, role } = req.body;
@@ -155,6 +157,15 @@ const register = async (req, res) => {
       return res.status(409).json({
         success: false,
         message: "An account with that email already exists",
+      });
+    }
+
+    // 🔒 Enforce max account limit
+    const userCount = await User.countDocuments();
+    if (userCount >= MAX_ACCOUNTS) {
+      return res.status(403).json({
+        success: false,
+        message: `Account limit reached. Only ${MAX_ACCOUNTS} accounts are allowed.`,
       });
     }
 

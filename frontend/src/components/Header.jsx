@@ -15,10 +15,9 @@ import {
 } from "lucide-react";
 import { getNotifications, logout as logoutApi } from "../api/api";
 
-const POLL_INTERVAL = 60_000; // refresh every 60s
+const POLL_INTERVAL = 60_000;
 const READ_STORAGE_KEY = "notifications:readIds";
 
-/* ---------- helpers ---------- */
 const loadReadIds = () => {
   try {
     const raw = localStorage.getItem(READ_STORAGE_KEY);
@@ -32,7 +31,6 @@ const saveReadIds = (set) => {
   try {
     localStorage.setItem(READ_STORAGE_KEY, JSON.stringify([...set]));
   } catch {
-    /* ignore quota errors */
   }
 };
 
@@ -232,7 +230,6 @@ function Header() {
 
   /* ---------- user display ---------- */
   const displayName = user?.name || "Admin";
-  const displayRole = user?.role || "Administrator";
   const initial = (displayName || "A").charAt(0).toUpperCase();
 
   return (
@@ -395,9 +392,6 @@ function Header() {
               <strong className="text-sm font-semibold leading-tight text-slate-800">
                 {displayName}
               </strong>
-              <span className="text-xs leading-tight text-slate-500">
-                {displayRole}
-              </span>
             </div>
             <ChevronDown
               size={14}
@@ -415,9 +409,11 @@ function Header() {
                 <p className="truncate text-sm font-semibold text-slate-900">
                   {displayName}
                 </p>
-                <p className="mt-0.5 truncate text-[11px] text-slate-500">
-                  {user?.email || displayRole}
-                </p>
+                {user?.email && (
+                  <p className="mt-0.5 truncate text-[11px] text-slate-500">
+                    {user.email}
+                  </p>
+                )}
               </div>
 
               <button
