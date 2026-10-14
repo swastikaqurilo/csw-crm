@@ -2,14 +2,31 @@ import { useCallback, useEffect, useMemo, useState, useId } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   RefreshCw,
-  Wallet, Package, TrendingUp, ShieldCheck,
-  ArrowRight, AlertTriangle, Clock, Truck, IndianRupee,
-  PauseCircle, CheckCircle2, ArrowDownToLine, ArrowUpFromLine,
-  TrendingDown, Circle, Inbox,
+  Wallet,
+  Package,
+  TrendingUp,
+  ShieldCheck,
+  ArrowRight,
+  AlertTriangle,
+  Clock,
+  Truck,
+  IndianRupee,
+  PauseCircle,
+  CheckCircle2,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  TrendingDown,
+  Circle,
+  Inbox,
 } from "lucide-react";
 import {
-  getEnquiries, getOrders, getPayments, getRawStock, getProductStock,
-  getFollowups, getAccountingDashboard,
+  getEnquiries,
+  getOrders,
+  getPayments,
+  getRawStock,
+  getProductStock,
+  getFollowups,
+  getAccountingDashboard,
 } from "../api/api";
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -62,8 +79,11 @@ const safeArr = (res) => {
 const safeObj = (res) => res?.data?.data || res?.data || null;
 
 const ORDER_ACTIVE = [
-  "confirmed", "in production", "processing",
-  "ready for dispatch", "dispatched",
+  "confirmed",
+  "in production",
+  "processing",
+  "ready for dispatch",
+  "dispatched",
 ];
 const ORDER_DONE = ["delivered", "cancelled", "canceled", "closed"];
 const ENQUIRY_OPEN = ["new", "contacted", "in progress", "in discussion", "quoted"];
@@ -127,8 +147,7 @@ function Sparkline({ values = [], h = 36 }) {
   const uid = useId();
   const gid = `spark-${uid.replace(/:/g, "")}`;
 
-  const data =
-    values.length > 1 ? values : [0, 1, 0.5, 1.5, 1, 2, 1.5, 2];
+  const data = values.length > 1 ? values : [0, 1, 0.5, 1.5, 1, 2, 1.5, 2];
 
   const w = 200;
   const min = Math.min(...data);
@@ -157,7 +176,7 @@ function Sparkline({ values = [], h = 36 }) {
     >
       <defs>
         <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#0f172a" stopOpacity="0.18" />
+          <stop offset="0%" stopColor="#0f172a" stopOpacity="0.12" />
           <stop offset="100%" stopColor="#0f172a" stopOpacity="0" />
         </linearGradient>
       </defs>
@@ -166,7 +185,7 @@ function Sparkline({ values = [], h = 36 }) {
         d={d}
         fill="none"
         stroke="#0f172a"
-        strokeWidth="1.6"
+        strokeWidth="1.5"
         strokeLinecap="round"
         strokeLinejoin="round"
         vectorEffect="non-scaling-stroke"
@@ -199,7 +218,6 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
         getAccountingDashboard({}),
         getRawStock(),
         getProductStock(),
-        // FIX: bumped from 50 to 500 so active/delayed/unpaid counts aren't truncated
         getOrders({ limit: 500, sort: "-createdAt" }),
         getEnquiries({ limit: 200, sort: "-createdAt" }),
         getPayments({ limit: 100, sort: "-createdAt" }),
@@ -256,7 +274,6 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
   }, [fetchAll, autoRefreshMs]);
 
   const derived = useMemo(() => {
-    /* ── Normalized stock ──────────────────────────────────────── */
     const stockItems = [
       ...data.rawStock.map((i) => normalizeStockItem(i, "raw")),
       ...data.productStock.map((i) => normalizeStockItem(i, "product")),
@@ -267,17 +284,15 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
     );
     const lowStock = stockItems.filter((i) => i.severity === "low");
 
-    /* ── Cash ──────────────────────────────────────────────────── */
     const o = data.accounting?.overview || {};
     const cash = {
       net: num(o.netCashPosition),
       payables: num(o.totalPayables),
-      salaryPayables: num(o.totalSalaryPayables), // NEW
+      salaryPayables: num(o.totalSalaryPayables),
       receivables: num(o.accountsReceivable),
       netProfit: num(o.netProfit),
     };
 
-    /* ── Order book ────────────────────────────────────────────── */
     const activeOrders = data.orders.filter((ord) =>
       ORDER_ACTIVE.includes(String(ord.status || "").toLowerCase())
     );
@@ -287,7 +302,6 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
       total: activeOrders.reduce((s, ord) => s + num(ord.grandTotal), 0),
     };
 
-    /* ── Enquiry pipeline ──────────────────────────────────────── */
     const openEnq = data.enquiries.filter((e) =>
       ENQUIRY_OPEN.includes(String(e.status || "").toLowerCase())
     );
@@ -302,11 +316,9 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
     const pipeline = {
       count: openEnq.length,
       total: openEnq.reduce((s, e) => s + num(e.estimatedValue), 0),
-      convRate:
-        closedEnq.length > 0 ? Math.round((won / closedEnq.length) * 100) : 0,
+      convRate: closedEnq.length > 0 ? Math.round((won / closedEnq.length) * 100) : 0,
     };
 
-    /* ── Stock health ──────────────────────────────────────────── */
     const totalRecords = stockItems.length;
     const criticalCount = criticalStock.length;
     const lowCount = lowStock.length;
@@ -316,13 +328,9 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
       totalRecords,
       lowCount,
       criticalCount,
-      pct:
-        totalRecords > 0
-          ? Math.round((healthy / totalRecords) * 100)
-          : 100,
+      pct: totalRecords > 0 ? Math.round((healthy / totalRecords) * 100) : 100,
     };
 
-    /* ── Revenue series ────────────────────────────────────────── */
     const revenueSeries = (data.accounting?.profitLoss?.monthlyData || []).map(
       (m) => ({
         label: m.month || m.label || "",
@@ -332,19 +340,16 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
       })
     );
 
-    /* ── Alerts ────────────────────────────────────────────────── */
     const now = Date.now();
 
     const delayedOrders = data.orders.filter((ord) => {
-      if (ORDER_DONE.includes(String(ord.status || "").toLowerCase()))
-        return false;
+      if (ORDER_DONE.includes(String(ord.status || "").toLowerCase())) return false;
       const due = ord.expectedDeliveryDate;
       return due && new Date(due).getTime() < now;
     });
 
     const unpaidOrders = data.orders.filter((ord) => {
-      if (ORDER_DONE.includes(String(ord.status || "").toLowerCase()))
-        return false;
+      if (ORDER_DONE.includes(String(ord.status || "").toLowerCase())) return false;
       const paid = num(ord.amountPaid);
       const total = num(ord.grandTotal);
       if (total <= 0 || paid >= total - 0.01) return false;
@@ -355,8 +360,7 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
     const cutoff = now - 7 * 86400_000;
 
     const stuckEnquiries = data.enquiries.filter((e) => {
-      if (ENQUIRY_CLOSED.includes(String(e.status || "").toLowerCase()))
-        return false;
+      if (ENQUIRY_CLOSED.includes(String(e.status || "").toLowerCase())) return false;
       const last = e.updatedAt || e.createdAt;
       return last && new Date(last).getTime() < cutoff;
     });
@@ -410,49 +414,70 @@ function useDashboardData({ autoRefreshMs = 0 } = {}) {
    HERO METRIC
    ══════════════════════════════════════════════════════════════════ */
 
-function HeroMetric({
-  label,
-  value,
-  context,
-  icon: Icon,
-  tint,
-  loading,
-  sparkValues,
-}) {
-  return (
-    <div className="group relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-lg hover:shadow-slate-200/60">
-      <div className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-gradient-to-br from-slate-100 via-slate-50 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+function HeroMetric({ label, value, context, icon: Icon, accent, loading, sparkValues }) {
+  const accents = {
+    slate: {
+      iconBg: "bg-slate-100 text-slate-700",
+      ring: "ring-slate-200/60",
+    },
+    blue: {
+      iconBg: "bg-blue-50 text-blue-600",
+      ring: "ring-blue-100/80",
+    },
+    indigo: {
+      iconBg: "bg-indigo-50 text-indigo-600",
+      ring: "ring-indigo-100/80",
+    },
+    emerald: {
+      iconBg: "bg-emerald-50 text-emerald-600",
+      ring: "ring-emerald-100/80",
+    },
+    amber: {
+      iconBg: "bg-amber-50 text-amber-600",
+      ring: "ring-amber-100/80",
+    },
+    red: {
+      iconBg: "bg-red-50 text-red-600",
+      ring: "ring-red-100/80",
+    },
+  };
 
-      <div className="relative flex min-w-0 items-center gap-2.5">
-        <div
-          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${tint}`}
-        >
-          <Icon size={16} strokeWidth={2.2} />
+  const a = accents[accent] || accents.slate;
+
+  return (
+    <div className="group relative overflow-hidden rounded-2xl bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_rgba(15,23,42,0.04)] ring-1 ring-slate-200/70 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_4px_24px_rgba(15,23,42,0.08)]">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+            {label}
+          </p>
+
+          {loading ? (
+            <div className="mt-4 space-y-2.5">
+              <div className="h-8 w-28 animate-pulse rounded-lg bg-slate-100" />
+              <div className="h-3.5 w-20 animate-pulse rounded bg-slate-100" />
+            </div>
+          ) : (
+            <>
+              <p className="mt-3 text-[1.75rem] font-semibold leading-none tracking-tight text-black tabular-nums">
+                {value}
+              </p>
+              <p className="mt-2 truncate text-[13px] text-slate-500">{context}</p>
+            </>
+          )}
         </div>
-        <span className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
-          {label}
-        </span>
+
+        <div
+          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${a.iconBg} ring-1 ${a.ring}`}
+        >
+          <Icon size={18} strokeWidth={2} />
+        </div>
       </div>
 
-      {loading ? (
-        <div className="relative mt-5 space-y-2">
-          <div className="shimmer h-7 w-32 rounded-md" />
-          <div className="shimmer h-3 w-24 rounded-md" />
+      {!loading && Array.isArray(sparkValues) && sparkValues.length > 1 && (
+        <div className="mt-4 -mb-1 opacity-80">
+          <Sparkline values={sparkValues} h={28} />
         </div>
-      ) : (
-        <>
-          <p className="relative mt-5 text-[28px] font-bold leading-none tracking-tight text-slate-900 tabular-nums">
-            {value}
-          </p>
-          <p className="relative mt-2 truncate text-[11.5px] font-medium text-slate-500">
-            {context}
-          </p>
-          {Array.isArray(sparkValues) && sparkValues.length > 1 && (
-            <div className="relative mt-3 -mb-1">
-              <Sparkline values={sparkValues} h={26} />
-            </div>
-          )}
-        </>
       )}
     </div>
   );
@@ -470,9 +495,10 @@ function ControlStrip({
   stockHealth,
   revenueSeries,
 }) {
-  // Only the Cash card gets a revenue sparkline — other metrics aren't
-  // revenue-related so the series was misleading.
   const spark = revenueSeries.map((r) => r.revenue);
+
+  const stockAccent =
+    stockHealth.pct >= 80 ? "emerald" : stockHealth.pct >= 60 ? "amber" : "red";
 
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -480,12 +506,10 @@ function ControlStrip({
         label="Cash Position"
         value={formatINR(cash.net)}
         context={
-          cash.payables > 0
-            ? `${formatINR(cash.payables)} payables`
-            : "No payables"
+          cash.payables > 0 ? `${formatINR(cash.payables)} payables` : "No payables"
         }
         icon={Wallet}
-        tint="bg-slate-100 text-slate-700 border-slate-200"
+        accent="slate"
         sparkValues={spark}
         loading={loading}
       />
@@ -493,11 +517,9 @@ function ControlStrip({
       <HeroMetric
         label="Order Book"
         value={formatINR(orderBook.total)}
-        context={`${orderBook.count} active order${
-          orderBook.count !== 1 ? "s" : ""
-        }`}
+        context={`${orderBook.count} active order${orderBook.count !== 1 ? "s" : ""}`}
         icon={Package}
-        tint="bg-blue-50 text-blue-600 border-blue-100"
+        accent="blue"
         sparkValues={[]}
         loading={loading}
       />
@@ -505,11 +527,9 @@ function ControlStrip({
       <HeroMetric
         label="Pipeline"
         value={formatINR(pipeline.total)}
-        context={`${pipeline.count} enquir${
-          pipeline.count !== 1 ? "ies" : "y"
-        } open · ${pipeline.convRate}% conv`}
+        context={`${pipeline.count} open · ${pipeline.convRate}% conversion`}
         icon={TrendingUp}
-        tint="bg-indigo-50 text-indigo-600 border-indigo-100"
+        accent="indigo"
         sparkValues={[]}
         loading={loading}
       />
@@ -521,17 +541,11 @@ function ControlStrip({
           stockHealth.criticalCount > 0
             ? `${stockHealth.criticalCount} critical · ${stockHealth.lowCount} low`
             : stockHealth.lowCount > 0
-            ? `${stockHealth.lowCount} low`
-            : "All above reorder"
+              ? `${stockHealth.lowCount} low`
+              : "All above reorder"
         }
         icon={ShieldCheck}
-        tint={
-          stockHealth.pct >= 80
-            ? "bg-emerald-50 text-emerald-600 border-emerald-100"
-            : stockHealth.pct >= 60
-            ? "bg-amber-50 text-amber-600 border-amber-100"
-            : "bg-red-50 text-red-600 border-red-100"
-        }
+        accent={stockAccent}
         sparkValues={[]}
         loading={loading}
       />
@@ -568,9 +582,7 @@ function buildActionQueue(d) {
       detail:
         names.length > 0
           ? `${names.join(", ")}${
-              d.criticalStock.length > 2
-                ? ` +${d.criticalStock.length - 2} more`
-                : ""
+              d.criticalStock.length > 2 ? ` +${d.criticalStock.length - 2} more` : ""
             }`
           : "Production may stop",
       action: "Order now",
@@ -595,7 +607,6 @@ function buildActionQueue(d) {
         customer ? `${customer} ${late}d late` : "Reschedule"
       }`,
       action: "Dispatch",
-      // FIX: was "/rawmats" — orders actions belong on the orders page
       route: "/orders",
     });
   }
@@ -638,7 +649,6 @@ function buildActionQueue(d) {
     });
   }
 
-  // NEW: salaries accrued but not yet paid
   if (d.salaryPayables > 0) {
     items.push({
       id: "salary-payables",
@@ -656,9 +666,7 @@ function buildActionQueue(d) {
       id: "low-stock",
       severity: "warning",
       icon: AlertTriangle,
-      title: `${d.lowStock.length} item${
-        d.lowStock.length !== 1 ? "s" : ""
-      } below reorder`,
+      title: `${d.lowStock.length} item${d.lowStock.length !== 1 ? "s" : ""} below reorder`,
       detail: "Purchase or reorder recommended",
       action: "Review",
       route: "/rawmats",
@@ -728,7 +736,7 @@ function ActionQueue({
   overdueFollowups = [],
   todayFollowups = [],
   readyForDispatch = [],
-  salaryPayables = 0, // NEW
+  salaryPayables = 0,
 }) {
   const navigate = useNavigate();
 
@@ -741,35 +749,35 @@ function ActionQueue({
     overdueFollowups,
     todayFollowups,
     readyForDispatch,
-    salaryPayables, // NEW
+    salaryPayables,
   });
 
   const criticalCount = queue.filter((q) => q.severity === "critical").length;
 
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
+    <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_rgba(15,23,42,0.04)] ring-1 ring-slate-200/70">
+      <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
         <div className="min-w-0">
-          <h2 className="text-[12px] font-bold uppercase tracking-[0.08em] text-black">
+          <h2 className="text-[13px] font-semibold tracking-tight text-black">
             Action Queue
           </h2>
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-0.5 text-[13px] text-slate-500">
             {loading
               ? "Scanning across the business…"
               : queue.length === 0
-              ? "All clear — nothing needs attention"
-              : `${queue.length} item${queue.length !== 1 ? "s" : ""} need${
-                  queue.length === 1 ? "s" : ""
-                } action`}
+                ? "All clear — nothing needs attention"
+                : `${queue.length} item${queue.length !== 1 ? "s" : ""} need${
+                    queue.length === 1 ? "s" : ""
+                  } action`}
           </p>
         </div>
 
         {!loading && queue.length > 0 && (
           <span
-            className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-semibold tabular-nums ${
+            className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold tabular-nums ${
               criticalCount > 0
-                ? "bg-red-50 text-red-700"
-                : "bg-slate-100 text-slate-600"
+                ? "bg-red-50 text-red-700 ring-1 ring-red-100"
+                : "bg-slate-100 text-slate-600 ring-1 ring-slate-200/80"
             }`}
           >
             {queue.length}
@@ -778,39 +786,39 @@ function ActionQueue({
       </div>
 
       {loading ? (
-        <div className="space-y-3 p-5">
+        <div className="space-y-1 p-3">
           {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="flex items-center gap-3">
-              <div className="shimmer h-8 w-8 rounded-lg" />
-              <div className="flex-1 space-y-1.5">
-                <div className="shimmer h-3 w-3/4 rounded" />
-                <div className="shimmer h-2.5 w-1/2 rounded" />
+            <div key={i} className="flex items-center gap-3 rounded-xl px-3 py-3">
+              <div className="h-9 w-9 animate-pulse rounded-xl bg-slate-100" />
+              <div className="flex-1 space-y-2">
+                <div className="h-3.5 w-3/4 animate-pulse rounded bg-slate-100" />
+                <div className="h-3 w-1/2 animate-pulse rounded bg-slate-100" />
               </div>
             </div>
           ))}
         </div>
       ) : queue.length === 0 ? (
-        <div className="flex flex-1 flex-col items-center justify-center px-6 py-10 text-center">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
-            <CheckCircle2 size={20} />
+        <div className="flex flex-1 flex-col items-center justify-center px-6 py-12 text-center">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600 ring-1 ring-emerald-100">
+            <CheckCircle2 size={22} strokeWidth={2} />
           </div>
-          <h4 className="mt-3 text-sm font-semibold text-black">All clear</h4>
-          <p className="mt-1 max-w-[220px] text-xs text-slate-500">
+          <h4 className="mt-4 text-[15px] font-semibold text-black">All clear</h4>
+          <p className="mt-1.5 max-w-[240px] text-[13px] leading-relaxed text-slate-500">
             No critical actions or pending warnings right now.
           </p>
         </div>
       ) : (
-        <ul className="thin-scroll divide-y divide-slate-100 overflow-y-auto">
+        <ul className="thin-scroll flex-1 overflow-y-auto">
           {queue.map((item) => {
             const Icon = item.icon;
             return (
               <li
                 key={item.id}
-                className="group flex items-center gap-3 px-5 py-3.5 transition hover:bg-slate-50"
+                className="group flex items-center gap-3 border-b border-slate-50 px-4 py-3.5 transition-colors last:border-0 hover:bg-slate-50/80"
               >
-                <div className="relative flex h-8 w-8 shrink-0 items-center justify-center">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600">
-                    <Icon size={14} />
+                <div className="relative flex h-9 w-9 shrink-0 items-center justify-center">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-50 text-slate-600 ring-1 ring-slate-200/80">
+                    <Icon size={15} strokeWidth={2} />
                   </div>
                   <span
                     className={`absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full ring-2 ring-white ${
@@ -820,20 +828,20 @@ function ActionQueue({
                 </div>
 
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs font-semibold text-black">
+                  <p className="truncate text-[13px] font-medium text-black">
                     {item.title}
                   </p>
-                  <p className="mt-0.5 truncate text-[10px] text-slate-500">
+                  <p className="mt-0.5 truncate text-[12px] text-slate-500">
                     {item.detail}
                   </p>
                 </div>
 
                 <button
                   onClick={() => navigate(item.route)}
-                  className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-semibold text-black transition hover:border-slate-300 hover:bg-slate-50 active:translate-y-px"
+                  className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-slate-900 px-2.5 py-1.5 text-[11px] font-medium text-white opacity-0 transition-all group-hover:opacity-100 hover:bg-slate-800 active:scale-[0.98]"
                 >
                   {item.action}
-                  <ArrowRight size={10} />
+                  <ArrowRight size={11} strokeWidth={2.5} />
                 </button>
               </li>
             );
@@ -843,17 +851,17 @@ function ActionQueue({
 
       {!loading && queue.length > 0 && (
         <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50/50 px-5 py-2.5">
-          <span className="flex items-center gap-3 text-[10px] text-slate-500">
-            <span className="flex items-center gap-1">
+          <span className="flex items-center gap-3 text-[11px] text-slate-500">
+            <span className="flex items-center gap-1.5">
               <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
               {queue.filter((q) => q.severity === "critical").length} critical
             </span>
-            <span className="flex items-center gap-1">
+            <span className="flex items-center gap-1.5">
               <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
               {queue.filter((q) => q.severity === "warning").length} warning
             </span>
           </span>
-          <span className="text-[10px] text-slate-400">Ranked by urgency</span>
+          <span className="text-[11px] text-slate-400">Ranked by urgency</span>
         </div>
       )}
     </div>
@@ -864,26 +872,32 @@ function ActionQueue({
    STAT TILE
    ══════════════════════════════════════════════════════════════════ */
 
-function StatTile({ label, value, sub, icon: Icon, tint }) {
+function StatTile({ label, value, sub, icon: Icon, accent }) {
+  const accents = {
+    slate: "bg-slate-100 text-slate-700 ring-slate-200/60",
+    blue: "bg-blue-50 text-blue-600 ring-blue-100/80",
+    amber: "bg-amber-50 text-amber-600 ring-amber-100/80",
+    emerald: "bg-emerald-50 text-emerald-600 ring-emerald-100/80",
+    red: "bg-red-50 text-red-600 ring-red-100/80",
+  };
+
   return (
-    <div className="group relative overflow-hidden rounded-xl border border-slate-200 bg-white p-4 transition duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md hover:shadow-slate-200/50">
-      <div className="flex items-center justify-between">
-        <div
-          className={`flex h-9 w-9 items-center justify-center rounded-xl border ${tint}`}
-        >
-          <Icon size={15} strokeWidth={2.2} />
-        </div>
+    <div className="rounded-xl bg-slate-50/80 p-4 ring-1 ring-slate-200/60 transition-all duration-200 hover:bg-white hover:shadow-sm hover:ring-slate-200">
+      <div
+        className={`flex h-9 w-9 items-center justify-center rounded-xl ring-1 ${
+          accents[accent] || accents.slate
+        }`}
+      >
+        <Icon size={16} strokeWidth={2} />
       </div>
 
-      <p className="mt-3.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+      <p className="mt-3.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
         {label}
       </p>
-      <p className="mt-1.5 text-[21px] font-bold leading-none tracking-tight text-slate-900 tabular-nums">
+      <p className="mt-1.5 text-[1.35rem] font-semibold leading-none tracking-tight text-black tabular-nums">
         {value}
       </p>
-      <p className="mt-2 truncate text-[11px] font-medium text-slate-500">
-        {sub}
-      </p>
+      <p className="mt-1.5 truncate text-[12px] text-slate-500">{sub}</p>
     </div>
   );
 }
@@ -910,41 +924,36 @@ function FinancialSnapshot({ loading, accounting }) {
   const margin = ytdRev > 0 ? Math.round((netProfit / ytdRev) * 100) : 0;
 
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
+    <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_rgba(15,23,42,0.04)] ring-1 ring-slate-200/70">
+      <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
         <div className="min-w-0">
-          <h2 className="text-[12px] font-bold uppercase tracking-[0.08em] text-black">
+          <h2 className="text-[13px] font-semibold tracking-tight text-black">
             Financial Snapshot
           </h2>
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-0.5 text-[13px] text-slate-500">
             {meta.fiscalYearStart
-              ? `${formatDate(meta.fiscalYearStart)} → ${formatDate(
-                  meta.asOf
-                )}`
+              ? `${formatDate(meta.fiscalYearStart)} → ${formatDate(meta.asOf)}`
               : "Current fiscal period"}
           </p>
         </div>
 
         <button
           onClick={() => navigate("/accounting")}
-          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-semibold text-black transition hover:border-slate-300 hover:bg-slate-50"
+          className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
         >
           Accounting
-          <ArrowRight size={10} />
+          <ArrowRight size={12} strokeWidth={2} />
         </button>
       </div>
 
       {loading ? (
         <div className="grid grid-cols-2 gap-3 p-4">
           {[1, 2, 3, 4].map((i) => (
-            <div
-              key={i}
-              className="rounded-xl border border-slate-200 bg-white p-4"
-            >
-              <div className="shimmer h-9 w-9 rounded-xl" />
-              <div className="shimmer mt-3.5 h-2.5 w-20 rounded" />
-              <div className="shimmer mt-2 h-5 w-24 rounded" />
-              <div className="shimmer mt-2 h-2.5 w-28 rounded" />
+            <div key={i} className="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-200/60">
+              <div className="h-9 w-9 animate-pulse rounded-xl bg-slate-200/80" />
+              <div className="mt-3.5 h-2.5 w-16 animate-pulse rounded bg-slate-200/80" />
+              <div className="mt-2 h-6 w-20 animate-pulse rounded bg-slate-200/80" />
+              <div className="mt-2 h-2.5 w-24 animate-pulse rounded bg-slate-200/80" />
             </div>
           ))}
         </div>
@@ -954,10 +963,9 @@ function FinancialSnapshot({ loading, accounting }) {
             <StatTile
               label="Cash Position"
               value={formatINR(cash)}
-              // FIX: was "Payments − paid expenses" — now includes suppliers and salaries
               sub="Cash in − all cash out"
               icon={Wallet}
-              tint="bg-slate-100 text-slate-700 border-slate-200"
+              accent="slate"
             />
 
             <StatTile
@@ -965,16 +973,15 @@ function FinancialSnapshot({ loading, accounting }) {
               value={formatINR(receivables)}
               sub="Open order balances"
               icon={ArrowDownToLine}
-              tint="bg-blue-50 text-blue-600 border-blue-100"
+              accent="blue"
             />
 
             <StatTile
               label="Payables"
               value={formatINR(payables)}
-              // FIX: was "Unpaid expenses" — now includes suppliers + salaries
               sub="Suppliers · expenses · salaries"
               icon={ArrowUpFromLine}
-              tint="bg-amber-50 text-amber-600 border-amber-100"
+              accent="amber"
             />
 
             <StatTile
@@ -986,28 +993,24 @@ function FinancialSnapshot({ loading, accounting }) {
                   : "No revenue yet"
               }
               icon={netProfit >= 0 ? TrendingUp : TrendingDown}
-              tint={
-                netProfit >= 0
-                  ? "bg-emerald-50 text-emerald-600 border-emerald-100"
-                  : "bg-red-50 text-red-600 border-red-100"
-              }
+              accent={netProfit >= 0 ? "emerald" : "red"}
             />
           </div>
 
-          <div className="grid grid-cols-2 divide-x divide-slate-100 border-t border-slate-100 bg-slate-50/50">
-            <div className="px-5 py-2.5">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+          <div className="grid grid-cols-2 divide-x divide-slate-100 border-t border-slate-100 bg-slate-50/40">
+            <div className="px-5 py-3">
+              <span className="text-[11px] font-medium uppercase tracking-wider text-slate-400">
                 Revenue YTD
               </span>
-              <p className="mt-0.5 text-sm font-bold tabular-nums text-black">
+              <p className="mt-0.5 text-[15px] font-semibold tabular-nums text-black">
                 {formatINR(ytdRev)}
               </p>
             </div>
-            <div className="px-5 py-2.5">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+            <div className="px-5 py-3">
+              <span className="text-[11px] font-medium uppercase tracking-wider text-slate-400">
                 Expenses YTD
               </span>
-              <p className="mt-0.5 text-sm font-bold tabular-nums text-black">
+              <p className="mt-0.5 text-[15px] font-semibold tabular-nums text-black">
                 {formatINR(ytdExp)}
               </p>
             </div>
@@ -1015,17 +1018,15 @@ function FinancialSnapshot({ loading, accounting }) {
         </>
       )}
 
-      <div className="mt-auto flex items-center justify-between border-t border-slate-100 bg-slate-50/50 px-5 py-2.5">
-        <span className="text-[10px] text-slate-500">
+      <div className="mt-auto flex items-center justify-between border-t border-slate-100 px-5 py-2.5">
+        <span className="text-[11px] text-slate-500">
           {loading
             ? "Loading…"
-            : `${monthly.length} month${
-                monthly.length !== 1 ? "s" : ""
-              } of data`}
+            : `${monthly.length} month${monthly.length !== 1 ? "s" : ""} of data`}
         </span>
         <button
           onClick={() => navigate("/accounting")}
-          className="text-[10px] font-semibold text-black transition hover:text-slate-600"
+          className="text-[12px] font-medium text-slate-600 transition hover:text-slate-900"
         >
           Full accounting →
         </button>
@@ -1074,36 +1075,36 @@ function PipelineVelocity({ loading, enquiries, orders }) {
     .slice(0, 4);
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-      <div className="border-b border-slate-200 px-5 py-4">
-        <h2 className="text-[12px] font-bold uppercase tracking-[0.08em] text-black">
+    <div className="overflow-hidden rounded-2xl bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_rgba(15,23,42,0.04)] ring-1 ring-slate-200/70">
+      <div className="border-b border-slate-100 px-5 py-4">
+        <h2 className="text-[13px] font-semibold tracking-tight text-black">
           Pipeline Velocity
         </h2>
-        <p className="mt-1 text-xs text-slate-500">
+        <p className="mt-0.5 text-[13px] text-slate-500">
           Enquiry → Order → Delivered
         </p>
       </div>
 
-      <div className="space-y-4 px-5 py-5">
+      <div className="space-y-5 px-5 py-5">
         {STAGES.map((stage, i) => (
           <div key={stage}>
-            <div className="mb-1.5 flex items-center justify-between">
-              <span className="text-xs font-semibold text-black">{stage}</span>
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-[13px] font-medium text-slate-700">{stage}</span>
               <div className="flex items-center gap-3">
                 {conv[i] != null && (
-                  <span className="text-[10px] font-medium text-slate-400">
-                    ▼ {conv[i]}%
+                  <span className="text-[11px] font-medium text-slate-400">
+                    ↓ {conv[i]}%
                   </span>
                 )}
-                <span className="w-10 text-right text-sm font-bold tabular-nums text-black">
+                <span className="w-8 text-right text-[15px] font-semibold tabular-nums text-black">
                   {loading ? "—" : counts[i]}
                 </span>
               </div>
             </div>
 
-            <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+            <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
               <div
-                className="h-full rounded-full bg-[#0f172a] transition-all duration-500"
+                className="h-full rounded-full bg-slate-900 transition-all duration-500 ease-out"
                 style={{
                   width: loading ? "0%" : `${(counts[i] / max) * 100}%`,
                 }}
@@ -1113,15 +1114,15 @@ function PipelineVelocity({ loading, enquiries, orders }) {
         ))}
       </div>
 
-      <div className="border-t border-slate-200">
+      <div className="border-t border-slate-100">
         <div className="flex items-center justify-between px-5 py-3">
           <div className="flex items-center gap-2">
-            <Clock size={13} className="text-slate-400" />
-            <span className="text-[11px] font-bold uppercase tracking-[0.08em] text-black">
+            <Clock size={14} className="text-slate-400" strokeWidth={2} />
+            <span className="text-[12px] font-semibold tracking-wide text-slate-700">
               Stuck 7d+
             </span>
           </div>
-          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold tabular-nums text-slate-600">
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-slate-600">
             {stuck.length}
           </span>
         </div>
@@ -1129,32 +1130,32 @@ function PipelineVelocity({ loading, enquiries, orders }) {
         {loading ? (
           <div className="space-y-2 px-5 pb-4">
             {[1, 2].map((i) => (
-              <div key={i} className="shimmer h-8 rounded" />
+              <div key={i} className="h-10 animate-pulse rounded-lg bg-slate-100" />
             ))}
           </div>
         ) : stuck.length === 0 ? (
-          <div className="px-5 pb-5 text-center text-[11px] text-slate-400">
+          <div className="px-5 pb-5 text-center text-[13px] text-slate-400">
             No stuck deals. Pipeline is moving.
           </div>
         ) : (
-          <ul className="divide-y divide-slate-100">
+          <ul className="divide-y divide-slate-50">
             {stuck.map((s) => (
               <li
                 key={s.id}
-                className="flex items-center justify-between gap-3 px-5 py-2.5 transition hover:bg-slate-50"
+                className="flex items-center justify-between gap-3 px-5 py-3 transition-colors hover:bg-slate-50/80"
               >
                 <div className="min-w-0">
-                  <p className="truncate text-xs font-semibold text-black">
+                  <p className="truncate text-[13px] font-medium text-black">
                     {s.name}
                   </p>
-                  <p className="mt-0.5 text-[10px] text-slate-500">
+                  <p className="mt-0.5 text-[12px] text-slate-500">
                     {s.stage} · {s.days}d inactive
                   </p>
                 </div>
 
-                <button className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-semibold text-black transition hover:bg-slate-50">
+                <button className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50">
                   Chase
-                  <ArrowRight size={10} />
+                  <ArrowRight size={11} strokeWidth={2.5} />
                 </button>
               </li>
             ))}
@@ -1170,9 +1171,9 @@ function PipelineVelocity({ loading, enquiries, orders }) {
    ══════════════════════════════════════════════════════════════════ */
 
 const TONE_TILE = {
-  blue: "bg-blue-50 text-blue-600 border-blue-100",
-  emerald: "bg-emerald-50 text-emerald-600 border-emerald-100",
-  amber: "bg-amber-50 text-amber-600 border-amber-100",
+  blue: "bg-blue-50 text-blue-600 ring-blue-100/80",
+  emerald: "bg-emerald-50 text-emerald-600 ring-emerald-100/80",
+  amber: "bg-amber-50 text-amber-600 ring-amber-100/80",
 };
 
 function buildFeed({ orders, payments, enquiries }) {
@@ -1230,62 +1231,60 @@ function ActivityStream({ loading, orders, payments, enquiries }) {
   const feed = buildFeed({ orders, payments, enquiries });
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+    <div className="overflow-hidden rounded-2xl bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_rgba(15,23,42,0.04)] ring-1 ring-slate-200/70">
+      <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
         <div>
-          <h2 className="text-[12px] font-bold uppercase tracking-[0.08em] text-black">
+          <h2 className="text-[13px] font-semibold tracking-tight text-black">
             Activity Stream
           </h2>
-          <p className="mt-1 text-xs text-slate-500">Live across the business</p>
+          <p className="mt-0.5 text-[13px] text-slate-500">Live across the business</p>
         </div>
-        <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-600">
-          <Circle size={6} className="fill-emerald-500" />
+        <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-emerald-100">
+          <Circle size={6} className="fill-emerald-500 text-emerald-500" />
           Live
         </span>
       </div>
 
       {loading ? (
-        <div className="space-y-3 p-5">
+        <div className="space-y-1 p-3">
           {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="flex gap-3">
-              <div className="shimmer h-7 w-7 rounded-lg" />
-              <div className="flex-1 space-y-1.5">
-                <div className="shimmer h-3 w-3/4 rounded" />
-                <div className="shimmer h-2.5 w-1/2 rounded" />
+            <div key={i} className="flex gap-3 rounded-xl px-3 py-3">
+              <div className="h-8 w-8 animate-pulse rounded-lg bg-slate-100" />
+              <div className="flex-1 space-y-2">
+                <div className="h-3.5 w-3/4 animate-pulse rounded bg-slate-100" />
+                <div className="h-3 w-1/2 animate-pulse rounded bg-slate-100" />
               </div>
             </div>
           ))}
         </div>
       ) : feed.length === 0 ? (
-        <div className="px-5 py-10 text-center text-xs text-slate-400">
+        <div className="px-5 py-12 text-center text-[13px] text-slate-400">
           No recent activity.
         </div>
       ) : (
-        <ul className="thin-scroll max-h-[520px] divide-y divide-slate-100 overflow-y-auto">
+        <ul className="thin-scroll max-h-[520px] overflow-y-auto">
           {feed.map((f) => {
             const Icon = f.icon;
             const tone = TONE_TILE[f.tone] || TONE_TILE.blue;
             return (
               <li
                 key={f.id}
-                className="flex items-start gap-3 px-5 py-3 transition hover:bg-slate-50"
+                className="flex items-start gap-3 border-b border-slate-50 px-5 py-3.5 transition-colors last:border-0 hover:bg-slate-50/80"
               >
                 <div
-                  className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border ${tone}`}
+                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ring-1 ${tone}`}
                 >
-                  <Icon size={13} />
+                  <Icon size={14} strokeWidth={2} />
                 </div>
 
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs font-semibold text-black">
+                  <p className="truncate text-[13px] font-medium text-black">
                     {f.text}
                   </p>
-                  <p className="mt-0.5 truncate text-[10px] text-slate-500">
-                    {f.meta}
-                  </p>
+                  <p className="mt-0.5 truncate text-[12px] text-slate-500">{f.meta}</p>
                 </div>
 
-                <span className="shrink-0 whitespace-nowrap text-[10px] text-slate-400">
+                <span className="shrink-0 whitespace-nowrap pt-0.5 text-[11px] text-slate-400">
                   {timeAgo(f.at)}
                 </span>
               </li>
@@ -1302,9 +1301,9 @@ function ActivityStream({ loading, orders, payments, enquiries }) {
    ══════════════════════════════════════════════════════════════════ */
 
 const SEV_BADGE = {
-  out: "bg-red-50 text-red-700 border-red-100",
-  critical: "bg-red-50 text-red-700 border-red-100",
-  low: "bg-amber-50 text-amber-700 border-amber-100",
+  out: "bg-red-50 text-red-700 ring-red-100",
+  critical: "bg-red-50 text-red-700 ring-red-100",
+  low: "bg-amber-50 text-amber-700 ring-amber-100",
 };
 
 const SEV_LABEL = { out: "Out", critical: "Critical", low: "Low" };
@@ -1330,29 +1329,29 @@ function LowStockPanel({ loading, stockItems }) {
   const criticalCount = alertItems.filter((i) => i.severity !== "low").length;
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="overflow-hidden rounded-2xl bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_rgba(15,23,42,0.04)] ring-1 ring-slate-200/70">
+      <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-amber-100 bg-amber-50 text-amber-600">
-            <AlertTriangle size={17} />
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-600 ring-1 ring-amber-100">
+            <AlertTriangle size={18} strokeWidth={2} />
           </div>
           <div>
-            <h2 className="text-[12px] font-bold uppercase tracking-[0.08em] text-black">
+            <h2 className="text-[13px] font-semibold tracking-tight text-black">
               Low Stock Alert
             </h2>
-            <p className="mt-0.5 text-xs text-slate-500">
+            <p className="mt-0.5 text-[13px] text-slate-500">
               {loading
                 ? "Scanning…"
                 : alertItems.length === 0
-                ? "All items above reorder level"
-                : `${alertItems.length} item${
-                    alertItems.length !== 1 ? "s" : ""
-                  } need${alertItems.length === 1 ? "s" : ""} attention`}
+                  ? "All items above reorder level"
+                  : `${alertItems.length} item${
+                      alertItems.length !== 1 ? "s" : ""
+                    } need${alertItems.length === 1 ? "s" : ""} attention`}
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+        <div className="flex items-center gap-0.5 rounded-xl bg-slate-100/80 p-1">
           {[
             ["all", `All · ${alertItems.length}`],
             ["raw", `Raw · ${rawCount}`],
@@ -1361,9 +1360,9 @@ function LowStockPanel({ loading, stockItems }) {
             <button
               key={id}
               onClick={() => setFilter(id)}
-              className={`rounded-md px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider transition ${
+              className={`rounded-lg px-3 py-1.5 text-[11px] font-semibold transition ${
                 filter === id
-                  ? "bg-white text-black shadow-sm"
+                  ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200/80"
                   : "text-slate-500 hover:text-slate-700"
               }`}
             >
@@ -1377,23 +1376,23 @@ function LowStockPanel({ loading, stockItems }) {
         <div className="space-y-2 p-5">
           {[1, 2, 3].map((i) => (
             <div key={i} className="flex items-center gap-3">
-              <div className="shimmer h-8 w-8 rounded-lg" />
-              <div className="flex-1 space-y-1.5">
-                <div className="shimmer h-3 w-2/3 rounded" />
-                <div className="shimmer h-2.5 w-1/3 rounded" />
+              <div className="h-9 w-9 animate-pulse rounded-xl bg-slate-100" />
+              <div className="flex-1 space-y-2">
+                <div className="h-3.5 w-2/3 animate-pulse rounded bg-slate-100" />
+                <div className="h-3 w-1/3 animate-pulse rounded bg-slate-100" />
               </div>
             </div>
           ))}
         </div>
       ) : filtered.length === 0 ? (
-        <div className="flex flex-col items-center justify-center px-6 py-10 text-center">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
-            <CheckCircle2 size={20} />
+        <div className="flex flex-col items-center justify-center px-6 py-12 text-center">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600 ring-1 ring-emerald-100">
+            <CheckCircle2 size={22} strokeWidth={2} />
           </div>
-          <h4 className="mt-3 text-sm font-semibold text-black">
+          <h4 className="mt-4 text-[15px] font-semibold text-black">
             Stock is healthy
           </h4>
-          <p className="mt-1 max-w-[260px] text-xs text-slate-500">
+          <p className="mt-1.5 max-w-[280px] text-[13px] leading-relaxed text-slate-500">
             {filter === "all"
               ? "No items below reorder level right now."
               : `No ${filter} items below reorder level.`}
@@ -1403,44 +1402,44 @@ function LowStockPanel({ loading, stockItems }) {
         <div className="overflow-x-auto">
           <table className="w-full min-w-[760px] text-left">
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50/70">
-                <th className="px-5 py-3 text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
+              <tr className="border-b border-slate-100 bg-slate-50/50">
+                <th className="px-5 py-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">
                   Item
                 </th>
-                <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
+                <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">
                   Type
                 </th>
-                <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
+                <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">
                   Warehouse
                 </th>
-                <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
+                <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">
                   Available
                 </th>
-                <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
+                <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">
                   Reorder
                 </th>
-                <th className="px-4 py-3 text-right text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
+                <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">
                   Shortfall
                 </th>
-                <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500">
+                <th className="px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">
                   Status
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-slate-50">
               {filtered.map((item) => (
-                <tr key={item._id} className="transition hover:bg-slate-50">
-                  <td className="px-5 py-3">
-                    <div className="flex items-center gap-2.5">
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600">
-                        <Package size={14} />
+                <tr key={item._id} className="transition-colors hover:bg-slate-50/60">
+                  <td className="px-5 py-3.5">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-50 text-slate-500 ring-1 ring-slate-200/80">
+                        <Package size={15} strokeWidth={2} />
                       </div>
                       <div className="min-w-0">
-                        <p className="truncate text-xs font-semibold text-black">
+                        <p className="truncate text-[13px] font-medium text-black">
                           {item.name}
                         </p>
                         {(item.category || item.sizeKg) && (
-                          <p className="mt-0.5 truncate text-[10px] text-slate-400">
+                          <p className="mt-0.5 truncate text-[12px] text-slate-400">
                             {item.category || ""}
                             {item.category && item.sizeKg ? " · " : ""}
                             {item.sizeKg ? `${item.sizeKg} kg` : ""}
@@ -1449,41 +1448,37 @@ function LowStockPanel({ loading, stockItems }) {
                       </div>
                     </div>
                   </td>
-                  <td className="px-4 py-3">
-                    <span className="rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">
+                  <td className="px-4 py-3.5">
+                    <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
                       {item.source === "raw" ? "Raw" : "Product"}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-xs text-slate-600">
+                  <td className="px-4 py-3.5 text-[13px] text-slate-600">
                     {item.warehouse}
                   </td>
-                  <td className="px-4 py-3 text-right">
-                    <span className="text-xs font-semibold tabular-nums text-black">
+                  <td className="px-4 py-3.5 text-right">
+                    <span className="text-[13px] font-semibold tabular-nums text-black">
                       {item.quantity.toFixed(2)}
                     </span>
-                    <span className="ml-1 text-[10px] text-slate-400">
-                      {item.unit}
-                    </span>
+                    <span className="ml-1 text-[11px] text-slate-400">{item.unit}</span>
                   </td>
-                  <td className="px-4 py-3 text-right">
-                    <span className="text-xs font-medium tabular-nums text-slate-600">
+                  <td className="px-4 py-3.5 text-right">
+                    <span className="text-[13px] font-medium tabular-nums text-black">
                       {item.reorderLevel.toFixed(2)}
                     </span>
-                    <span className="ml-1 text-[10px] text-slate-400">
-                      {item.unit}
-                    </span>
+                    <span className="ml-1 text-[11px] text-slate-400">{item.unit}</span>
                   </td>
-                  <td className="px-4 py-3 text-right">
-                    <span className="text-xs font-bold tabular-nums text-red-600">
+                  <td className="px-4 py-3.5 text-right">
+                    <span className="text-[13px] font-semibold tabular-nums text-red-600">
                       −{item.shortfall.toFixed(2)}
                     </span>
-                    <span className="ml-1 text-[10px] text-slate-400">
-                      {item.unit}
-                    </span>
+                    <span className="ml-1 text-[11px] text-slate-400">{item.unit}</span>
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3.5">
                     <span
-                      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold ${SEV_BADGE[item.severity]}`}
+                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 ${
+                        SEV_BADGE[item.severity]
+                      }`}
                     >
                       <span className="h-1.5 w-1.5 rounded-full bg-current" />
                       {SEV_LABEL[item.severity]}
@@ -1497,19 +1492,17 @@ function LowStockPanel({ loading, stockItems }) {
       )}
 
       {!loading && filtered.length > 0 && (
-        <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50/50 px-5 py-2.5">
-          <span className="text-[10px] text-slate-500">
+        <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50/40 px-5 py-2.5">
+          <span className="text-[11px] text-slate-500">
             {criticalCount > 0
-              ? `${criticalCount} critical · ${
-                  alertItems.length - criticalCount
-                } low`
+              ? `${criticalCount} critical · ${alertItems.length - criticalCount} low`
               : `${alertItems.length} low`}
           </span>
           <button
             onClick={() =>
               navigate(filter === "product" ? "/products" : "/rawmats")
             }
-            className="text-[10px] font-semibold text-black transition hover:text-slate-600"
+            className="text-[12px] font-medium text-slate-600 transition hover:text-slate-900"
           >
             Manage inventory →
           </button>
@@ -1536,94 +1529,91 @@ export default function Dashboard() {
   });
 
   return (
-    <div className="min-h-full bg-slate-50 p-5 sm:p-6 lg:p-7">
-      {/* HEADER */}
-      <div className="mb-6 flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
-        <div>
-          <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-black">
-            <span>COMMAND CONSOLE</span>
-            <span className="text-slate-300">/</span>
-            <span className="flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-              Live Operations
-            </span>
+    <div className="min-h-full bg-[#f8fafc]">
+      <div className="mx-auto max-w-[1400px] p-5 sm:p-6 lg:p-8">
+        {/* HEADER */}
+        <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+              <span>Command Console</span>
+              <span className="text-slate-300">/</span>
+              <span className="flex items-center gap-1.5 text-emerald-600">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                Live
+              </span>
+            </div>
+            <h1 className="text-[1.75rem] font-semibold tracking-tight text-black sm:text-[1.875rem]">
+              Good morning, Admin
+            </h1>
+            <p className="mt-1 text-[15px] text-slate-500">
+              {today} · Here&apos;s what needs your attention.
+            </p>
           </div>
-          <h1 className="text-[28px] font-semibold tracking-tight text-black">
-            Good morning, Admin
-          </h1>
-          <p className="mt-1.5 text-sm text-black">
-            {today} · Here's what needs your attention.
-          </p>
-        </div>
 
-        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={refetch}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-white text-slate-500 shadow-sm ring-1 ring-slate-200/80 transition hover:bg-slate-50 hover:text-slate-900"
             title="Refresh"
           >
-            <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
+            <RefreshCw size={16} className={loading ? "animate-spin" : ""} strokeWidth={2} />
           </button>
         </div>
-      </div>
 
-      {/* ERROR */}
-      {error && (
-        <div className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
-          {error}
+        {/* ERROR */}
+        {error && (
+          <div className="mb-6 rounded-xl bg-red-50 px-4 py-3 text-[13px] text-red-700 ring-1 ring-red-100">
+            {error}
+          </div>
+        )}
+
+        {/* ZONE 1 — CONTROL STRIP */}
+        <div className="mb-6">
+          <ControlStrip
+            loading={loading}
+            cash={derived.cash}
+            orderBook={derived.orderBook}
+            pipeline={derived.pipeline}
+            stockHealth={derived.stockHealth}
+            revenueSeries={derived.revenueSeries}
+          />
         </div>
-      )}
 
-      {/* ZONE 1 — CONTROL STRIP */}
-      <div className="mb-6">
-        <ControlStrip
-          loading={loading}
-          cash={derived.cash}
-          orderBook={derived.orderBook}
-          pipeline={derived.pipeline}
-          stockHealth={derived.stockHealth}
-          revenueSeries={derived.revenueSeries}
-        />
-      </div>
+        {/* ZONES 2 + 3 — ACTION QUEUE + FINANCIAL SNAPSHOT */}
+        <div className="mb-6 grid grid-cols-1 gap-5 xl:grid-cols-[1fr_1.55fr]">
+          <ActionQueue
+            loading={loading}
+            criticalStock={derived.criticalStock}
+            lowStock={derived.lowStock}
+            delayedOrders={derived.delayedOrders}
+            unpaidOrders={derived.unpaidOrders}
+            stuckEnquiries={derived.stuckEnquiries}
+            overdueFollowups={derived.overdueFollowups}
+            todayFollowups={derived.todayFollowups}
+            readyForDispatch={derived.readyForDispatch}
+            salaryPayables={derived.cash.salaryPayables}
+          />
+          <FinancialSnapshot loading={loading} accounting={data.accounting} />
+        </div>
 
-      {/* ZONES 2 + 3 — ACTION QUEUE + FINANCIAL SNAPSHOT */}
-      <div className="mb-6 grid grid-cols-1 gap-5 xl:grid-cols-[1fr_1.65fr]">
-        <ActionQueue
-          loading={loading}
-          criticalStock={derived.criticalStock}
-          lowStock={derived.lowStock}
-          delayedOrders={derived.delayedOrders}
-          unpaidOrders={derived.unpaidOrders}
-          stuckEnquiries={derived.stuckEnquiries}
-          overdueFollowups={derived.overdueFollowups}
-          todayFollowups={derived.todayFollowups}
-          readyForDispatch={derived.readyForDispatch}
-          salaryPayables={derived.cash.salaryPayables} // NEW
-        />
-        <FinancialSnapshot
-          loading={loading}
-          accounting={data.accounting}
-        />
-      </div>
+        {/* ZONE 4 — LOW STOCK */}
+        <div className="mb-6">
+          <LowStockPanel loading={loading} stockItems={derived.stockItems} />
+        </div>
 
-      {/* ZONE 4 — LOW STOCK */}
-      <div className="mb-6">
-        <LowStockPanel loading={loading} stockItems={derived.stockItems} />
-      </div>
-
-      {/* ZONES 5 + 6 — PIPELINE + ACTIVITY */}
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-        <PipelineVelocity
-          loading={loading}
-          enquiries={data.enquiries}
-          orders={data.orders}
-        />
-        <ActivityStream
-          loading={loading}
-          orders={data.orders}
-          payments={data.payments}
-          enquiries={data.enquiries}
-        />
+        {/* ZONES 5 + 6 — PIPELINE + ACTIVITY */}
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+          <PipelineVelocity
+            loading={loading}
+            enquiries={data.enquiries}
+            orders={data.orders}
+          />
+          <ActivityStream
+            loading={loading}
+            orders={data.orders}
+            payments={data.payments}
+            enquiries={data.enquiries}
+          />
+        </div>
       </div>
     </div>
   );

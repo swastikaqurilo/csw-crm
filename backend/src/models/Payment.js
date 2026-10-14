@@ -113,6 +113,13 @@ const paymentSchema = new mongoose.Schema(
       default: null,
     },
 
+    idempotencyKey: {
+      type: String,
+      trim: true,
+      maxlength: 200,
+      default: null,
+    },
+
     isActive: {
       type: Boolean,
       default: true,
@@ -176,4 +183,13 @@ paymentSchema.index(
     },
   }
 );
+
+paymentSchema.index(
+  { idempotencyKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { idempotencyKey: { $type: 'string' } },
+  }
+)
+
 module.exports = mongoose.model('Payment', paymentSchema);

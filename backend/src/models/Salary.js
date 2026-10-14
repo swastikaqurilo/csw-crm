@@ -305,6 +305,21 @@ const salarySchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    toJSON: {
+    transform: (doc, ret) => {
+      const strip = (obj) => {
+        if (!obj || typeof obj !== "object") return;
+        delete obj.__v;
+        delete obj.isDeleted;
+        delete obj.notes;
+        delete obj.createdAt;
+        delete obj.updatedAt;
+        Object.values(obj).forEach(strip);
+      };
+      strip(ret);
+      return ret;
+    },
+  },
   }
 );
 

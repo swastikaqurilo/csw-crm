@@ -248,6 +248,7 @@ const getWorkers = async (req, res) => {
 
     const [workers, total] = await Promise.all([
       Worker.find(filter)
+        .select("-__v -createdAt -updatedAt")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limitNumber)
@@ -287,7 +288,9 @@ const getWorker = async (req, res) => {
       });
     }
 
-    const worker = await Worker.findById(id).lean();
+    const worker = await Worker.findById(id)
+    .select("-__v -createdAt -updatedAt") 
+    .lean();
 
     if (!worker) {
       return res.status(404).json({

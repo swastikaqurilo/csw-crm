@@ -21,6 +21,7 @@ import RawMaterials from "./pages/RawMaterials";
 import Salary from "./pages/Salary";
 import Workers from "./pages/Worker";
 import Attendance from "./pages/Attendance";
+import ForgotPassword from "./pages/ForgotPassword";
 
 
 function App() {
@@ -30,6 +31,7 @@ function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
 
           <Route
             path="/"

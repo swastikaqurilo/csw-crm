@@ -148,11 +148,7 @@ productProductionSchema.set("toObject", { virtuals: true });
 
 productProductionSchema.index(
   { date: 1 },
-  {
-    unique: true,
-    partialFilterExpression: { isActive: true },
-    name: "unique_active_production_date",
-  }
+  { unique: true, partialFilterExpression: { isActive: true } }
 );
 
 const ProductProduction = mongoose.model(

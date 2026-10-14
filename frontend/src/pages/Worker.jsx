@@ -440,8 +440,24 @@ function Workers() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button type="button" className={`${SECONDARY} w-10 px-0`} onClick={loadWorkers} aria-label="Refresh workers" title="Refresh">
-            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+          <button
+            type="button"
+            className={`${SECONDARY} h-10 w-10 px-0`}
+            onClick={loadWorkers}
+            aria-label="Refresh workers"
+            title="Refresh"
+          >
+            <RefreshCw
+              size={20}
+              style={{
+                width: "22px",
+                height: "22px",
+                minWidth: "22px",
+                minHeight: "22px",
+              }}
+              strokeWidth={2.25}
+              className={loading ? "animate-spin" : ""}
+            />
           </button>
           <button type="button" className={PRIMARY} onClick={openCreate}><Plus size={16} />Add worker</button>
         </div>
@@ -455,10 +471,10 @@ function Workers() {
       )}
 
       <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Total workers" value={stats.total} sub="Everyone on the roster" icon={Users} tone="navy" loading={loading} />
-        <StatCard label="Active" value={stats.active} sub={stats.total - stats.active > 0 ? `${stats.total - stats.active} inactive` : "All active"} icon={UserCheck} tone="emerald" loading={loading} />
-        <StatCard label="Fixed pay" value={stats.fixed} sub="Monthly / weekly salary" icon={Wallet} tone="sky" loading={loading} />
-        <StatCard label="Variable pay" value={stats.variable} sub="Paid by production" icon={Layers} tone="indigo" loading={loading} />
+        <StatCard label="Total workers" value={stats.total}  icon={Users} tone="navy" loading={loading} />
+        <StatCard label="Active" value={stats.active} icon={UserCheck} tone="emerald" loading={loading} />
+        <StatCard label="Fixed pay" value={stats.fixed} icon={Wallet} tone="sky" loading={loading} />
+        <StatCard label="Variable pay" value={stats.variable}  icon={Layers} tone="indigo" loading={loading} />
       </section>
 
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
@@ -562,7 +578,7 @@ function Workers() {
                       </td>
 
                       <td className="border-b border-slate-100 px-5 py-4 group-last:border-0">
-                        <p className="text-sm font-medium text-slate-800">{w.role || "—"}</p>
+                        <p className="text-sm font-medium text-slate-800">{w.name || "—"}</p>
                         <p className="mt-0.5 text-xs text-slate-500">
                           {w.phone || "No phone"}{w.department && ` · ${w.department}`}
                         </p>

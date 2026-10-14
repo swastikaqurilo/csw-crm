@@ -870,42 +870,75 @@ const receivePurchase = async (req, res) => {
         throw err;
       }
 
+      // Re-read the material inside the session so we can compare-and-swap.
+      const material = await RawStock.findOne({
+        _id: purchase.material._id,
+        isActive: true,
+      }).session(session);
+
+      if (!material) {
+        const err = new Error("Material not found or inactive");
+        err.status = 404;
+        throw err;
+      }
+
+      const before = Number(material.quantity || 0);
+      const reservedBefore = Number(material.reservedQty || 0);
+      const qty = Number(purchase.quantity);
+      const after = before + qty;
+
+      // Guard the schema's max (1e8) explicitly so the caller gets a 400
+      // rather than a Mongoose validation error 500.
+      if (after > MAX_QUANTITY) {
+        const err = new Error(
+          `Receiving this purchase would exceed the material's maximum stock of ${MAX_QUANTITY}.`
+        );
+        err.status = 400;
+        throw err;
+      }
+
       purchase.status = "Received";
       purchase.receivedAt = new Date();
       purchase.updatedBy = req.user?._id || null;
       await purchase.save({ session });
 
-      const materialId = purchase.material._id;
-      const qty = Number(purchase.quantity);
+      const logEntry = {
+        type: "purchase-received",
+        quantity: qty,
+        unitAtTime: purchase.unit,
+        beforeQty: before,
+        afterQty: after,
+        reason: "Purchase received",
+        notes: null,
+        refType: "Purchase",
+        refId: purchase._id,
+        refLabel: purchase.purchaseNumber || purchase._id.toString().slice(-8),
+        by: req.user?._id || null,
+        at: new Date(),
+      };
 
+      // Compare-and-swap on quantity + reservedQty. Fails with
+      // modifiedCount = 0 if a concurrent writer touched this material
+      // between our read and this update.
       const result = await RawStock.updateOne(
-        { _id: materialId, isActive: true },
+        {
+          _id: material._id,
+          isActive: true,
+          quantity: before,
+          reservedQty: reservedBefore,
+        },
         [
           {
             $set: {
-              quantity: { $add: ["$quantity", qty] },
+              quantity: after,
               lastReceivedAt: "$$NOW",
+              updatedBy: req.user?._id || null,
               movementLog: {
                 $slice: [
                   {
                     $concatArrays: [
                       { $ifNull: ["$movementLog", []] },
-                      [
-                        {
-                          type: "purchase-received",
-                          quantity: qty,
-                          unitAtTime: purchase.unit,
-                          beforeQty: "$quantity",
-                          afterQty: { $add: ["$quantity", qty] },
-                          reason: "Purchase received",
-                          notes: null,
-                          refType: "Purchase",
-                          refId: purchase._id,
-                          refLabel: purchase.purchaseNumber || purchase._id.toString().slice(-8),
-                          by: req.user?._id || null,
-                          at: "$$NOW",
-                        },
-                      ],
+                      [logEntry],
                     ],
                   },
                   -MAX_MOVEMENT_LOG,
@@ -919,9 +952,10 @@ const receivePurchase = async (req, res) => {
 
       if (result.modifiedCount !== 1) {
         const err = new Error(
-          "Material not found or inactive — purchase was not received. Please try again."
+          "Stock changed while receiving the purchase. Please retry."
         );
-        err.status = 500;
+        err.status = 409;
+        err.code = "STOCK_CHANGED";
         throw err;
       }
     });
@@ -936,9 +970,10 @@ const receivePurchase = async (req, res) => {
       data: populated,
     });
   } catch (error) {
-    if (error.status === 400 || error.status === 404 || error.status === 500) {
+    if (error.status === 400 || error.status === 404 || error.status === 409) {
       return res.status(error.status).json({
         success: false,
+        ...(error.code && { code: error.code }),
         message: error.message,
       });
     }
@@ -948,46 +983,147 @@ const receivePurchase = async (req, res) => {
   }
 };
 
-
 const cancelPurchase = async (req, res) => {
+  const session = await mongoose.startSession();
+
   try {
     if (!isValidId(req.params.id)) {
       return res.status(400).json({ success: false, message: "Invalid ID" });
     }
 
-    const purchase = await RawPurchase.findById(req.params.id);
-    if (!purchase || !purchase.isActive) {
-      return res.status(404).json({ success: false, message: "Not found" });
-    }
+    let populated = null;
 
-    if (purchase.status === "Received") {
-      return res.status(400).json({
-        success: false,
-        message: "Cannot cancel a received purchase — reverse stock first if needed",
-      });
-    }
-    if (purchase.status === "Cancelled") {
-      return res.status(400).json({
-        success: false,
-        message: "Purchase is already cancelled",
-      });
-    }
+    await session.withTransaction(async () => {
+      const purchase = await RawPurchase.findOne({
+        _id: req.params.id,
+        isActive: true,
+      }).session(session);
 
-    purchase.status = "Cancelled";
-    purchase.updatedBy = req.user?._id || null;
-    await purchase.save();
+      if (!purchase) {
+        const err = new Error("Not found");
+        err.status = 404;
+        throw err;
+      }
 
-    const populated = await RawPurchase.findById(purchase._id)
-      .populate("material", "name category unit sizeKg")
+      if (purchase.status === "Cancelled") {
+        const err = new Error("Purchase is already cancelled");
+        err.status = 400;
+        throw err;
+      }
+
+      if (purchase.status === "Received") {
+        const material = await RawStock.findOne({
+          _id: purchase.material,
+          isActive: true,
+        }).session(session);
+
+        if (!material) {
+          const err = new Error(
+            "Cannot cancel — the linked material no longer exists."
+          );
+          err.status = 409;
+          err.code = "MATERIAL_MISSING";
+          throw err;
+        }
+
+        const before = Number(material.quantity || 0);
+        const reservedBefore = Number(material.reservedQty || 0);
+        const free = before - reservedBefore;
+        const qty = Number(purchase.quantity);
+
+        if (qty > free) {
+          const err = new Error(
+            `Cannot cancel — only ${free} of ${qty} received units are still free. Reverse any production or reservations that consumed this material first.`
+          );
+          err.status = 409;
+          err.code = "MATERIAL_ALREADY_CONSUMED";
+          throw err;
+        }
+
+        const after = before - qty;
+
+        const logEntry = {
+          type: "adjustment",
+          quantity: qty,
+          unitAtTime: material.unit,
+          beforeQty: before,
+          afterQty: after,
+          reason: `Cancelled purchase ${
+            purchase.purchaseNumber || purchase._id.toString().slice(-8)
+          }`,
+          notes: null,
+          refType: "Purchase",
+          refId: purchase._id,
+          refLabel:
+            purchase.purchaseNumber || purchase._id.toString().slice(-8),
+          by: req.user?._id || null,
+          at: new Date(),
+        };
+
+        const result = await RawStock.updateOne(
+          {
+            _id: material._id,
+            isActive: true,
+            quantity: before,
+            reservedQty: reservedBefore,
+          },
+          [
+            {
+              $set: {
+                quantity: after,
+                updatedBy: req.user?._id || null,
+                movementLog: {
+                  $slice: [
+                    {
+                      $concatArrays: [
+                        { $ifNull: ["$movementLog", []] },
+                        [logEntry],
+                      ],
+                    },
+                    -MAX_MOVEMENT_LOG,
+                  ],
+                },
+              },
+            },
+          ],
+          { session, updatePipeline: true }
+        );
+
+        if (result.modifiedCount !== 1) {
+          const err = new Error(
+            "Stock changed during cancellation. Please retry."
+          );
+          err.status = 409;
+          err.code = "STOCK_CHANGED";
+          throw err;
+        }
+      }
+
+      purchase.status = "Cancelled";
+      purchase.updatedBy = req.user?._id || null;
+      await purchase.save({ session });
+    });
+
+    populated = await RawPurchase.findById(req.params.id)
+      .populate("material", "name category unit sizeKg quantity")
       .populate("supplier", "name company phone email");
 
     return res.status(200).json({
       success: true,
-      message: "Purchase cancelled",
+      message: "Purchase cancelled and stock reversed",
       data: populated,
     });
   } catch (error) {
+    if (error.status === 400 || error.status === 404 || error.status === 409) {
+      return res.status(error.status).json({
+        success: false,
+        ...(error.code && { code: error.code }),
+        message: error.message,
+      });
+    }
     handleError(res, error, "Failed to cancel purchase");
+  } finally {
+    await session.endSession();
   }
 };
 
@@ -1005,7 +1141,9 @@ const deletePurchase = async (req, res) => {
     if (purchase.status === "Received") {
       return res.status(400).json({
         success: false,
-        message: "Cannot delete a received purchase",
+        code: "USE_CANCEL_INSTEAD",
+        message:
+          "Received purchases cannot be deleted. Cancel it first to reverse the stock, then delete.",
       });
     }
 

@@ -4,6 +4,7 @@ const ProductStock = require("../models/ProductStock");
 const { RawStock } = require("../models/RawMaterial");
 const { computeConsumption, REEL_COMPOSITION } = require("../utils/reelComposition");
 const { Worker, Attendance } = require("../models/Worker");
+const Salary = require("../models/Salary");
 const REEL_WEIGHTS = {
   "2kg": 2,
   "5kg": 5,
@@ -57,10 +58,6 @@ const parseNum = (v, field, max = MAX_QTY) => {
   return n;
 };
 
-/* ------------------------------------------------------------------ */
-/*  STOCK FINDERS — accept an optional session                        */
-/* ------------------------------------------------------------------ */
-
 const findSteelStock = (session = null) => {
   const q = RawStock.findOne({ category: "Steel", isActive: true }).sort({ createdAt: 1 });
   return session ? q.session(session) : q;
@@ -83,10 +80,6 @@ const findReelStock = (size, session = null) => {
 
   return session ? q.session(session) : q;
 };
-
-/* ------------------------------------------------------------------ */
-/*  VERIFY — pass session through to the finders                      */
-/* ------------------------------------------------------------------ */
 
 const verifyStockAvailable = async (
   { steelNeeded, reelsBySize, tapeNeeded = 0 },
@@ -686,6 +679,99 @@ const buildQtys = (entry) => ({
   "8kg": Number(entry.qty8kg || 0),
   "10kg": Number(entry.qty10kg || 0),
 });
+
+/* ------------------------------------------------------------------ */
+/*  SALARY LOCK — prevent desyncing reels once a salary was generated  */
+/* ------------------------------------------------------------------ */
+
+const findSalaryForWorkerOnDate = (workerId, date) =>
+  Salary.findOne({
+    worker: workerId,
+    isDeleted: false,
+    periodStart: { $lte: date },
+    periodEnd: { $gte: date },
+  }).select("_id periodStart periodEnd paidAmount advanceAmount netSalary");
+
+const detectWorkerDowngrades = (oldWorkers = [], newWorkers = []) => {
+  const changes = [];
+
+  const oldMap = new Map();
+  for (const w of oldWorkers) {
+    const id = String(w.worker?._id || w.worker);
+    if (id) oldMap.set(id, w);
+  }
+
+  const newMap = new Map();
+  for (const w of newWorkers) {
+    const id = String(w.worker?._id || w.worker);
+    if (id) newMap.set(id, w);
+  }
+
+  // Worker removed entirely → treat as a downgrade
+  for (const [workerId, oldW] of oldMap) {
+    if (!newMap.has(workerId)) {
+      changes.push({ workerId, removed: true, oldW });
+      continue;
+    }
+
+    const newW = newMap.get(workerId);
+    for (const size of SIZES) {
+      const oldQty = Number(oldW.production?.[size] || 0);
+      const newQty = Number(newW.production?.[size] || 0);
+      if (newQty < oldQty) {
+        changes.push({
+          workerId,
+          size,
+          oldQty,
+          newQty,
+          removed: false,
+        });
+      }
+    }
+  }
+
+  return changes;
+};
+
+const assertNoSalaryLock = async (oldWorkers, newWorkers, dates) => {
+  const changes = detectWorkerDowngrades(oldWorkers, newWorkers);
+  if (changes.length === 0) return;
+
+  const workerIds = [...new Set(changes.map((c) => c.workerId))];
+
+  for (const workerId of workerIds) {
+    const change = changes.find((c) => c.workerId === workerId);
+
+    for (const date of dates) {
+      if (!date) continue;
+
+      const salary = await findSalaryForWorkerOnDate(workerId, date);
+      if (!salary) continue;
+
+      const committed =
+        Number(salary.paidAmount || 0) + Number(salary.advanceAmount || 0);
+
+      const period =
+        salary.periodStart.toISOString().slice(0, 10) +
+        " → " +
+        salary.periodEnd.toISOString().slice(0, 10);
+
+      const detail = change.removed
+        ? "removing this worker from the entry"
+        : `reducing ${change.size} from ${change.oldQty} to ${change.newQty}`;
+
+      const err = new Error(
+        committed > 0
+          ? `Cannot edit this entry — ${detail} would desync a paid salary (${period}, ₹${committed} already paid/advanced). Reverse the payment or advance first.`
+          : `Cannot edit this entry — ${detail} would desync a generated salary (${period}). Delete or regenerate that salary record first.`
+      );
+
+      err.status = 409;
+      err.code = "SALARY_LOCK";
+      throw err;
+    }
+  }
+};
 
 const buildWorkerProduction = async (workers, dailyQtys, productionDate) => {
   if (workers === undefined || workers === null) {
@@ -1340,9 +1426,7 @@ const createProduction = async (req, res) => {
 
     consumption.tapeNeeded = Number(payload.tapeUsedBox || 0);
 
-    await verifyStockAvailable(consumption, allowReserved);
-
-    let entry = null;
+        let entry = null;
 
     await session.withTransaction(async () => {
       const existing = await ProductProduction.findOne({
@@ -1354,6 +1438,8 @@ const createProduction = async (req, res) => {
         err.status = 409;
         throw err;
       }
+      
+      await verifyStockAvailable(consumption, allowReserved, session);
 
       const created = await ProductProduction.create([payload], { session });
       entry = created[0];
@@ -1504,8 +1590,7 @@ const updateProduction = async (req, res) => {
         nextDate
       );
     } else if (productionDateChanged && nextWorkers.length > 0) {
-      // The date changed, but the existing worker assignments were retained.
-      // Validate attendance without recalculating their wages.
+      
       const attendanceDate = new Date(nextDate);
 
       const dateString = [
@@ -1541,6 +1626,11 @@ const updateProduction = async (req, res) => {
         }
       }
     }
+
+    await assertNoSalaryLock(existing.workers, nextWorkers, [
+      existing.date,
+      nextDate,
+    ]);
 
     const newConsumption = computeConsumption({
       qty2kg: nextQtys["2kg"],
@@ -1651,6 +1741,8 @@ const deleteProduction = async (req, res) => {
         err.status = 404;
         throw err;
       }
+
+      await assertNoSalaryLock(entry.workers, [], [entry.date]);
 
       const consumedObj = entry.consumed
         ? (typeof entry.consumed.toObject === "function" ? entry.consumed.toObject() : entry.consumed)

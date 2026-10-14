@@ -1,3 +1,5 @@
+'use strict';
+
 const mongoose = require('mongoose');
 const Payment = require('../models/Payment');
 const Order = require('../models/Order');
@@ -58,6 +60,8 @@ const handleError = (res, error, fallbackMessage) => {
     const friendly =
       field === 'transactionId'
         ? 'Transaction ID already exists'
+        : field === 'idempotencyKey'
+        ? 'Duplicate idempotency key'
         : 'Duplicate payment number, please retry';
     return res.status(409).json({
       success: false,
@@ -87,6 +91,33 @@ const populatePayment = (query) =>
     })
     .populate('contact', 'name company phone email');
 
+/* ------------------------------------------------------------------ */
+/*  OVERDUE RECONCILIATION — lazily marks orders overdue on read      */
+/* ------------------------------------------------------------------ */
+
+const reconcileOverdueOrders = async () => {
+  const now = new Date();
+  try {
+    await Order.updateMany(
+      {
+        isActive: true,
+        paymentStatus: { $in: ['Pending', 'Partial'] },
+        paymentDueDate: { $ne: null, $lt: now },
+        $expr: { $lt: ['$amountPaid', '$grandTotal'] },
+      },
+      { $set: { paymentStatus: 'Overdue' } }
+    );
+  } catch (err) {
+    // Non-fatal: log and continue. Read paths shouldn't hard-fail if this
+    // background-ish update hits a transient error.
+    console.error('[reconcileOverdueOrders]', err);
+  }
+};
+
+/* ------------------------------------------------------------------ */
+/*  APPLY TO ORDER — compare-and-swap guarded both directions         */
+/* ------------------------------------------------------------------ */
+
 const applyToOrder = async ({ orderId, amount, direction, session }) => {
   const delta = direction === 'apply' ? amount : -amount;
 
@@ -96,10 +127,20 @@ const applyToOrder = async ({ orderId, amount, direction, session }) => {
   };
 
   if (direction === 'apply') {
+    // Resulting amountPaid must not exceed grandTotal.
     filter.$expr = {
       $lte: [
         { $add: [{ $ifNull: ['$amountPaid', 0] }, amount] },
         { $add: ['$grandTotal', 0.01] },
+      ],
+    };
+  } else {
+    // Reverse: amountPaid must be at least `amount` so the order never
+    // goes negative. Guards against concurrent double-reversals.
+    filter.$expr = {
+      $gte: [
+        { $ifNull: ['$amountPaid', 0] },
+        { $subtract: [amount, 0.01] },
       ],
     };
   }
@@ -143,14 +184,43 @@ const applyToOrder = async ({ orderId, amount, direction, session }) => {
   });
 };
 
+/* ------------------------------------------------------------------ */
+/*  HELPERS                                                            */
+/* ------------------------------------------------------------------ */
+
 const generatePaymentNumber = async (session) => {
   const year = new Date().getFullYear();
   const seq = await getNextSequence(`payment-${year}`, session);
   return `PAY-${year}-${String(seq).padStart(4, '0')}`;
 };
 
+const pendingTotalForOrder = async (orderId, session = null) => {
+  const pipeline = [
+    {
+      $match: {
+        order: new mongoose.Types.ObjectId(String(orderId)),
+        isActive: true,
+        status: 'Pending',
+      },
+    },
+    { $group: { _id: null, total: { $sum: '$amount' } } },
+  ];
+
+  const agg = Payment.aggregate(pipeline);
+  if (session) agg.session(session);
+  const result = await agg;
+  return result[0]?.total || 0;
+};
+
+/* ------------------------------------------------------------------ */
+/*  READ                                                               */
+/* ------------------------------------------------------------------ */
+
 const getAllPayments = async (req, res) => {
   try {
+    // Lazy overdue reconciliation
+    await reconcileOverdueOrders();
+
     const {
       page = 1,
       limit = 20,
@@ -190,7 +260,6 @@ const getAllPayments = async (req, res) => {
           .status(400)
           .json({ success: false, message: 'Invalid status filter' });
       }
-
       query.status = status;
     }
 
@@ -278,9 +347,7 @@ const getPaymentById = async (req, res) => {
         .json({ success: false, message: 'Invalid payment ID' });
     }
 
-    const payment = await populatePayment(
-      Payment.findById(req.params.id)
-    );
+    const payment = await populatePayment(Payment.findById(req.params.id));
 
     if (!payment || !payment.isActive) {
       return res
@@ -293,6 +360,208 @@ const getPaymentById = async (req, res) => {
     handleError(res, error, 'Server error while fetching payment');
   }
 };
+
+const getPaymentsByOrder = async (req, res) => {
+  try {
+    if (!isValidId(req.params.orderId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: 'Invalid order ID' });
+    }
+
+    const [payments, order, pendingTotal] = await Promise.all([
+      Payment.find({ order: req.params.orderId, isActive: true })
+        .populate('contact', 'name company phone email')
+        .populate({
+          path: 'order',
+          select: ORDER_SELECT,
+          populate: {
+            path: 'contact',
+            select: 'name company phone email address gstin state stateCode',
+          },
+        })
+        .sort({ paymentDate: -1, createdAt: -1 }),
+
+      Order.findById(req.params.orderId)
+        .select(
+          'orderNumber grandTotal amountPaid paymentStatus customerName customerPhone contact paymentDueDate'
+        )
+        .populate(
+          'contact',
+          'name company phone email address gstin state stateCode'
+        ),
+
+      pendingTotalForOrder(req.params.orderId),
+    ]);
+
+    if (!order) {
+      return res
+        .status(404)
+        .json({ success: false, message: 'Order not found' });
+    }
+
+    const orderTotal = Number(order.grandTotal || 0);
+    const amountPaid = Number(order.amountPaid || 0);
+    const availableForPayment = Math.max(
+      0,
+      orderTotal - amountPaid - pendingTotal
+    );
+
+    res.status(200).json({
+      success: true,
+      count: payments.length,
+      order,
+      summary: {
+        orderTotal,
+        totalPaid: amountPaid,
+        pendingAmount: pendingTotal,
+        remainingAmount: Math.max(0, orderTotal - amountPaid),
+        availableForPayment,
+        paymentStatus: order.paymentStatus,
+      },
+      data: payments,
+    });
+  } catch (error) {
+    handleError(res, error, 'Server error while fetching payments for order');
+  }
+};
+
+/* ------------------------------------------------------------------ */
+/*  SUMMARY — currency-aware                                           */
+/* ------------------------------------------------------------------ */
+
+const getPaymentSummary = async (req, res) => {
+  try {
+    // Lazy overdue reconciliation
+    await reconcileOverdueOrders();
+
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    const [overallByCurrency, todayByCurrency, byStatusByCurrency] =
+      await Promise.all([
+        Payment.aggregate([
+          {
+            $addFields: {
+              currency: { $ifNull: ['$currency', 'INR'] },
+            },
+          },
+          { $match: { isActive: true, status: 'Completed' } },
+          {
+            $group: {
+              _id: '$currency',
+              totalCollected: { $sum: '$amount' },
+              count: { $sum: 1 },
+            },
+          },
+        ]),
+
+        Payment.aggregate([
+          {
+            $addFields: {
+              currency: { $ifNull: ['$currency', 'INR'] },
+            },
+          },
+          {
+            $match: {
+              isActive: true,
+              status: 'Completed',
+              paymentDate: { $gte: startOfToday },
+            },
+          },
+          {
+            $group: {
+              _id: '$currency',
+              totalToday: { $sum: '$amount' },
+              count: { $sum: 1 },
+            },
+          },
+        ]),
+
+        Payment.aggregate([
+          {
+            $addFields: {
+              currency: { $ifNull: ['$currency', 'INR'] },
+            },
+          },
+          { $match: { isActive: true } },
+          {
+            $group: {
+              _id: { currency: '$currency', status: '$status' },
+              total: { $sum: '$amount' },
+              count: { $sum: 1 },
+            },
+          },
+        ]),
+      ]);
+
+    // Build per-currency buckets
+    const currencies = new Set();
+    overallByCurrency.forEach((r) => currencies.add(r._id));
+    todayByCurrency.forEach((r) => currencies.add(r._id));
+    byStatusByCurrency.forEach((r) => currencies.add(r._id.currency));
+
+    const perCurrency = {};
+
+    for (const cur of currencies) {
+      const overall = overallByCurrency.find((r) => r._id === cur) || {
+        totalCollected: 0,
+        count: 0,
+      };
+      const today = todayByCurrency.find((r) => r._id === cur) || {
+        totalToday: 0,
+        count: 0,
+      };
+      const statuses = byStatusByCurrency
+        .filter((r) => r._id.currency === cur)
+        .map((r) => ({
+          status: r._id.status,
+          total: r.total,
+          count: r.count,
+        }));
+
+      perCurrency[cur] = {
+        totalCollected: overall.totalCollected,
+        totalCollectedCount: overall.count,
+        totalToday: today.totalToday,
+        totalTodayCount: today.count,
+        byStatus: statuses,
+      };
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        // Legacy top-level fields (only meaningful when a single currency
+        // dominates the dataset). New clients should use `currencies`.
+        totalCollected:
+          perCurrency.INR?.totalCollected ||
+          Object.values(perCurrency)[0]?.totalCollected ||
+          0,
+        totalCollectedCount:
+          perCurrency.INR?.totalCollectedCount ||
+          Object.values(perCurrency)[0]?.totalCollectedCount ||
+          0,
+        totalToday:
+          perCurrency.INR?.totalToday ||
+          Object.values(perCurrency)[0]?.totalToday ||
+          0,
+        totalTodayCount:
+          perCurrency.INR?.totalTodayCount ||
+          Object.values(perCurrency)[0]?.totalTodayCount ||
+          0,
+        // New, currency-aware view
+        currencies: perCurrency,
+      },
+    });
+  } catch (error) {
+    handleError(res, error, 'Server error while fetching payment summary');
+  }
+};
+
+/* ------------------------------------------------------------------ */
+/*  CREATE                                                             */
+/* ------------------------------------------------------------------ */
 
 const createPayment = async (req, res) => {
   const session = await mongoose.startSession();
@@ -311,6 +580,7 @@ const createPayment = async (req, res) => {
       status = 'Completed',
       notes,
       attachmentUrl,
+      idempotencyKey,
     } = req.body;
 
     if (!orderId || !isValidId(orderId)) {
@@ -327,7 +597,9 @@ const createPayment = async (req, res) => {
     ) {
       return res.status(400).json({
         success: false,
-        message: `Amount must be a positive number up to ${MAX_AMOUNT.toLocaleString('en-IN')}`,
+        message: `Amount must be a positive number up to ${MAX_AMOUNT.toLocaleString(
+          'en-IN'
+        )}`,
       });
     }
 
@@ -357,6 +629,7 @@ const createPayment = async (req, res) => {
         });
       }
     }
+
     if (NEEDS_TXN_ID.includes(paymentMode) && !safeString(transactionId, 100)) {
       return res.status(400).json({
         success: false,
@@ -376,40 +649,92 @@ const createPayment = async (req, res) => {
     }
 
     const cleanCurrency = safeString(currency, 3);
-    const finalCurrency = cleanCurrency
-      ? cleanCurrency.toUpperCase()
-      : 'INR';
+    const finalCurrency = cleanCurrency ? cleanCurrency.toUpperCase() : 'INR';
+    const cleanIdempotencyKey = safeString(idempotencyKey, 200);
 
-    const order = await Order.findOne({
-      _id: orderId,
-      isActive: true,
-    });
-    if (!order || !order.isActive) {
-      return res
-        .status(404)
-        .json({ success: false, message: 'Order not found' });
-    }
-
-    if (['Draft', 'Cancelled'].includes(order.status)) {
-      return res.status(400).json({
-        success: false,
-        code: 'ORDER_NOT_PAYABLE',
-        message: `Cannot record a payment for a ${order.status} order.`,
+    // Fast-path idempotent replay (outside transaction, cheap read)
+    if (cleanIdempotencyKey) {
+      const existing = await Payment.findOne({
+        idempotencyKey: cleanIdempotencyKey,
       });
-    }
-
-    if (!order.contact) {
-      return res
-        .status(400)
-        .json({ success: false, message: 'Order has no linked contact' });
+      if (existing) {
+        const populated = await populatePayment(
+          Payment.findById(existing._id)
+        );
+        return res.status(200).json({
+          success: true,
+          message: 'Payment already recorded (idempotent replay)',
+          data: populated,
+        });
+      }
     }
 
     let createdPayment;
+    let idempotentReplayId = null;
 
     await session.withTransaction(async () => {
+      // In-transaction idempotency re-check to close the race
+      if (cleanIdempotencyKey) {
+        const existingInTx = await Payment.findOne({
+          idempotencyKey: cleanIdempotencyKey,
+        }).session(session);
+
+        if (existingInTx) {
+          idempotentReplayId = existingInTx._id;
+          return;
+        }
+      }
+
+      // Order read moves INSIDE the transaction
+      const order = await Order.findOne({
+        _id: orderId,
+        isActive: true,
+      }).session(session);
+
+      if (!order) {
+        const err = new Error('Order not found');
+        err.status = 404;
+        throw err;
+      }
+
+      if (['Draft', 'Cancelled'].includes(order.status)) {
+        const err = new Error(
+          `Cannot record a payment for a ${order.status} order.`
+        );
+        err.status = 400;
+        err.code = 'ORDER_NOT_PAYABLE';
+        throw err;
+      }
+
+      if (!order.contact) {
+        const err = new Error('Order has no linked contact');
+        err.status = 400;
+        throw err;
+      }
+
+      // Pending payments must fit within remaining balance too
+      if (status === 'Pending') {
+        const existingPending = await pendingTotalForOrder(order._id, session);
+        const remaining =
+          Number(order.grandTotal || 0) -
+          Number(order.amountPaid || 0) -
+          existingPending;
+
+        if (numericAmount > remaining + 0.01) {
+          const err = new Error(
+            `Pending payments would exceed remaining balance of ₹${remaining.toFixed(
+              2
+            )}`
+          );
+          err.status = 400;
+          err.code = 'PENDING_EXCEEDS_REMAINING';
+          throw err;
+        }
+      }
+
       if (status === 'Completed') {
         const updatedOrder = await applyToOrder({
-          orderId,
+          orderId: order._id,
           amount: numericAmount,
           direction: 'apply',
           session,
@@ -419,7 +744,9 @@ const createPayment = async (req, res) => {
           const remaining =
             Number(order.grandTotal || 0) - Number(order.amountPaid || 0);
           const err = new Error(
-            `Payment amount (${numericAmount}) exceeds remaining balance (${remaining.toFixed(2)})`
+            `Payment amount (${numericAmount}) exceeds remaining balance (${remaining.toFixed(
+              2
+            )})`
           );
           err.status = 400;
           throw err;
@@ -432,7 +759,7 @@ const createPayment = async (req, res) => {
         [
           {
             paymentNumber,
-            order: orderId,
+            order: order._id,
             contact: order.contact,
             amount: numericAmount,
             currency: finalCurrency,
@@ -446,6 +773,7 @@ const createPayment = async (req, res) => {
             notes: safeString(notes, 2000) || undefined,
             attachmentUrl: safeString(attachmentUrl, 500) || undefined,
             appliedToOrder: status === 'Completed',
+            idempotencyKey: cleanIdempotencyKey || undefined,
             createdBy: req.user?._id,
           },
         ],
@@ -454,6 +782,17 @@ const createPayment = async (req, res) => {
 
       createdPayment = payment;
     });
+
+    if (idempotentReplayId) {
+      const populated = await populatePayment(
+        Payment.findById(idempotentReplayId)
+      );
+      return res.status(200).json({
+        success: true,
+        message: 'Payment already recorded (idempotent replay)',
+        data: populated,
+      });
+    }
 
     const populated = await populatePayment(
       Payment.findById(createdPayment._id)
@@ -465,17 +804,44 @@ const createPayment = async (req, res) => {
       data: populated,
     });
   } catch (error) {
-    if (error.status === 400) {
-      return res.status(400).json({
+    if (error.status === 400 || error.status === 404) {
+      return res.status(error.status).json({
         success: false,
+        ...(error.code ? { code: error.code } : {}),
         message: error.message,
       });
     }
+
+    // Race on unique idempotencyKey: return the winner
+    if (
+      error.code === 11000 &&
+      error.keyPattern &&
+      error.keyPattern.idempotencyKey
+    ) {
+      const existing = await Payment.findOne({
+        idempotencyKey: req.body.idempotencyKey,
+      });
+      if (existing) {
+        const populated = await populatePayment(
+          Payment.findById(existing._id)
+        );
+        return res.status(200).json({
+          success: true,
+          message: 'Payment already recorded (idempotent replay)',
+          data: populated,
+        });
+      }
+    }
+
     handleError(res, error, 'Server error while creating payment');
   } finally {
     await session.endSession();
   }
 };
+
+/* ------------------------------------------------------------------ */
+/*  UPDATE                                                             */
+/* ------------------------------------------------------------------ */
 
 const updatePayment = async (req, res) => {
   const session = await mongoose.startSession();
@@ -520,7 +886,6 @@ const updatePayment = async (req, res) => {
         .json({ success: false, message: 'Invalid status' });
     }
 
-    // Resolve final values that will be saved (merge body over existing)
     const finalMode =
       paymentMode !== undefined ? paymentMode : existing.paymentMode;
     const finalTxnId =
@@ -591,7 +956,6 @@ const updatePayment = async (req, res) => {
       }
     }
 
-    // Coerce isReconciled to a real boolean before the transaction
     let cleanIsReconciled;
     if (isReconciled !== undefined) {
       if (typeof isReconciled === 'boolean') {
@@ -636,14 +1000,19 @@ const updatePayment = async (req, res) => {
         payment.notes = safeString(notes, 2000) || undefined;
       }
       if (status !== undefined) payment.status = status;
-      if (cleanPaymentDate !== undefined) payment.paymentDate = cleanPaymentDate;
+      if (cleanPaymentDate !== undefined)
+        payment.paymentDate = cleanPaymentDate;
       if (attachmentUrl !== undefined) {
         payment.attachmentUrl = safeString(attachmentUrl, 500) || undefined;
       }
 
       if (cleanIsReconciled !== undefined) {
         payment.isReconciled = cleanIsReconciled;
-        if (cleanIsReconciled && !payment.reconciledDate && cleanReconciledDate === undefined) {
+        if (
+          cleanIsReconciled &&
+          !payment.reconciledDate &&
+          cleanReconciledDate === undefined
+        ) {
           payment.reconciledDate = new Date();
         }
         if (!cleanIsReconciled) {
@@ -660,6 +1029,7 @@ const updatePayment = async (req, res) => {
 
       if (wasApplied !== isCompletedNow) {
         if (isCompletedNow) {
+          // Pending → Completed: verify order still accepts the amount
           const order = await Order.findById(payment.order).session(session);
 
           if (!order || !order.isActive) {
@@ -691,16 +1061,30 @@ const updatePayment = async (req, res) => {
             throw err;
           }
         } else {
-          await applyToOrder({
+          // Completed → not Completed: reverse (now guarded against negative)
+          const reversed = await applyToOrder({
             orderId: payment.order,
             amount: payment.amount,
             direction: 'reverse',
             session,
           });
+
+          if (!reversed) {
+            const err = new Error(
+              "Cannot reverse: order's amountPaid would drop below the payment amount"
+            );
+            err.status = 409;
+            err.code = 'REVERSAL_WOULD_GO_NEGATIVE';
+            throw err;
+          }
         }
 
         payment.appliedToOrder = isCompletedNow;
       }
+
+      // Pending → Pending amount changed? Not currently supported (amount is
+      // immutable on update). If you later allow amount edits, add a guard
+      // here against the sum of other pending payments exceeding remaining.
 
       await payment.save({ session, validateModifiedOnly: true });
       updatedPayment = payment;
@@ -716,7 +1100,7 @@ const updatePayment = async (req, res) => {
       data: populated,
     });
   } catch (error) {
-    if (error.status === 400 || error.status === 404) {
+    if (error.status === 400 || error.status === 404 || error.status === 409) {
       return res.status(error.status).json({
         success: false,
         message: error.message,
@@ -729,6 +1113,10 @@ const updatePayment = async (req, res) => {
   }
 };
 
+/* ------------------------------------------------------------------ */
+/*  DELETE                                                             */
+/* ------------------------------------------------------------------ */
+
 const deletePayment = async (req, res) => {
   const session = await mongoose.startSession();
 
@@ -739,158 +1127,80 @@ const deletePayment = async (req, res) => {
         .json({ success: false, message: 'Invalid payment ID' });
     }
 
-    const existing = await Payment.findById(req.params.id);
-    if (!existing || !existing.isActive) {
-      return res
-        .status(404)
-        .json({ success: false, message: 'Payment not found' });
-    }
-
     await session.withTransaction(async () => {
-      const payment = await Payment.findById(req.params.id).session(session);
+      const payment = await Payment.findOne({
+        _id: req.params.id,
+        isActive: true,
+      }).session(session);
 
-      if (payment.appliedToOrder) {
-        await applyToOrder({
+      if (!payment) {
+        const err = new Error('Payment not found');
+        err.status = 404;
+        throw err;
+      }
+
+      const wasApplied = payment.appliedToOrder;
+
+      // Compare-and-swap: only transition if state hasn't changed since read
+      const cas = await Payment.updateOne(
+        {
+          _id: payment._id,
+          isActive: true,
+          appliedToOrder: wasApplied,
+        },
+        {
+          $set: {
+            isActive: false,
+            status: 'Cancelled',
+            appliedToOrder: false,
+            updatedBy: req.user?._id,
+          },
+        },
+        { session }
+      );
+
+      if (cas.modifiedCount !== 1) {
+        const err = new Error('Payment state changed; please retry');
+        err.status = 409;
+        err.code = 'PAYMENT_CHANGED';
+        throw err;
+      }
+
+      // Reverse from the order if it had been applied
+      if (wasApplied) {
+        const reversed = await applyToOrder({
           orderId: payment.order,
           amount: payment.amount,
           direction: 'reverse',
           session,
         });
-        payment.appliedToOrder = false;
+
+        if (!reversed) {
+          const err = new Error(
+            "Cannot delete: order's amountPaid would drop below the payment amount"
+          );
+          err.status = 409;
+          err.code = 'REVERSAL_WOULD_GO_NEGATIVE';
+          throw err;
+        }
       }
-
-      payment.isActive = false;
-      payment.updatedBy = req.user?._id;
-
-      await payment.save({ session, validateModifiedOnly: true });
     });
 
     res.status(200).json({
       success: true,
-      message: 'Payment deleted and order balance updated',
+      message: 'Payment cancelled and order balance updated',
     });
   } catch (error) {
+    if (error.status === 404 || error.status === 409) {
+      return res.status(error.status).json({
+        success: false,
+        ...(error.code ? { code: error.code } : {}),
+        message: error.message,
+      });
+    }
     handleError(res, error, 'Server error while deleting payment');
   } finally {
     await session.endSession();
-  }
-};
-
-const getPaymentsByOrder = async (req, res) => {
-  try {
-    if (!isValidId(req.params.orderId)) {
-      return res
-        .status(400)
-        .json({ success: false, message: 'Invalid order ID' });
-    }
-    const [payments, order] = await Promise.all([
-      Payment.find({ order: req.params.orderId, isActive: true })
-        .populate('contact', 'name company phone email')
-        .populate({
-          path: 'order',
-          select: ORDER_SELECT,
-          populate: {
-            path: 'contact',
-            select: 'name company phone email address gstin state stateCode',
-          },
-        })
-        .sort({ paymentDate: -1, createdAt: -1 }),
-
-      Order.findById(req.params.orderId)
-        .select(
-          'orderNumber grandTotal amountPaid paymentStatus customerName customerPhone contact'
-        )
-        .populate(
-          'contact',
-          'name company phone email address gstin state stateCode'
-        ),
-    ]);
-
-    if (!order) {
-      return res
-        .status(404)
-        .json({ success: false, message: 'Order not found' });
-    }
-
-    const orderTotal = Number(order.grandTotal || 0);
-    const amountPaid = Number(order.amountPaid || 0);
-    const remainingAmount = Math.max(0, orderTotal - amountPaid);
-
-    res.status(200).json({
-      success: true,
-      count: payments.length,
-      order,
-      summary: {
-        orderTotal,
-        totalPaid: amountPaid,
-        remainingAmount,
-        paymentStatus: order.paymentStatus,
-      },
-      data: payments,
-    });
-  } catch (error) {
-    handleError(res, error, 'Server error while fetching payments for order');
-  }
-};
-
-const getPaymentSummary = async (req, res) => {
-  try {
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-
-    const [totals, todayTotals, byStatus] = await Promise.all([
-      Payment.aggregate([
-        { $match: { isActive: true, status: 'Completed' } },
-        {
-          $group: {
-            _id: null,
-            totalCollected: { $sum: '$amount' },
-            count: { $sum: 1 },
-          },
-        },
-      ]),
-
-      Payment.aggregate([
-        {
-          $match: {
-            isActive: true,
-            status: 'Completed',
-            paymentDate: { $gte: startOfToday },
-          },
-        },
-        {
-          $group: {
-            _id: null,
-            totalToday: { $sum: '$amount' },
-            count: { $sum: 1 },
-          },
-        },
-      ]),
-
-      Payment.aggregate([
-        { $match: { isActive: true } },
-        {
-          $group: {
-            _id: '$status',
-            total: { $sum: '$amount' },
-            count: { $sum: 1 },
-          },
-        },
-      ]),
-    ]);
-
-    res.status(200).json({
-      success: true,
-      data: {
-        totalCollected: totals[0]?.totalCollected || 0,
-        totalCollectedCount: totals[0]?.count || 0,
-        totalToday: todayTotals[0]?.totalToday || 0,
-        totalTodayCount: todayTotals[0]?.count || 0,
-        byStatus,
-      },
-    });
-  } catch (error) {
-    handleError(res, error, 'Server error while fetching payment summary');
   }
 };
 
@@ -902,4 +1212,5 @@ module.exports = {
   deletePayment,
   getPaymentsByOrder,
   getPaymentSummary,
+  reconcileOverdueOrders,
 };

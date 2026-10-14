@@ -325,12 +325,11 @@ function Salary() {
   const [toasts, setToasts] = useState([]);
   const [confirm, setConfirm] = useState(null);
 
-  const [formState, setFormState] = useState(null);   // { editing, data }
+  const [formState, setFormState] = useState(null);   
   const [view, setView] = useState(null);
-  const [moneyModal, setMoneyModal] = useState(null); // { kind, target }
-  const [gen, setGen] = useState(null);               // { stage, start, end, results, message }
+  const [moneyModal, setMoneyModal] = useState(null); 
+  const [gen, setGen] = useState(null);               
 
-  /* ---------- toasts ---------- */
   const toast = useCallback((type, message) => {
     const id = Date.now() + Math.random();
     setToasts((t) => [...t, { id, type, message }]);
@@ -338,7 +337,6 @@ function Salary() {
   }, []);
   const dismissToast = useCallback((id) => setToasts((t) => t.filter((x) => x.id !== id)), []);
 
-  /* ---------- fetch ---------- */
   const reqId = useRef(0);
   const fetchSalaries = useCallback(async () => {
     const id = ++reqId.current;
@@ -382,7 +380,6 @@ function Salary() {
   const activeWorkers = useMemo(() => workers.filter((w) => w.status !== "Inactive"), [workers]);
   const fixedWorkers = useMemo(() => activeWorkers.filter((w) => w.payType === "Fixed"), [activeWorkers]);
 
-  /* ---------- filters ---------- */
   const stepMonth = (delta) => {
     const now = new Date();
     const base = cursor || { y: now.getFullYear(), m: now.getMonth() };
@@ -400,7 +397,6 @@ function Salary() {
     setDateFrom(""); setDateTo(""); setCursor(null); setPage(1);
   };
 
-  /* ---------- generate ---------- */
   const openGenerate = () => {
     const now = new Date();
     const { from, to } = cursor ? monthRange(cursor.y, cursor.m) : monthRange(now.getFullYear(), now.getMonth());
@@ -432,7 +428,6 @@ function Salary() {
     setDateFrom(gen.start); setDateTo(gen.end); setPage(1); setGen(null);
   };
 
-  /* ---------- create / edit ---------- */
   const openCreate = () => {
     const now = new Date();
     const { from, to } = monthRange(now.getFullYear(), now.getMonth());
@@ -493,7 +488,6 @@ function Salary() {
     finally { setSaving(false); }
   };
 
-  /* ---------- delete salary ---------- */
   const askDelete = (s) => setConfirm({
     title: "Delete salary record?",
     body: `This removes ${s.worker?.name || "this worker"}'s record for ${fmtDate(s.periodStart)} to ${fmtDate(s.periodEnd)}. You can generate it again afterwards.`,
@@ -510,7 +504,6 @@ function Salary() {
     },
   });
 
-  /* ---------- view ---------- */
   const openView = (s) => {
     setView(s);
     getSalaryById(s._id)
@@ -521,7 +514,6 @@ function Salary() {
       .catch(() => {});
   };
 
-  /* ---------- delete advance ---------- */
   const askDeleteAdvance = (salary, advanceId, amount) => setConfirm({
     title: "Delete advance?",
     body: `This removes the ${money(amount)} advance from ${salary.worker?.name || "this worker"}'s record. The balance will go back up by that amount.`,
@@ -543,7 +535,6 @@ function Salary() {
     },
   });
 
-  /* ---------- derived ---------- */
   const firstShown = meta.total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const lastShown = Math.min(page * PAGE_SIZE, meta.total);
   const genCounts = gen && {
@@ -552,14 +543,10 @@ function Salary() {
     skipped: gen.results.filter((r) => r.status === "skipped").length,
   };
 
-  /* ================================================================
-   *  RENDER
-   * ================================================================ */
   return (
     <div className="w-full space-y-5 pb-10">
       <Toasts items={toasts} dismiss={dismissToast} />
 
-      {/* ---------- header ---------- */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-[#0a1e3f]">Salary</h1>
@@ -573,7 +560,6 @@ function Salary() {
         </div>
       </div>
 
-      {/* ---------- error ---------- */}
       {listError && (
         <div className="flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           <span>{listError}</span>
@@ -581,8 +567,7 @@ function Salary() {
         </div>
       )}
 
-      {/* ---------- summary KPI cards ---------- */}
-            <section className="space-y-3">
+      <section className="space-y-3">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard
             label="Net payroll"

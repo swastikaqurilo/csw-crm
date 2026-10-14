@@ -81,8 +81,13 @@ const handleError = (res, error, fallbackMessage) => {
   if (error.code === 11000) {
     return res.status(409).json({ success: false, message: "Duplicate record, please retry" });
   }
-  if (error.status) {
-    return res.status(error.status).json({ success: false, message: error.message });
+    if (error.status) {
+    return res.status(error.status).json({
+      success: false,
+      ...(error.code ? { code: error.code } : {}),
+      ...(error.data ? { data: error.data } : {}),
+      message: error.message,
+    });
   }
   return res.status(500).json({ success: false, message: fallbackMessage });
 };
@@ -152,6 +157,46 @@ const amountInWords = (amount) => {
 
 const resolveStockId = (item) =>
   item.productStock?._id || item.productStock || null;
+
+const getStockShortfalls = async (
+  items,
+  session = null,
+  ownReservation = {}
+) => {
+  const shortfalls = [];
+
+  for (const item of items) {
+    const stockId = resolveStockId(item);
+    if (!stockId) continue;
+
+    const q = ProductStock.findById(stockId).select(
+      "quantity reservedQty name size unit"
+    );
+    const stock = await (session ? q.session(session) : q);
+    if (!stock) continue;
+
+    const quantity = Number(stock.quantity || 0);
+    const reservedQty = Number(stock.reservedQty || 0);
+    const ownReserved = Number(ownReservation[String(stockId)] || 0);
+    const freeAvailable = Math.max(quantity - reservedQty, 0);
+    const requested = Number(item.quantity || 0);
+
+    if (requested > freeAvailable) {
+      shortfalls.push({
+        size: item.size,
+        name: stock.name,
+        unit: stock.unit,
+        requested,
+        available: freeAvailable,
+        totalStock: quantity,
+        reservedByOthers: Math.max(reservedQty - ownReserved, 0),
+        shortfall: requested - freeAvailable,
+      });
+    }
+  }
+
+  return shortfalls;
+};
 
 const deductOrderStock = async (
   order,
@@ -238,7 +283,6 @@ const deductOrderStock = async (
     const after = before - qty;
     const reservedAfter = reservedBefore - usedFromReserved;
 
-    // Conditional update prevents silently overwriting a concurrent change.
     const result = await ProductStock.updateOne(
       {
         _id: stockId,
@@ -299,8 +343,118 @@ const deductOrderStock = async (
   }
 };
 
-// Consume a reservation owned by an order whose stockStatus is Reserved.
-// This assumes the reservation workflow reserves each order item's full quantity.
+// Increment reservedQty on each item's stock record without touching quantity.
+// Called when a Draft order is saved with reserveStock=true, or when the user
+// explicitly reserves stock ahead of confirmation.
+const reserveOrderStock = async (order, user, session) => {
+  for (const item of order.items) {
+    const stockId = resolveStockId(item);
+    const qty = Number(item.quantity);
+
+    if (!stockId || !Number.isFinite(qty) || qty <= 0 || qty > MAX_QTY) {
+      throw { status: 400, message: `Invalid reservation data for ${item.size}.` };
+    }
+
+    const stock = await ProductStock.findOne({
+      _id: stockId,
+      isActive: true,
+    }).session(session);
+
+    if (!stock) {
+      throw { status: 404, message: `No active stock found for ${item.size} reel.` };
+    }
+
+    const before = Number(stock.quantity || 0);
+    const reservedBefore = Number(stock.reservedQty || 0);
+    const freeBefore = before - reservedBefore;
+
+    if (
+      !Number.isFinite(before) ||
+      !Number.isFinite(reservedBefore) ||
+      before < 0 ||
+      reservedBefore < 0 ||
+      reservedBefore > before
+    ) {
+      throw {
+        status: 409,
+        message: `Invalid inventory state for ${item.size}. Correct the stock record before reserving.`,
+      };
+    }
+
+    if (qty > freeBefore) {
+      throw {
+        status: 409,
+        code: "RESERVED_CONFLICT",
+        message: `Cannot reserve ${qty} ${item.size} reels — only ${freeBefore} free.`,
+        data: {
+          material: "product",
+          size: item.size,
+          name: stock.name,
+          unit: stock.unit,
+          totalQty: before,
+          reservedQty: reservedBefore,
+          freeQty: freeBefore,
+          requested: qty,
+          usedFromReserved: 0,
+        },
+      };
+    }
+
+    const reservedAfter = reservedBefore + qty;
+
+    const result = await ProductStock.updateOne(
+      {
+        _id: stockId,
+        isActive: true,
+        quantity: before,
+        reservedQty: reservedBefore,
+      },
+      [
+        {
+          $set: {
+            reservedQty: reservedAfter,
+            movementLog: {
+              $slice: [
+                {
+                  $concatArrays: [
+                    { $ifNull: ["$movementLog", []] },
+                    [
+                      {
+                        type: "adjustment",
+                        quantity: qty,
+                        unitAtTime: stock.unit,
+                        beforeQty: before,
+                        afterQty: before,
+                        reason: `Reserved for order ${order.orderNumber}`,
+                        notes: null,
+                        refType: "Reservation",
+                        refId: order._id,
+                        refLabel: order.orderNumber,
+                        by: user?._id || null,
+                        at: "$$NOW",
+                      },
+                    ],
+                  ],
+                },
+                -MAX_MOVEMENT_LOG,
+              ],
+            },
+          },
+        },
+      ],
+      { session, updatePipeline: true }
+    );
+
+    if (result.modifiedCount !== 1) {
+      throw {
+        status: 409,
+        code: "STOCK_CHANGED",
+        message: `Stock for ${item.size} changed while reserving. Please retry.`,
+      };
+    }
+  }
+};
+
 const deductReservedOrderStock = async (order, user, session) => {
   for (const item of order.items) {
     const stockId = resolveStockId(item);
@@ -590,7 +744,7 @@ const releaseOrderReservation = async (order, user, session) => {
   }
 };
 
-const buildItems = async (rawItems) => {
+const buildItems = async (rawItems, session = null) => {
   if (!Array.isArray(rawItems) || rawItems.length === 0) {
     throw { status: 400, message: "Order must have at least one item" };
   }
@@ -607,7 +761,8 @@ const buildItems = async (rawItems) => {
       throw { status: 400, message: `Invalid reel size: ${size}` };
     }
 
-    const stock = await ProductStock.findOne({ size, isActive: true });
+    const stockQuery = ProductStock.findOne({ size, isActive: true });
+    const stock = await (session ? stockQuery.session(session) : stockQuery);
     if (!stock) {
       throw { status: 400, message: `Product stock for ${size} not found` };
     }
@@ -640,6 +795,7 @@ const buildItems = async (rawItems) => {
     });
     subTotal += amount;
   }
+
   return { items: processed, subTotal };
 };
 
@@ -746,6 +902,7 @@ const createOrder = async (req, res) => {
       expectedDeliveryDate, shippingAddress, billingAddress,
       notes, status = "Draft",
       allowReserved = false,
+      reserveStock = false,
     } = req.body;
 
     if (
@@ -754,6 +911,10 @@ const createOrder = async (req, res) => {
       allowReserved !== "false"
     ) {
       return res.status(400).json({ success: false, message: "allowReserved must be a boolean" });
+    }
+
+    if (typeof reserveStock !== "boolean") {
+      return res.status(400).json({ success: false, message: "reserveStock must be a boolean" });
     }
 
     let contactDoc = null;
@@ -812,6 +973,13 @@ const createOrder = async (req, res) => {
       });
     }
 
+    if (reserveStock && status === "Confirmed") {
+      return res.status(400).json({
+        success: false,
+        message: "reserveStock only applies to Draft orders. Confirmed orders deduct stock immediately.",
+      });
+    }
+
     let cleanExpectedDelivery;
     if (expectedDeliveryDate) {
       const d = parseDate(expectedDeliveryDate);
@@ -819,41 +987,49 @@ const createOrder = async (req, res) => {
       cleanExpectedDelivery = d;
     }
 
-    const { items: processedItems, subTotal } = await buildItems(items);
-
-    const taxableAmount = Math.max(0, subTotal - orderDiscount);
-    const taxAmount = round2((taxableAmount * numericTaxPercent) / 100);
-    const grandTotal = round2(taxableAmount + taxAmount);
-
-    const orderPayload = {
-      enquiry: cleanEnquiry,
-      contact: finalContactId,
-      customerName:
-        safeString(customerName, 150) ||
-        (contactDoc.company
-          ? `${contactDoc.company} — ${contactDoc.name}`
-          : contactDoc.name),
-      customerPhone:
-        normalizePhone(customerPhone) || contactDoc.phone || "",
-      items: processedItems,
-      subTotal,
-      discount: orderDiscount,
-      taxPercent: numericTaxPercent,
-      taxAmount,
-      grandTotal,
-      status,
-      expectedDeliveryDate: cleanExpectedDelivery || null,
-      shippingAddress: safeString(shippingAddress, 500) || "",
-      billingAddress: safeString(billingAddress, 500) || "",
-      notes: safeString(notes, 2000) || "",
-      stockStatus: "Pending",
-      createdBy: req.user?._id || null,
-    };
-
     let order;
+    const warnings = [];
     const session = await mongoose.startSession();
+
     try {
-      await session.withTransaction(async () => {
+        await session.withTransaction(async () => {
+        warnings.length = 0;
+        const { items: processedItems, subTotal } = await buildItems(items, session);
+        const taxableAmount = Math.max(0, subTotal - orderDiscount);
+        const taxAmount = round2((taxableAmount * numericTaxPercent) / 100);
+        const grandTotal = round2(taxableAmount + taxAmount);
+
+        // Draft: don't block, but surface stock shortfalls to the UI.
+        if (status === "Draft") {
+          const shortfalls = await getStockShortfalls(processedItems, session);
+          warnings.push(...shortfalls);
+        }
+
+        const orderPayload = {
+          enquiry: cleanEnquiry,
+          contact: finalContactId,
+          customerName:
+            safeString(customerName, 150) ||
+            (contactDoc.company
+              ? `${contactDoc.company} — ${contactDoc.name}`
+              : contactDoc.name),
+          customerPhone:
+            normalizePhone(customerPhone) || contactDoc.phone || "",
+          items: processedItems,
+          subTotal,
+          discount: orderDiscount,
+          taxPercent: numericTaxPercent,
+          taxAmount,
+          grandTotal,
+          status,
+          expectedDeliveryDate: cleanExpectedDelivery || null,
+          shippingAddress: safeString(shippingAddress, 500) || "",
+          billingAddress: safeString(billingAddress, 500) || "",
+          notes: safeString(notes, 2000) || "",
+          stockStatus: "Pending",
+          createdBy: req.user?._id || null,
+        };
+
         const orderNumber = await generateOrderNumber(session);
         [order] = await Order.create(
           [{ ...orderPayload, orderNumber }],
@@ -861,9 +1037,20 @@ const createOrder = async (req, res) => {
         );
 
         if (order.status === "Confirmed") {
-          await deductOrderStock(order, req.user, allowReserved === true || allowReserved === "true", session);
+          await deductOrderStock(
+            order,
+            req.user,
+            allowReserved === true || allowReserved === "true",
+            session
+          );
           order.stockStatus = "Deducted";
           order.stockDeductedAt = new Date();
+          order.updatedBy = req.user?._id || null;
+          await order.save({ session });
+        } else if (reserveStock) {
+          await reserveOrderStock(order, req.user, session);
+          order.stockStatus = "Reserved";
+          order.stockReservedAt = new Date();
           order.updatedBy = req.user?._id || null;
           await order.save({ session });
         }
@@ -880,6 +1067,7 @@ const createOrder = async (req, res) => {
       success: true,
       message: "Order created successfully",
       data: populated,
+      ...(warnings.length > 0 ? { warnings } : {}),
     });
   } catch (error) {
     if (error?.code === "RESERVED_CONFLICT") {
@@ -897,6 +1085,7 @@ const createOrder = async (req, res) => {
       return res.status(error.status).json({
         success: false,
         ...(error.code ? { code: error.code } : {}),
+        ...(error.data ? { data: error.data } : {}),
         message: error.message || "Failed to create order",
       });
     }
@@ -905,115 +1094,157 @@ const createOrder = async (req, res) => {
 };
 
 const updateOrder = async (req, res) => {
+  if (!isValidId(req.params.id)) {
+    return res.status(400).json({ success: false, message: "Invalid order ID" });
+  }
+
+  const { reserveStock = false } = req.body;
+
+  if (typeof reserveStock !== "boolean") {
+    return res.status(400).json({ success: false, message: "reserveStock must be a boolean" });
+  }
+
+  const session = await mongoose.startSession();
+
   try {
-    if (!isValidId(req.params.id)) {
-      return res.status(400).json({ success: false, message: "Invalid order ID" });
-    }
+    let updatedId = null;
 
-    const order = await Order.findById(req.params.id);
-    if (!order || !order.isActive) {
-      return res.status(404).json({ success: false, message: "Order not found" });
-    }
-
-    if (req.body.items !== undefined && (order.status !== "Draft" || (order.stockStatus || "Pending") !== "Pending")) {
-      return res.status(400).json({
-        success: false,
-        message: "Order items can only be edited while the order is Draft and has no stock reservation or deduction.",
-      });
-    }
-
-    if (req.body.expectedDeliveryDate !== undefined) {
-      if (req.body.expectedDeliveryDate === null || req.body.expectedDeliveryDate === "") {
-        order.expectedDeliveryDate = null;
-      } else {
-        const d = parseDate(req.body.expectedDeliveryDate);
-        if (!d) return res.status(400).json({ success: false, message: "Invalid expected delivery date" });
-        order.expectedDeliveryDate = d;
+    await session.withTransaction(async () => {
+      const order = await Order.findById(req.params.id).session(session);
+      if (!order || !order.isActive) {
+        throw { status: 404, message: "Order not found" };
       }
-    }
 
-    if (req.body.shippingAddress !== undefined) {
-      order.shippingAddress = safeString(req.body.shippingAddress, 500) || "";
-    }
-    if (req.body.billingAddress !== undefined) {
-      order.billingAddress = safeString(req.body.billingAddress, 500) || "";
-    }
-    if (req.body.notes !== undefined) {
-      order.notes = safeString(req.body.notes, 2000) || "";
-    }
-    if (req.body.customerName !== undefined) {
-      order.customerName = safeString(req.body.customerName, 150) || "";
-    }
-    if (req.body.customerPhone !== undefined) {
-      order.customerPhone = safeString(req.body.customerPhone, 30) || "";
-    }
+      const currentStockStatus = order.stockStatus || "Pending";
 
-    let totalsChanged = false;
-
-    if (req.body.items !== undefined) {
-      const { items: processedItems, subTotal } = await buildItems(req.body.items);
-      order.items = processedItems;
-      order.subTotal = subTotal;
-      totalsChanged = true;
-    }
-
-    if (req.body.discount !== undefined) {
-      const d = Number(req.body.discount);
-      if (!Number.isFinite(d) || d < 0 || d > MAX_AMOUNT) {
-        return res.status(400).json({ success: false, message: "Invalid discount" });
+      if (
+        req.body.items !== undefined &&
+        (order.status !== "Draft" || currentStockStatus !== "Pending")
+      ) {
+        throw {
+          status: 400,
+          message:
+            "Order items can only be edited while the order is Draft and has no stock reservation or deduction.",
+        };
       }
-      order.discount = d;
-      totalsChanged = true;
-    }
 
-    if (req.body.taxPercent !== undefined) {
-      const t = Number(req.body.taxPercent);
-      if (!Number.isFinite(t) || t < 0 || t > 100) {
-        return res.status(400).json({ success: false, message: "Tax percent must be between 0 and 100" });
+      if (reserveStock) {
+        if (order.status !== "Draft") {
+          throw {
+            status: 400,
+            code: "RESERVE_ONLY_FOR_DRAFT",
+            message: "Stock can only be reserved while the order is still Draft.",
+          };
+        }
+        if (currentStockStatus !== "Pending") {
+          throw {
+            status: 400,
+            code: "ALREADY_RESERVED_OR_DEDUCTED",
+            message: `Cannot reserve stock — this order is already ${currentStockStatus.toLowerCase()}.`,
+          };
+        }
       }
-      order.taxPercent = t;
-      totalsChanged = true;
-    }
 
-    if (totalsChanged) {
-  const taxableAmount = Math.max(
-    0,
-    Number(order.subTotal || 0) - Number(order.discount || 0)
-  );
+      if (req.body.expectedDeliveryDate !== undefined) {
+        if (req.body.expectedDeliveryDate === null || req.body.expectedDeliveryDate === "") {
+          order.expectedDeliveryDate = null;
+        } else {
+          const d = parseDate(req.body.expectedDeliveryDate);
+          if (!d) throw { status: 400, message: "Invalid expected delivery date" };
+          order.expectedDeliveryDate = d;
+        }
+      }
 
-  const taxAmount =
-    (taxableAmount * Number(order.taxPercent || 0)) / 100;
+      if (req.body.shippingAddress !== undefined) {
+        order.shippingAddress = safeString(req.body.shippingAddress, 500) || "";
+      }
+      if (req.body.billingAddress !== undefined) {
+        order.billingAddress = safeString(req.body.billingAddress, 500) || "";
+      }
+      if (req.body.notes !== undefined) {
+        order.notes = safeString(req.body.notes, 2000) || "";
+      }
+      if (req.body.customerName !== undefined) {
+        order.customerName = safeString(req.body.customerName, 150) || "";
+      }
+      if (req.body.customerPhone !== undefined) {
+        order.customerPhone = safeString(req.body.customerPhone, 30) || "";
+      }
 
-  const grandTotal = round2(taxableAmount + taxAmount);
-  const amountPaid = round2(Number(order.amountPaid || 0));
+      let totalsChanged = false;
 
-  if (amountPaid > grandTotal + 0.01) {
-    return res.status(400).json({
-      success: false,
-      code: "ORDER_TOTAL_BELOW_PAID_AMOUNT",
-      message:
-        "The new order total cannot be lower than the amount already paid.",
+      if (req.body.items !== undefined) {
+        const { items: processedItems, subTotal } = await buildItems(
+          req.body.items,
+          session
+        );
+        order.items = processedItems;
+        order.subTotal = subTotal;
+        totalsChanged = true;
+      }
+
+      if (req.body.discount !== undefined) {
+        const d = Number(req.body.discount);
+        if (!Number.isFinite(d) || d < 0 || d > MAX_AMOUNT) {
+          throw { status: 400, message: "Invalid discount" };
+        }
+        order.discount = d;
+        totalsChanged = true;
+      }
+
+      if (req.body.taxPercent !== undefined) {
+        const t = Number(req.body.taxPercent);
+        if (!Number.isFinite(t) || t < 0 || t > 100) {
+          throw { status: 400, message: "Tax percent must be between 0 and 100" };
+        }
+        order.taxPercent = t;
+        totalsChanged = true;
+      }
+
+      if (totalsChanged) {
+        const taxableAmount = Math.max(
+          0,
+          Number(order.subTotal || 0) - Number(order.discount || 0)
+        );
+        const taxAmount = (taxableAmount * Number(order.taxPercent || 0)) / 100;
+        const grandTotal = round2(taxableAmount + taxAmount);
+        const amountPaid = round2(Number(order.amountPaid || 0));
+
+        if (amountPaid > grandTotal + 0.01) {
+          throw {
+            status: 400,
+            code: "ORDER_TOTAL_BELOW_PAID_AMOUNT",
+            message: "The new order total cannot be lower than the amount already paid.",
+          };
+        }
+
+        order.taxAmount = round2(taxAmount);
+        order.grandTotal = grandTotal;
+
+        if (amountPaid >= grandTotal) {
+          order.paymentStatus = "Paid";
+        } else if (order.paymentStatus === "Overdue") {
+          order.paymentStatus = "Overdue";
+        } else if (amountPaid > 0) {
+          order.paymentStatus = "Partial";
+        } else {
+          order.paymentStatus = "Pending";
+        }
+      }
+
+      if (reserveStock) {
+        await reserveOrderStock(order, req.user, session);
+        order.stockStatus = "Reserved";
+        order.stockReservedAt = new Date();
+      }
+
+      order.updatedBy = req.user?._id || null;
+      await order.save({ session });
+
+      updatedId = order._id;
     });
-  }
 
-  order.taxAmount = round2(taxAmount);
-  order.grandTotal = grandTotal;
-
-  if (amountPaid >= grandTotal) {
-    order.paymentStatus = "Paid";
-  } else if (order.paymentStatus === "Overdue") {
-    order.paymentStatus = "Overdue";
-  } else if (amountPaid > 0) {
-    order.paymentStatus = "Partial";
-  } else {
-    order.paymentStatus = "Pending";
-  }
-}
-
-    order.updatedBy = req.user?._id || null;
-    await order.save();
-
-    const populated = await Order.findById(order._id)
+    const populated = await Order.findById(updatedId)
       .populate("contact", CONTACT_FIELDS)
       .populate("enquiry", "enquiryNumber customerName company subject");
 
@@ -1023,7 +1254,28 @@ const updateOrder = async (req, res) => {
       data: populated,
     });
   } catch (error) {
+    if (error?.code === "RESERVED_CONFLICT") {
+      return res.status(409).json({
+        success: false,
+        code: error.code,
+        message: error.message,
+        data: error.data,
+      });
+    }
+    if (error?.code === "STOCK_CHANGED") {
+      return res.status(409).json({ success: false, code: error.code, message: error.message });
+    }
+    if (error.status === 400 || error.status === 404) {
+      return res.status(error.status).json({
+        success: false,
+        ...(error.code ? { code: error.code } : {}),
+        ...(error.data ? { data: error.data } : {}),
+        message: error.message,
+      });
+    }
     handleError(res, error, "Server error while updating order");
+  } finally {
+    await session.endSession();
   }
 };
 
@@ -1108,18 +1360,34 @@ const updateOrderStatus = async (req, res) => {
 
       const currentStockStatus = order.stockStatus || "Pending";
 
-      const activePayments = await Payment.countDocuments({
-        order: order._id,
-        isActive: true,
-      }).session(session);                                    // ← add .session()
+      if (status === "Cancelled") {
+  const activePayments = await Payment.find({
+    order: order._id,
+    isActive: true,
+  })
+    .select("_id amount paymentDate paymentMode transactionId")
+    .session(session)
+    .lean();
 
-      if (activePayments > 0) {
-        throw {                                               // ← throw, not return
-          status: 400,
-          code: "ORDER_HAS_PAYMENTS",
-          message: "This order has payment records. Delete or reverse those payments first.",
-        };
-      }
+  if (activePayments.length > 0) {
+    const totalPaid = activePayments.reduce(
+      (sum, p) => sum + Number(p.amount || 0),
+      0
+    );
+
+    throw {
+      status: 400,
+      code: "ORDER_HAS_PAYMENTS",
+      message: `This order has ${activePayments.length} payment record(s) totalling ₹${round2(
+        totalPaid
+      )}. Reverse those payments before cancelling.`,
+      data: {
+        payments: activePayments,
+        totalPaid: round2(totalPaid),
+      },
+    };
+  }
+}
 
       if (status === "Confirmed" && currentStockStatus === "Pending") {
         await deductOrderStock(order, req.user, allowReservedStock, session);
@@ -1221,37 +1489,54 @@ const updatePayment = async (req, res) => {
    DELETE ORDER
 ====================================================== */
 const deleteOrder = async (req, res) => {
+  if (!isValidId(req.params.id)) {
+    return res.status(400).json({ success: false, message: "Invalid order ID" });
+  }
+
+  const session = await mongoose.startSession();
   try {
-    if (!isValidId(req.params.id)) {
-      return res.status(400).json({ success: false, message: "Invalid order ID" });
-    }
+    await session.withTransaction(async () => {
+      const order = await Order.findById(req.params.id).session(session);
 
-    const order = await Order.findById(req.params.id);
-    if (!order || !order.isActive) {
-      return res.status(404).json({ success: false, message: "Order not found" });
-    }
+      if (!order || !order.isActive) {
+        throw { status: 404, message: "Order not found" };
+      }
 
-    if (!["Draft", "Cancelled"].includes(order.status)) {
-      return res.status(400).json({
-        success: false,
-        message: "Only Draft or Cancelled orders can be deleted",
-      });
-    }
+      if (!["Draft", "Cancelled"].includes(order.status)) {
+        throw {
+          status: 400,
+          message: "Only Draft or Cancelled orders can be deleted",
+        };
+      }
 
-    if (["Reserved", "Deducted"].includes(order.stockStatus)) {
-      return res.status(400).json({
-        success: false,
-        message: "This order still holds or reserves stock. Cancel it first so inventory is safely released, then delete.",
-      });
-    }
+      if (["Reserved", "Deducted"].includes(order.stockStatus)) {
+        throw {
+          status: 400,
+          message:
+            "This order still holds or reserves stock. Cancel it first so inventory is safely released, then delete.",
+        };
+      }
 
-    order.isActive = false;
-    order.updatedBy = req.user?._id || null;
-    await order.save();
+      order.isActive = false;
+      order.updatedBy = req.user?._id || null;
+      await order.save({ session });
+    });
 
-    return res.status(200).json({ success: true, message: "Order deleted successfully" });
+    return res.status(200).json({
+      success: true,
+      message: "Order deleted successfully",
+    });
   } catch (error) {
+    if (error?.status === 400 || error?.status === 404) {
+      return res.status(error.status).json({
+        success: false,
+        ...(error.code ? { code: error.code } : {}),
+        message: error.message,
+      });
+    }
     handleError(res, error, "Server error");
+  } finally {
+    await session.endSession();
   }
 };
 
@@ -1389,9 +1674,9 @@ const generateInvoice = async (req, res) => {
     const grandTotal = round2(rawGrandTotal + roundOff);
 
     const invoiceItems = order.items.map((item) => ({
-      product: item.productStock || item.product,
+      product: item.productStock,
       description: item.productName || `Reel ${item.size}`,
-      hsnSac: item.hsnSac || defaultHsn,   
+      hsnSac: item.hsnSac || defaultHsn,
       quantity: Number(item.quantity || 0),
       rate: Number(item.rate || 0),
       unit: item.unit || "Reel",

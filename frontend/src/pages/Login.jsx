@@ -561,11 +561,7 @@ function Login() {
 
                   <button
                     type="button"
-                    onClick={() =>
-                      alert(
-                        "Contact your administrator to reset the password."
-                      )
-                    }
+                    onClick={() => navigate("/forgot-password")}
                     className="text-[11px] font-semibold text-[#002244] transition hover:text-[#00345f] hover:underline"
                   >
                     Forgot password?

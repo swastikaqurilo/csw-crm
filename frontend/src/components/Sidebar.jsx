@@ -51,35 +51,28 @@ const systemItems = [
   { name: "Settings", path: "/settings", icon: Settings },
 ];
 
-function SidebarSection({
-  label,
-  items,
-  isOpen,
-  onToggle,
-  collapsed,
-  onItemClick,
-}) {
+function SidebarSection({ label, items, isOpen, onToggle, collapsed, onItemClick }) {
   return (
     <div className="px-2">
       {!collapsed && (
         <button
           type="button"
           onClick={onToggle}
-          className="flex w-full items-center justify-between px-3 py-2 text-[10px] font-semibold tracking-[0.08em] text-slate-400 transition-colors hover:text-slate-200"
+          className="group flex w-full items-center justify-between rounded-md px-3 py-2 text-[11px] font-semibold tracking-[0.08em] text-slate-400 transition-colors duration-200 hover:bg-white/[0.04] hover:text-slate-200"
         >
-          <span>{label}</span>
+          <span className="transition-colors duration-200">{label}</span>
           <ChevronDown
             size={14}
             strokeWidth={1.75}
-            className={`transition-transform duration-200 ${
+            className={`transition-transform duration-300 ease-out ${
               isOpen ? "rotate-0" : "-rotate-90"
-            }`}
+            } group-hover:text-slate-300`}
           />
         </button>
       )}
 
       <div
-        className={`overflow-hidden transition-all duration-200 ${
+        className={`overflow-hidden transition-all duration-300 ease-out ${
           collapsed || isOpen ? "max-h-[500px] opacity-100" : "max-h-0 opacity-0"
         }`}
       >
@@ -94,28 +87,56 @@ function SidebarSection({
                 onClick={onItemClick}
                 className={({ isActive }) =>
                   [
-                    "group flex h-10 items-center rounded-md",
-                    "text-[13px] font-medium",
-                    "transition-all duration-150",
+                    "group relative flex h-11 items-center overflow-hidden rounded-md",
+                    "text-sm font-medium",
+                    "transition-all duration-200 ease-out",
                     collapsed ? "justify-center px-0" : "gap-3 px-3",
                     isActive
-                      ? "bg-white/10 text-white shadow-sm"
-                      : "text-slate-300 hover:bg-white/[0.06] hover:text-white",
+                      ? "bg-white/[0.08] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
+                      : "text-slate-400 hover:bg-white/[0.05] hover:text-white",
                   ].join(" ")
                 }
               >
                 {({ isActive }) => (
                   <>
-                    <Icon
-                      size={18}
-                      strokeWidth={1.75}
-                      className={
+                    {/* Left accent bar */}
+                    <span
+                      className={[
+                        "pointer-events-none absolute left-0 top-1/2 -translate-y-1/2",
+                        "h-6 w-[3px] rounded-r-full bg-gradient-to-b from-sky-400 to-cyan-500",
+                        "origin-center transition-all duration-300 ease-out",
                         isActive
-                          ? "shrink-0 text-white"
-                          : "shrink-0 text-slate-400 group-hover:text-slate-200"
-                      }
+                          ? "scale-y-100 opacity-100"
+                          : "scale-y-0 opacity-0 group-hover:scale-y-75 group-hover:opacity-60",
+                      ].join(" ")}
                     />
-                    {!collapsed && <span className="truncate">{item.name}</span>}
+
+                    {/* Soft hover glow behind icon (only when collapsed) */}
+                    {collapsed && (
+                      <span className="pointer-events-none absolute inset-0 rounded-md bg-white/0 transition-colors duration-200 group-hover:bg-white/[0.06]" />
+                    )}
+
+                    <Icon
+                      size={20}
+                      strokeWidth={1.75}
+                      className={[
+                        "relative shrink-0 transition-all duration-200 ease-out",
+                        isActive
+                          ? "text-sky-300"
+                          : "text-slate-500 group-hover:text-slate-200 group-hover:scale-[1.06]",
+                      ].join(" ")}
+                    />
+
+                    {!collapsed && (
+                      <span
+                        className={[
+                          "relative truncate transition-transform duration-200 ease-out",
+                          isActive ? "translate-x-0" : "group-hover:translate-x-0.5",
+                        ].join(" ")}
+                      >
+                        {item.name}
+                      </span>
+                    )}
                   </>
                 )}
               </NavLink>

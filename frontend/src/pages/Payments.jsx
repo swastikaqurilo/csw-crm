@@ -573,7 +573,7 @@ function Payments() {
         <div className="flex flex-col gap-3 border-b border-slate-100 bg-gradient-to-b from-slate-50/60 to-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-sm font-semibold text-slate-900">Payment Ledger by Order</h2>
-            <p className="mt-0.5 text-[11px] text-slate-500">Orders with payments — expand a row to see every payment (LIFO)</p>
+            <p className="mt-0.5 text-[11px] text-slate-500">Orders with payments — expand a row to see every payment </p>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={collapseAll} className="h-8 rounded-lg border border-slate-200/80 bg-white px-3 text-[11px] font-medium text-slate-600 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900">

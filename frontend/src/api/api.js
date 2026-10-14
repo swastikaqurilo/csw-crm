@@ -116,3 +116,7 @@
 
     export const recordSalaryAdvance = (salaryId, payload) => api.post(`/salaries/${salaryId}/advance`, payload);
     export const deleteSalaryAdvance = (salaryId, advanceId) => api.delete(`/salaries/${salaryId}/advance/${advanceId}`);
+
+    export const forgotPassword = (email) => api.post("/auth/forgot-password", { email });
+
+export const resetPassword = ({ email, otp, password }) => api.post("/auth/reset-password", { email, otp, password });

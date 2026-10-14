@@ -28,6 +28,13 @@ const workerSchema = new mongoose.Schema(
       default: "",
     },
 
+    department:{
+      type: String,
+      trim: true,
+      maxlength: [100,"too long department"],
+      default: "",
+    },
+
     joiningDate: {
       type: Date,
       required: [true, "Joining date is required"],
@@ -102,6 +109,16 @@ const workerSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    toJSON: {
+      transform: (doc, ret) => {
+        delete ret.__v;
+        delete ret.createdAt;
+        delete ret.updatedAt;
+        delete ret.isDeleted;
+        delete ret.notes;
+        return ret;
+      },
+    },  
   }
 );
 
@@ -161,7 +178,17 @@ const attendanceSchema = new mongoose.Schema(
       default: null,
     },
   },
-  { timestamps: true }
+  {
+     timestamps: true ,
+    toJSON: {
+      transform: (doc, ret) => {
+        delete ret.__v;
+        delete ret.createdAt;
+        delete ret.updatedAt;
+        return ret;
+      },
+    },
+  }
 );
 
 const Worker = mongoose.model("Worker", workerSchema);

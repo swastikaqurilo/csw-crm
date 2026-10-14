@@ -77,13 +77,6 @@ const createSalary = async (req, res) => {
       });
     }
 
-    if (selectedWorker.payType !== "Fixed") {
-      return res.status(400).json({
-        success: false,
-        message: "Salary records can only be created for Fixed-pay workers",
-      });
-    }
-
     const basic = Number(basicSalary);
 
     if (!Number.isFinite(basic) || basic < 0) {
@@ -105,17 +98,36 @@ const createSalary = async (req, res) => {
 
     const netSalary = calculateNetSalary(basic, allowance, deduction);
 
-    const existingSalary = await Salary.findOne({
+    // Exact duplicate
+    const exact = await Salary.findOne({
       worker,
       periodStart: start,
       periodEnd: end,
       isDeleted: false,
     });
 
-    if (existingSalary) {
+    if (exact) {
       return res.status(409).json({
         success: false,
         message: "Salary record already exists for this worker and period",
+      });
+    }
+
+    // Overlap check — half-open interval: [start, end] vs [otherStart, otherEnd]
+    // Overlap iff other.periodStart < end AND other.periodEnd > start
+    const overlapping = await Salary.findOne({
+      worker,
+      isDeleted: false,
+      periodStart: { $lt: end },
+      periodEnd: { $gt: start },
+    });
+
+    if (overlapping) {
+      const os = overlapping.periodStart.toISOString().slice(0, 10);
+      const oe = overlapping.periodEnd.toISOString().slice(0, 10);
+      return res.status(409).json({
+        success: false,
+        message: `Period overlaps an existing salary record (${os} → ${oe}).`,
       });
     }
 
@@ -179,7 +191,6 @@ const getSalaries = async (req, res) => {
           message: "Invalid worker ID",
         });
       }
-
       filter.worker = worker;
     }
 
@@ -192,27 +203,23 @@ const getSalaries = async (req, res) => {
 
       if (fromDate) {
         const start = new Date(fromDate);
-
         if (Number.isNaN(start.getTime())) {
           return res.status(400).json({
             success: false,
             message: "Invalid fromDate",
           });
         }
-
         filter.periodStart.$gte = start;
       }
 
       if (toDate) {
         const end = new Date(toDate);
-
         if (Number.isNaN(end.getTime())) {
           return res.status(400).json({
             success: false,
             message: "Invalid toDate",
           });
         }
-
         filter.periodStart.$lte = end;
       }
     }
@@ -416,6 +423,30 @@ const updateSalary = async (req, res) => {
         success: false,
         message: "Period start date cannot be after period end date",
       });
+    }
+
+    // If the period changed, re-check for overlap against other records
+    const periodChanged =
+      start.getTime() !== salary.periodStart.getTime() ||
+      end.getTime() !== salary.periodEnd.getTime();
+
+    if (periodChanged) {
+      const overlapping = await Salary.findOne({
+        _id: { $ne: salary._id },
+        worker: salary.worker,
+        isDeleted: false,
+        periodStart: { $lt: end },
+        periodEnd: { $gt: start },
+      });
+
+      if (overlapping) {
+        const os = overlapping.periodStart.toISOString().slice(0, 10);
+        const oe = overlapping.periodEnd.toISOString().slice(0, 10);
+        return res.status(409).json({
+          success: false,
+          message: `New period overlaps an existing salary record (${os} → ${oe}).`,
+        });
+      }
     }
 
     const basic =
@@ -658,6 +689,8 @@ const recordSalaryPayment = async (req, res) => {
 /* ------------------------------------------------------------------ */
 
 const recordSalaryAdvance = async (req, res) => {
+  const session = await mongoose.startSession();
+
   try {
     const { id } = req.params;
 
@@ -676,36 +709,12 @@ const recordSalaryAdvance = async (req, res) => {
       });
     }
 
-    const salary = await Salary.findOne({
-      _id: id,
-      isDeleted: false,
-    });
-
-    if (!salary) {
-      return res.status(404).json({
-        success: false,
-        message: "Salary record not found",
-      });
-    }
-
     const advanceAmount = Number(amount);
 
     if (!Number.isFinite(advanceAmount) || advanceAmount <= 0) {
       return res.status(400).json({
         success: false,
         message: "Advance amount must be greater than zero",
-      });
-    }
-
-    const remaining =
-      Number(salary.netSalary || 0) -
-      Number(salary.paidAmount || 0) -
-      Number(salary.advanceAmount || 0);
-
-    if (advanceAmount > remaining + 0.001) {
-      return res.status(400).json({
-        success: false,
-        message: `Advance cannot exceed the remaining balance of ₹${remaining}`,
       });
     }
 
@@ -729,9 +738,7 @@ const recordSalaryAdvance = async (req, res) => {
     const cleanTransactionId = safeString(transactionId, 150);
 
     if (
-      ["UPI", "Bank Transfer", "NEFT", "RTGS", "Cheque"].includes(
-        paymentMode
-      ) &&
+      ["UPI", "Bank Transfer", "NEFT", "RTGS", "Cheque"].includes(paymentMode) &&
       !cleanTransactionId
     ) {
       return res.status(400).json({
@@ -748,26 +755,57 @@ const recordSalaryAdvance = async (req, res) => {
       });
     }
 
-    salary.advances.push({
-      amount: advanceAmount,
-      date: parsedDate,
-      paymentMode,
-      transactionId: cleanTransactionId,
-      notes: safeString(notes, 500),
-      givenBy: req.user?._id || null,
+    let advanceEntry = null;
+
+    await session.withTransaction(async () => {
+      const salary = await Salary.findOne({
+        _id: id,
+        isDeleted: false,
+      }).session(session);
+
+      if (!salary) {
+        const err = new Error("Salary record not found");
+        err.statusCode = 404;
+        throw err;
+      }
+
+      const netSalary = Number(salary.netSalary || 0);
+      const paidAmount = Number(salary.paidAmount || 0);
+      const advanceSoFar = Number(salary.advanceAmount || 0);
+
+      const remaining = netSalary - paidAmount - advanceSoFar;
+
+      if (advanceAmount > remaining + 0.001) {
+        const err = new Error(
+          `Advance cannot exceed the remaining balance of ₹${remaining.toFixed(2)}`
+        );
+        err.statusCode = 400;
+        throw err;
+      }
+
+      salary.advances.push({
+        amount: advanceAmount,
+        date: parsedDate,
+        paymentMode,
+        transactionId: cleanTransactionId,
+        notes: safeString(notes, 500),
+        givenBy: req.user?._id || null,
+      });
+
+      salary.advanceAmount = advanceSoFar + advanceAmount;
+
+      salary.paymentStatus = calculatePaymentStatus(
+        salary.netSalary,
+        salary.paidAmount,
+        salary.advanceAmount
+      );
+
+      await salary.save({ session });
+
+      advanceEntry = salary.advances[salary.advances.length - 1];
     });
 
-    salary.advanceAmount = Number(salary.advanceAmount || 0) + advanceAmount;
-
-    salary.paymentStatus = calculatePaymentStatus(
-      salary.netSalary,
-      salary.paidAmount,
-      salary.advanceAmount
-    );
-
-    await salary.save();
-
-    const populated = await Salary.findById(salary._id).populate(
+    const populated = await Salary.findById(id).populate(
       "worker",
       "workerId name phone role department payType fixedPay variablePay"
     );
@@ -776,19 +814,21 @@ const recordSalaryAdvance = async (req, res) => {
       success: true,
       message: "Advance recorded successfully",
       salary: populated,
-      advance: salary.advances[salary.advances.length - 1],
+      advance: advanceEntry,
     });
   } catch (error) {
     console.error("[recordSalaryAdvance]", error);
 
-    if (error.name === "ValidationError") {
-      const msg = Object.values(error.errors)
-        .map((e) => e.message)
-        .join("; ");
-      return res.status(400).json({
+    if (error.statusCode === 400 || error.statusCode === 404) {
+      return res.status(error.statusCode).json({
         success: false,
-        message: msg,
+        message: error.message,
       });
+    }
+
+    if (error.name === "ValidationError") {
+      const msg = Object.values(error.errors).map((e) => e.message).join("; ");
+      return res.status(400).json({ success: false, message: msg });
     }
 
     if (error.name === "CastError") {
@@ -798,24 +838,26 @@ const recordSalaryAdvance = async (req, res) => {
       });
     }
 
-    if (error.code === 11000) {
-      return res.status(409).json({
-        success: false,
-        message: "Duplicate advance detected",
-      });
-    }
-
     return res.status(500).json({
       success: false,
       message: "Failed to record advance",
       error: error.message,
     });
+  } finally {
+    await session.endSession();
   }
 };
 
+/* ------------------------------------------------------------------ */
+/*  DELETE ADVANCE                                                     */
+/* ------------------------------------------------------------------ */
+
 const deleteSalaryAdvance = async (req, res) => {
+  const session = await mongoose.startSession();
+
   try {
     const { id, advanceId } = req.params;
+
     if (!isValidId(id) || !isValidId(advanceId)) {
       return res.status(400).json({
         success: false,
@@ -823,57 +865,75 @@ const deleteSalaryAdvance = async (req, res) => {
       });
     }
 
-    const salary = await Salary.findOne({ _id: id, isDeleted: false });
-    if (!salary) {
-      return res.status(404).json({
-        success: false,
-        message: "Salary record not found",
-      });
-    }
+    let updated = null;
 
-    const adv = salary.advances.id(advanceId);
-    if (!adv) {
-      return res.status(404).json({
-        success: false,
-        message: "Advance not found",
-      });
-    }
+    await session.withTransaction(async () => {
+      const salary = await Salary.findOne({
+        _id: id,
+        isDeleted: false,
+      }).session(session);
 
-    if (Number(salary.paidAmount) > 0) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Cannot delete advance — regular salary payments already exist",
-      });
-    }
+      if (!salary) {
+        const err = new Error("Salary record not found");
+        err.statusCode = 404;
+        throw err;
+      }
 
-    const removed = Number(adv.amount) || 0;
-    adv.deleteOne();
+      const adv = salary.advances.id(advanceId);
+      if (!adv) {
+        const err = new Error("Advance not found");
+        err.statusCode = 404;
+        throw err;
+      }
 
-    salary.advanceAmount = Math.max(
-      Number(salary.advanceAmount || 0) - removed,
-      0
-    );
+      if (Number(salary.paidAmount) > 0) {
+        const err = new Error(
+          "Cannot delete advance — regular salary payments already exist"
+        );
+        err.statusCode = 400;
+        throw err;
+      }
 
-    salary.paymentStatus = calculatePaymentStatus(
-      salary.netSalary,
-      salary.paidAmount,
-      salary.advanceAmount
-    );
+      const removed = Number(adv.amount) || 0;
+      adv.deleteOne();
 
-    await salary.save();
+      salary.advanceAmount = Math.max(
+        Number(salary.advanceAmount || 0) - removed,
+        0
+      );
+
+      salary.paymentStatus = calculatePaymentStatus(
+        salary.netSalary,
+        salary.paidAmount,
+        salary.advanceAmount
+      );
+
+      await salary.save({ session });
+      updated = salary;
+    });
+
     return res.status(200).json({
       success: true,
       message: "Advance deleted successfully",
-      salary,
+      salary: updated,
     });
   } catch (error) {
     console.error("[deleteSalaryAdvance]", error);
+
+    if (error.statusCode === 400 || error.statusCode === 404) {
+      return res.status(error.statusCode).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
     return res.status(500).json({
       success: false,
       message: "Failed to delete advance",
       error: error.message,
     });
+  } finally {
+    await session.endSession();
   }
 };
 
@@ -949,44 +1009,34 @@ const calculateFixedSalary = async ({
   periodEnd,
   settings,
 }) => {
-  
-const joiningDate = startOfDay(worker.joiningDate);
-
+  const joiningDate = startOfDay(worker.joiningDate);
   const effectiveStart =
     joiningDate > periodStart ? joiningDate : periodStart;
 
-  const calendarDaysInPeriod =
-    getDaysBetween(periodStart, periodEnd).length;
+  // Working days in the whole period — used for proration denominator.
+  const fullPeriodWorkingDays = getDaysBetween(periodStart, periodEnd).filter(
+    isWorkingDay
+  ).length;
 
-  const calendarDaysEmployed =
-    effectiveStart <= periodEnd
-      ? getDaysBetween(effectiveStart, periodEnd).length
-      : 0;
-
-  // Attendance deductions still use working days only.
-  const employedDates =
-    calendarDaysEmployed > 0
-      ? getDaysBetween(effectiveStart, periodEnd).filter(isWorkingDay)
-      : [];
-
+  // Working days the worker was actually employed within the period.
+  const employedDates = getDaysBetween(effectiveStart, periodEnd).filter(
+    isWorkingDay
+  );
   const workingDays = employedDates.length;
-
-  const fullPeriodWorkingDays = getDaysBetween(
-    periodStart,
-    periodEnd
-  ).filter(isWorkingDay).length;
-
 
   if (workingDays <= 0) {
     return {
       basicSalary: 0,
       attendance: {
         workingDays: 0,
+        fullPeriodWorkingDays,
         presentDays: 0,
         absentDays: 0,
         halfDays: 0,
         dailyRate: 0,
         absenceDeduction: 0,
+        proratedBase: 0,
+        employedRatio: 0,
       },
     };
   }
@@ -1003,15 +1053,22 @@ const joiningDate = startOfDay(worker.joiningDate);
     attendanceMap.set(attendance.date, attendance);
   }
 
-  // Cutoffs come from Settings (falls back to defaults)
+  // ── Resolve cutoffs from Settings ──────────────────────────────
   const resolved = settings || (await getGlobalSettings());
+  const policy = resolved?.attendance || {};
 
-  const lateCutoff = toMinutes(
-    resolved?.attendance?.lateLoginCutoff || "09:30"
-  );
-  const earlyCutoff = toMinutes(
-    resolved?.attendance?.earlyLogoutCutoff || "18:00"
-  );
+  const lateCutoff = toMinutes(policy.lateLoginCutoff || "09:30");
+  const earlyCutoff = toMinutes(policy.earlyLogoutCutoff || "18:00");
+
+  if (lateCutoff === null || earlyCutoff === null) {
+    console.warn(
+      "[calculateFixedSalary] Invalid cutoff in settings — late/early checks disabled for this run",
+      {
+        lateLoginCutoff: policy.lateLoginCutoff,
+        earlyLogoutCutoff: policy.earlyLogoutCutoff,
+      }
+    );
+  }
 
   let absentDays = 0;
   let halfDays = 0;
@@ -1020,6 +1077,7 @@ const joiningDate = startOfDay(worker.joiningDate);
     const dateString = getDateString(date);
     const attendance = attendanceMap.get(dateString);
 
+    // No record for the day → neutral (treated as present, no deduction).
     if (!attendance) continue;
 
     let record = null;
@@ -1038,6 +1096,8 @@ const joiningDate = startOfDay(worker.joiningDate);
       const loginMinutes = toMinutes(record.loginTime);
       const logoutMinutes = toMinutes(record.logoutTime);
 
+      // Null guards: if a cutoff failed to parse, skip the check entirely
+      // rather than letting `x > null` (== x > 0) mark everyone late.
       const isLate =
         loginMinutes !== null &&
         lateCutoff !== null &&
@@ -1054,6 +1114,7 @@ const joiningDate = startOfDay(worker.joiningDate);
       continue;
     }
 
+    // Legacy fallback for old documents written before records[] existed.
     if (attendance.allPresent === true) continue;
 
     const isAbsent =
@@ -1065,39 +1126,48 @@ const joiningDate = startOfDay(worker.joiningDate);
     if (isAbsent) absentDays++;
   }
 
+  // ── Money math ─────────────────────────────────────────────────
   const monthlySalary = Number(worker.fixedPay?.amount) || 0;
-  const dailyRate = monthlySalary / SALARY_DAY_DIVISOR;
 
-  const proratedBase = Math.min(
-    monthlySalary,
-    dailyRate * calendarDaysEmployed
-  );
+  // Day basis must match the unit we count absences in (working days).
+  // Using SALARY_DAY_DIVISOR (30) against a 26-working-day month
+  // under-deducts every absence. Fall back to the fixed divisor only when
+  // the period has no working days at all (degenerate case).
+  const dayBasis =
+    fullPeriodWorkingDays > 0 ? fullPeriodWorkingDays : SALARY_DAY_DIVISOR;
+
+  const dailyRate = monthlySalary / dayBasis;
+
+  const prorateMidMonthJoins = Boolean(policy.prorateMidMonthJoins);
+
+  const employedRatio =
+    prorateMidMonthJoins && fullPeriodWorkingDays > 0
+      ? workingDays / fullPeriodWorkingDays
+      : 1;
+
+  const proratedBase = monthlySalary * employedRatio;
 
   const deductionUnits = absentDays + halfDays * 0.5;
   const absenceDeduction = dailyRate * deductionUnits;
 
-  const adjustedBasic = Math.max(
-    0,
-    proratedBase - absenceDeduction
-  );
+  const adjustedBasic = Math.max(0, proratedBase - absenceDeduction);
 
-  const effectivePresentDays = Math.max(
-    workingDays - absentDays - halfDays * 0.5,
-    0
-  );
+  const employedRatioRounded = Math.round(employedRatio * 10000) / 10000;
 
   return {
     basicSalary: roundMoney(adjustedBasic),
     attendance: {
       workingDays,
       fullPeriodWorkingDays,
-      calendarDaysEmployed,
-      proratedBase: roundMoney(proratedBase),
-      presentDays: roundMoney(effectivePresentDays),
+      presentDays: roundMoney(
+        Math.max(workingDays - absentDays - halfDays * 0.5, 0)
+      ),
       absentDays,
       halfDays,
       dailyRate: roundMoney(dailyRate),
       absenceDeduction: roundMoney(absenceDeduction),
+      proratedBase: roundMoney(proratedBase),
+      employedRatio: employedRatioRounded,
     },
   };
 };
@@ -1113,7 +1183,6 @@ const calculateVariableSalary = async ({ worker, periodStart, periodEnd }) => {
   }).select("date workers");
 
   const quantities = { "2kg": 0, "5kg": 0, "8kg": 0, "10kg": 0 };
-  const amounts = { "2kg": 0, "5kg": 0, "8kg": 0, "10kg": 0 };
 
   const rates = {
     "2kg": Number(worker.variablePay?.rate2kg) || 0,
@@ -1123,8 +1192,10 @@ const calculateVariableSalary = async ({ worker, periodStart, periodEnd }) => {
   };
 
   let totalReels = 0;
-  let totalEarnings = 0;
 
+  // Accumulate quantities only. Earnings are always recomputed below from
+  // quantities × current rates so that `basicSalary`, per-size `amount`,
+  // and `totalEarnings` can never disagree with each other.
   for (const production of productions) {
     const workerEntry = production.workers?.find(
       (item) => String(item.worker) === String(worker._id)
@@ -1136,10 +1207,9 @@ const calculateVariableSalary = async ({ worker, periodStart, periodEnd }) => {
       quantities[size] += qty;
       totalReels += qty;
     }
-
-    totalEarnings += Number(workerEntry.totalEarnings) || 0;
   }
 
+  let totalEarnings = 0;
   const production = {};
 
   for (const size of SIZES) {
@@ -1148,7 +1218,7 @@ const calculateVariableSalary = async ({ worker, periodStart, periodEnd }) => {
     const weightKg = REEL_WEIGHTS[size] || 0;
     const amount = quantity * weightKg * rate;
 
-    amounts[size] = amount;
+    totalEarnings += amount;
 
     production[size] = {
       quantity,
@@ -1227,9 +1297,7 @@ const generateSalaries = async (req, res) => {
       });
     }
 
-    // Load cutoffs once for the whole batch
     const settings = await getGlobalSettings();
-
     const results = [];
 
     for (const worker of workers) {
@@ -1250,12 +1318,33 @@ const generateSalaries = async (req, res) => {
         });
       }
 
-      const existingSalary = await Salary.findOne({
+      // Overlap lookup — exact match is the record we'd regenerate.
+      const overlapping = await Salary.findOne({
         worker: worker._id,
-        periodStart: start,
-        periodEnd: end,
         isDeleted: false,
+        periodStart: { $lt: end },
+        periodEnd: { $gt: start },
       });
+
+      const isExactMatch =
+        overlapping &&
+        overlapping.periodStart.getTime() === start.getTime() &&
+        overlapping.periodEnd.getTime() === end.getTime();
+
+      if (overlapping && !isExactMatch) {
+        const os = overlapping.periodStart.toISOString().slice(0, 10);
+        const oe = overlapping.periodEnd.toISOString().slice(0, 10);
+        results.push({
+          worker: worker._id,
+          name: worker.name,
+          status: "skipped",
+          reason: `Period overlaps an existing salary record (${os} → ${oe}).`,
+          salary: overlapping,
+        });
+        continue;
+      }
+
+      const existingSalary = isExactMatch ? overlapping : null;
 
       if (existingSalary && Number(existingSalary.paidAmount) > 0) {
         results.push({
@@ -1265,7 +1354,6 @@ const generateSalaries = async (req, res) => {
           reason: "Salary already has payments",
           salary: existingSalary,
         });
-
         continue;
       }
 
@@ -1279,6 +1367,7 @@ const generateSalaries = async (req, res) => {
         deductions
       );
 
+      // Never let regeneration drop net below what's already committed.
       if (existingSalary) {
         const totalCommitted =
           Number(existingSalary.paidAmount || 0) +
@@ -1296,7 +1385,6 @@ const generateSalaries = async (req, res) => {
             )}). Adjust the salary record manually or remove the advance first.`,
             salary: existingSalary,
           });
-
           continue;
         }
       }

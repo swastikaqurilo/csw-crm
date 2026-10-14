@@ -211,10 +211,9 @@ const rawPurchaseSchema = new mongoose.Schema(
 
 /* ---------- Auto PO number ---------- */
 rawPurchaseSchema.pre("save", async function () {
+  if (!this.isNew) return;
   if (this.purchaseNumber) return;
-  if (this.status === "Pending" && !this.purchaseNumber) {
-    // Only assign on first save; skip on subsequent edits
-  }
+
   const year = new Date().getFullYear();
   const seq = await getNextSequence(`purchase-${year}`);
   this.purchaseNumber = `PO-${year}-${String(seq).padStart(4, "0")}`;
