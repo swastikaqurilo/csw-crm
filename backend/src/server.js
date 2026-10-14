@@ -15,7 +15,7 @@ const followUpRoutes = require("./routes/followUpRoutes");
 const productRoutes = require("./routes/productRoutes");
 const orderRoutes = require("./routes/orderRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
-const revenueRoutes = require("./routes/revenueRoutes");
+const revenueRoutes = require("./routes/revenueRoutes");  
 const workerRoutes = require("./routes/workerRoutes");
 const expenseRoutes = require("./routes/expenseRoutes");
 const accountingRoutes = require("./routes/accountingRoutes");
@@ -32,9 +32,9 @@ app.use(
   cors({
     origin: [
       "http://localhost:5173",
-      "https://csw-crm.vercel.app",
       "http://192.168.88.6:5173",
-      "https://4nq08695-5173.inc1.devtunnels.ms"
+      "https://4nq08695-5173.inc1.devtunnels.ms",
+      "https://csw-crm-4l2j.vercel.app"
     ],
     credentials: true,
   })
