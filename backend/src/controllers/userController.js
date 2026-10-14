@@ -14,7 +14,7 @@ const isValidId = (v) => mongoose.isValidObjectId(v);
 
 const signToken = (user) => {
   return jwt.sign(
-    { id: user._id, role: user.role },
+    { id: user._id },
     process.env.JWT_SECRET,
     { expiresIn: "1d" }
   );
@@ -102,7 +102,6 @@ const login = async (req, res) => {
           id: user._id,
           name: user.name,
           email: user.email,
-          role: user.role,
         },
       },
     });
@@ -120,7 +119,7 @@ const MAX_ACCOUNTS = 2; // 🔒 max accounts allowed
 
 const register = async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
+    const { name, email, password } = req.body;
 
     if (typeof name !== "string" || !name.trim()) {
       return res.status(400).json({
@@ -173,7 +172,6 @@ const register = async (req, res) => {
       name: name.trim().slice(0, 150),
       email: cleanEmail,
       password,
-      role: role || "Sales Manager",
       isActive: true,
     });
 
@@ -188,7 +186,6 @@ const register = async (req, res) => {
           id: user._id,
           name: user.name,
           email: user.email,
-          role: user.role,
         },
       },
     });
@@ -249,7 +246,6 @@ const getMe = async (req, res) => {
           id: user._id,
           name: user.name,
           email: user.email,
-          role: user.role,
           lastLogin: user.lastLogin,
         },
       },
