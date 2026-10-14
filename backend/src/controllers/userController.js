@@ -195,7 +195,7 @@ const register = async (req, res) => {
     if (error.code === 11000) {
       return res.status(409).json({
         success: false,
-        message: "An account with that email already exists",
+        message: "An account with that email already exists 1",
       });
     }
 
