@@ -1543,7 +1543,7 @@ export default function Dashboard() {
               </span>
             </div>
             <h1 className="text-[1.75rem] font-semibold tracking-tight text-black sm:text-[1.875rem]">
-              Good morning, Admin
+              Welcome, Admin
             </h1>
             <p className="mt-1 text-[15px] text-slate-500">
               {today} · Here&apos;s what needs your attention.
