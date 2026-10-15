@@ -54,6 +54,12 @@ const login = async (req, res) => {
       });
     }
 
+    console.log("[login diagnostic]", {
+      database: mongoose.connection.name,
+      collection: User.collection.name,
+      host: mongoose.connection.host,
+    });
+
     const user = await User.findOne({ email: cleanEmail }).select("+password");
 
     if (!user) {
