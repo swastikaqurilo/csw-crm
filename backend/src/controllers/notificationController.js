@@ -12,6 +12,11 @@ const getNotifications = async (req, res) => {
 
     const lowStockItems = await ProductStock.find({
       isActive: true,
+      $or: [
+        { lastReceivedAt: { $ne: null } },
+        { "movementLog.0": { $exists: true } },
+        { quantity: { $gt: 0 } },
+      ],
       $expr: {
         $lte: [
           { $subtract: ["$quantity", { $ifNull: ["$reservedQty", 0] }] },

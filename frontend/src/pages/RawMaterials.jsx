@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Pagination from "../components/Pagination";
 import {
-  Warehouse, Package, AlertTriangle, Plus, ArrowDownToLine, ArrowUpFromLine,
+  Warehouse, Package, AlertTriangle, Plus,
   X, RefreshCw, Save, Factory, ShoppingCart, Truck, CheckCircle2, XCircle,
   Clock, Search, Layers, Boxes, CircleEqual, DatabasePlus, Wallet, Pencil,
   UserRound, CalendarDays, FileText,
@@ -572,8 +572,6 @@ function RawMaterials() {
         <td className="px-4 py-3">
           <div className="flex items-center justify-end gap-0.5 opacity-100 lg:opacity-0 lg:transition-opacity lg:group-hover:opacity-100">
             <button type="button" title="Reserve" onClick={() => openReserve(item)} className="flex h-7 w-7 items-center justify-center rounded-md text-indigo-500 transition-colors hover:bg-indigo-50 hover:text-indigo-700"><Layers size={14} /></button>
-            <button type="button" title="Stock In" onClick={() => openAdjust(item, "in")} className="flex h-7 w-7 items-center justify-center rounded-md text-emerald-600 transition-colors hover:bg-emerald-50 hover:text-emerald-800"><ArrowDownToLine size={14} /></button>
-            <button type="button" title="Stock Out" onClick={() => openAdjust(item, "out")} className="flex h-7 w-7 items-center justify-center rounded-md text-amber-600 transition-colors hover:bg-amber-50 hover:text-amber-800"><ArrowUpFromLine size={14} /></button>
           </div>
         </td>
       </tr>

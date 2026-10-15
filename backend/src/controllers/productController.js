@@ -904,10 +904,6 @@ const buildWorkerProduction = async (workers, dailyQtys, productionDate) => {
 
 const getAllProductStock = async (req, res) => {
   try {
-    for (const size of SIZES) {
-      await ensureProductStock(size, req.user?._id);
-    }
-
     const docs = await ProductStock.find({ isActive: true });
     const order = { "2kg": 1, "5kg": 2, "8kg": 3, "10kg": 4 };
     docs.sort((a, b) => (order[a.size] || 99) - (order[b.size] || 99));
