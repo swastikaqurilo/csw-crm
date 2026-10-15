@@ -196,7 +196,6 @@ const productStockSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Document-level stock reservation validation.
 productStockSchema.pre("validate", function () {
   if (this.reservedQty > this.quantity) {
     this.invalidate(
@@ -206,7 +205,6 @@ productStockSchema.pre("validate", function () {
   }
 });
 
-// Available stock after reservations.
 productStockSchema.virtual("freeQty").get(function () {
   return Math.max(
     Number(this.quantity || 0) - Number(this.reservedQty || 0),
@@ -223,4 +221,3 @@ const ProductStock = mongoose.model("ProductStock", productStockSchema);
 
 module.exports = ProductStock;
 module.exports.REEL_SIZES = REEL_SIZES;
-

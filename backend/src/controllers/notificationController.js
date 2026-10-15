@@ -10,25 +10,30 @@ const getNotifications = async (req, res) => {
     const settings = await getGlobalSettings();
     const threshold = Number(settings?.preferences?.lowStockThreshold ?? 10);
 
-    const lowStockItems = await ProductStock.find({
-      isActive: true,
-      // Only consider items that have actually received stock at least once.
-      $or: [
-        { lastReceivedAt: { $exists: true, $ne: null } },   // ← fixed
-        { "movementLog.0": { $exists: true } },
-        { quantity: { $gt: 0 } },
-      ],
-      $expr: {
-        $lte: [
-          { $subtract: ["$quantity", { $ifNull: ["$reservedQty", 0] }] },
-          threshold,
+    
+const lowStockItems = await ProductStock.find({
+  isActive: true,
+
+  lastReceivedAt: { $exists: true, $ne: null },
+  quantity: { $gt: 0 },
+
+  $expr: {
+    $lte: [
+      {
+        $subtract: [
+          "$quantity",
+          { $ifNull: ["$reservedQty", 0] },
         ],
       },
-    })
-      .select("name size quantity reservedQty unit updatedAt")
-      .sort({ quantity: 1 })
-      .limit(MAX_ALERTS_PER_TYPE)
-      .lean();
+      threshold,
+    ],
+  },
+})
+  .select("name size quantity reservedQty unit updatedAt")
+  .sort({ quantity: 1 })
+  .limit(MAX_ALERTS_PER_TYPE)
+  .lean();
+
 
     const lowStockAlerts = lowStockItems.map((item) => {
       const free = Math.max(
