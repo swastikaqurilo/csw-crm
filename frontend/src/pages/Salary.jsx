@@ -23,8 +23,6 @@ const BTN_ADV = `${ROWBTN} border-amber-200 bg-amber-50 text-amber-800 hover:bg-
 const BTN_PAY = `${ROWBTN} border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100`;
 
 const PAGE_SIZE = 10;
-const SIZES = ["2kg", "5kg", "8kg", "10kg"];
-const SIZE_KG = { "2kg": 2, "5kg": 5, "8kg": 8, "10kg": 10 };
 const STATUS_FILTERS = ["All", "Pending", "Partial", "Paid"];
 const MODES = ["Cash", "UPI", "Bank Transfer", "Cheque", "NEFT", "RTGS", "Other"];
 const REF_REQ = ["UPI", "Bank Transfer", "Cheque", "NEFT", "RTGS"];
@@ -65,9 +63,6 @@ const remainingOf = (s) => Math.max(0, Math.round(((s.netSalary || 0) - (s.paidA
 const typeOf = (s) => s.payType || s.worker?.payType || "Fixed";
 const errMsg = (err, fb) => err?.response?.data?.message || fb;
 
-/* ================================================================
- *  PRIMITIVES
- * ================================================================ */
 const Badge = ({ className = "", children }) => (
   <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${className}`}>{children}</span>
 );
@@ -871,7 +866,7 @@ function Salary() {
                           {r.status === "skipped"
                             ? <p className="text-xs text-amber-700">{r.reason || "Skipped"}</p>
                             : Number(net) === 0
-                              ? <p className="text-xs text-amber-700">Net salary is ₹0. Check attendance, pay amount or per-reel rates.</p>
+                              ? <p className="text-xs text-amber-700">Net salary is ₹0. Check attendance, pay amount or rate per kg.</p>
                               : <p className="text-xs tabular-nums text-slate-500">Net {money(net)}</p>}
                         </div>
                         <Badge className={chip}>{r.status === "updated" ? "recalculated" : r.status}</Badge>
@@ -980,9 +975,6 @@ function Salary() {
         );
       })()}
 
-      {/* ================================================================
-       *  MONEY MODAL (payment + advance)
-       * ================================================================ */}
       {moneyModal && (
         <MoneyModal
           kind={moneyModal.kind}
@@ -1059,42 +1051,24 @@ function Salary() {
               {typeOf(view) === "Variable" && (
                 <section>
                   <h3 className="mb-2 text-sm font-semibold text-slate-800">Production</h3>
-                  <div className="overflow-hidden rounded-lg border border-slate-200">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="bg-slate-50 text-xs font-medium text-slate-500">
-                          <th className="px-3 py-2 text-left">Reel size</th>
-                          <th className="px-3 py-2 text-right">Reels</th>
-                          <th className="px-3 py-2 text-right">Weight</th>
-                          <th className="px-3 py-2 text-right">Rate per kg</th>
-                          <th className="px-3 py-2 text-right">Amount</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {SIZES.map((size) => {
-                          const row = view.production?.[size] || {};
-                          return (
-                            <tr key={size} className="border-t border-slate-100">
-                              <td className="px-3 py-2 text-slate-700">{size.replace("kg", " kg")}</td>
-                              <td className="px-3 py-2 text-right tabular-nums">{(row.quantity || 0).toLocaleString("en-IN")}</td>
-                              <td className="px-3 py-2 text-right tabular-nums">{((row.quantity || 0) * SIZE_KG[size]).toLocaleString("en-IN")} kg</td>
-                              <td className="px-3 py-2 text-right tabular-nums">{money(row.rate)}</td>
-                              <td className="px-3 py-2 text-right tabular-nums">{money(row.amount)}</td>
-                            </tr>
-                          );
-                        })}
-                        <tr className="border-t border-slate-200 bg-slate-50 font-semibold">
-                          <td className="px-3 py-2">Total</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{(view.production?.totalReels || 0).toLocaleString("en-IN")}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">
-                            {SIZES.reduce((sum, size) => sum + (view.production?.[size]?.quantity || 0) * SIZE_KG[size], 0).toLocaleString("en-IN")} kg
-                          </td>
-                          <td />
-                          <td className="px-3 py-2 text-right tabular-nums">{money(view.production?.totalEarnings)}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
+                  <Grid cols={3}>
+                    <Stat
+                      label="Kg produced"
+                      value={`${Number(view.production?.totalKg || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })} kg`}
+                    />
+                    <Stat
+                      label="Rate per kg"
+                      value={money(view.production?.ratePerKg)}
+                    />
+                    <Stat
+                      label="Total earned"
+                      value={money(view.production?.totalEarnings)}
+                      tone="text-emerald-700"
+                    />
+                  </Grid>
+                  <p className="mt-1.5 text-xs text-slate-500">
+                    Earnings are calculated as total kg × rate per kg. Reel sizes don't affect the rate.
+                  </p>
                 </section>
               )}
 

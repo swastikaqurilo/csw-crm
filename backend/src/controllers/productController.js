@@ -715,18 +715,15 @@ const detectWorkerDowngrades = (oldWorkers = [], newWorkers = []) => {
     }
 
     const newW = newMap.get(workerId);
-    for (const size of SIZES) {
-      const oldQty = Number(oldW.production?.[size] || 0);
-      const newQty = Number(newW.production?.[size] || 0);
-      if (newQty < oldQty) {
-        changes.push({
-          workerId,
-          size,
-          oldQty,
-          newQty,
-          removed: false,
-        });
-      }
+    const oldKg = Number(oldW.kg ?? oldW.grossKg ?? 0);
+    const newKg = Number(newW.kg ?? newW.grossKg ?? 0);
+    if (newKg < oldKg) {
+      changes.push({
+        workerId,
+        oldQty: oldKg,
+        newQty: newKg,
+        removed: false,
+      });
     }
   }
 
@@ -758,7 +755,7 @@ const assertNoSalaryLock = async (oldWorkers, newWorkers, dates) => {
 
       const detail = change.removed
         ? "removing this worker from the entry"
-        : `reducing ${change.size} from ${change.oldQty} to ${change.newQty}`;
+        : `reducing kg from ${change.oldQty} to ${change.newQty}`;
 
       const err = new Error(
         committed > 0
@@ -774,16 +771,12 @@ const assertNoSalaryLock = async (oldWorkers, newWorkers, dates) => {
 };
 
 const buildWorkerProduction = async (workers, dailyQtys, productionDate) => {
-  if (workers === undefined || workers === null) {
-    return [];
-  }
-
+  if (workers === undefined || workers === null) return [];
   if (!Array.isArray(workers)) {
     throw { status: 400, message: "workers must be an array" };
   }
 
   let attendance = null;
-
   if (productionDate) {
     const date = new Date(productionDate);
     const dateString = [
@@ -796,8 +789,15 @@ const buildWorkerProduction = async (workers, dailyQtys, productionDate) => {
       .select("allPresent absentWorkers records");
   }
 
+  // Day's total kg = sum across all sizes produced
+  const dayTotalKg =
+    Number(dailyQtys["2kg"] || 0) * 2 +
+    Number(dailyQtys["5kg"] || 0) * 5 +
+    Number(dailyQtys["8kg"] || 0) * 8 +
+    Number(dailyQtys["10kg"] || 0) * 10;
+
   const seenWorkers = new Set();
-  const assigned = { "2kg": 0, "5kg": 0, "8kg": 0, "10kg": 0 };
+  let assignedKg = 0;
   const result = [];
 
   for (const item of workers) {
@@ -807,7 +807,7 @@ const buildWorkerProduction = async (workers, dailyQtys, productionDate) => {
         : "";
 
     if (!workerId) {
-      throw { status: 400, message: "Please select a worker for every worker production row." };
+      throw { status: 400, message: "Please select a worker for every row." };
     }
 
     if (!isValidId(workerId)) {
@@ -815,7 +815,7 @@ const buildWorkerProduction = async (workers, dailyQtys, productionDate) => {
     }
 
     if (seenWorkers.has(workerId)) {
-      throw { status: 400, message: "A worker cannot be added more than once in the same production entry." };
+      throw { status: 400, message: "A worker cannot be added more than once." };
     }
 
     seenWorkers.add(workerId);
@@ -832,17 +832,14 @@ const buildWorkerProduction = async (workers, dailyQtys, productionDate) => {
     const markedAbsent =
       attendance?.records?.some(
         (record) =>
-          String(record.worker) === workerId &&
-          record.status === "Absent"
+          String(record.worker) === workerId && record.status === "Absent"
       ) ||
-      attendance?.absentWorkers?.some(
-        (id) => String(id) === workerId
-      );
+      attendance?.absentWorkers?.some((id) => String(id) === workerId);
 
     if (markedAbsent) {
       throw {
         status: 400,
-        message: `${worker.name} is marked absent on the production date and cannot be assigned production.`,
+        message: `${worker.name} is marked absent on the production date.`,
       };
     }
 
@@ -853,49 +850,23 @@ const buildWorkerProduction = async (workers, dailyQtys, productionDate) => {
       };
     }
 
-    const production = item?.production || {};
-    const cleanProduction = { "2kg": 0, "5kg": 0, "8kg": 0, "10kg": 0 };
+    const kg = parseNum(item.kg, `${worker.name} kg produced`);
 
-    const rates = {
-      "2kg": Number(worker.variablePay?.rate2kg) || 0,
-      "5kg": Number(worker.variablePay?.rate5kg) || 0,
-      "8kg": Number(worker.variablePay?.rate8kg) || 0,
-      "10kg": Number(worker.variablePay?.rate10kg) || 0,
-    };
-
-    let totalReels = 0;
-    let grossKg = 0;
-    let totalEarnings = 0;
-
-    for (const size of SIZES) {
-      const qty = parseNum(production[size], `${size} worker production`);
-
-      if (!Number.isInteger(qty)) {
-        throw { status: 400, message: `${size} worker production must be a whole number.` };
-      }
-
-      assigned[size] += qty;
-
-      if (assigned[size] > Number(dailyQtys[size] || 0)) {
-        throw { status: 400, message: `Workers cannot be assigned more ${size} reels than today's production.` };
-      }
-
-      const weightKg = REEL_WEIGHTS[size] || 0;
-      const rate = rates[size];
-      const amount = qty * weightKg * rate;
-
-      cleanProduction[size] = qty;
-      totalReels += qty;
-      grossKg += qty * weightKg;
-      totalEarnings += amount;
+    assignedKg += kg;
+    if (assignedKg > dayTotalKg) {
+      throw {
+        status: 400,
+        message: `Workers assigned ${assignedKg} kg, but only ${dayTotalKg} kg was produced today.`,
+      };
     }
+
+    const ratePerKg = Number(worker.variablePay?.ratePerKg) || 0;
+    const totalEarnings = Math.round(kg * ratePerKg * 100) / 100;
 
     result.push({
       worker: worker._id,
-      production: cleanProduction,
-      totalReels,
-      grossKg,
-      totalEarnings: Math.round(totalEarnings * 100) / 100,
+      kg,
+      totalEarnings,
     });
   }
 
@@ -903,8 +874,15 @@ const buildWorkerProduction = async (workers, dailyQtys, productionDate) => {
 };
 
 const getAllProductStock = async (req, res) => {
-  try {
-    const docs = await ProductStock.find({ isActive: true });
+  try {   
+    const docs = await ProductStock.find({
+      isActive: true,
+      $or: [
+        { lastReceivedAt: { $type: "date" } },
+        { "movementLog.type": "production" },
+      ],
+    });
+
     const order = { "2kg": 1, "5kg": 2, "8kg": 3, "10kg": 4 };
     docs.sort((a, b) => (order[a.size] || 99) - (order[b.size] || 99));
 

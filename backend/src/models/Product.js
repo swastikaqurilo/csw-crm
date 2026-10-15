@@ -17,26 +17,12 @@ const workerProductionSchema = new mongoose.Schema(
       required: true,
     },
 
-    production: {
-      "2kg": { type: Number, default: 0, min: 0 },
-      "5kg": { type: Number, default: 0, min: 0 },
-      "8kg": { type: Number, default: 0, min: 0 },
-      "10kg": { type: Number, default: 0, min: 0 },
-    },
-
-    totalReels: {
+    kg: {
       type: Number,
       default: 0,
       min: 0,
     },
 
-    grossKg: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
-
-    /* snapshot of what this worker earned on this day */
     totalEarnings: {
       type: Number,
       default: 0,

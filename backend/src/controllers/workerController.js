@@ -42,38 +42,16 @@ const validatePayConfiguration = ({ payType, fixedPay, variablePay }) => {
   }
 
   if (payType === "Variable") {
-    const rates = [
-      { field: "rate2kg", label: "2 KG" },
-      { field: "rate5kg", label: "5 KG" },
-      { field: "rate8kg", label: "8 KG" },
-      { field: "rate10kg", label: "10 KG" },
-    ];
+  const value = variablePay?.ratePerKg;
 
-    let hasRate = false;
-
-    for (const rate of rates) {
-      const value = variablePay?.[rate.field];
-
-      if (value !== undefined && value !== null && value !== "") {
-        hasRate = true;
-
-        const numericValue = Number(value);
-
-        if (!Number.isFinite(numericValue)) {
-          errors.push(`${rate.label} rate must be a valid number`);
-          continue;
-        }
-
-        if (numericValue < 2 || numericValue > 3) {
-          errors.push(`${rate.label} rate must be between ₹2 and ₹3 per KG`);
-        }
-      }
-    }
-
-    if (!hasRate) {
-      errors.push("At least one variable pay rate is required");
-    }
+  if (value === undefined || value === null || value === "") {
+    errors.push("Rate per kg is required");
+  } else {
+    const n = Number(value);
+    if (!Number.isFinite(n)) errors.push("Rate per kg must be a valid number");
+    else if (n <= 0) errors.push("Rate per kg must be greater than 0");
   }
+}
 
   return errors;
 };
@@ -147,27 +125,14 @@ const createWorker = async (req, res) => {
             }
           : { amount: null, cycle: "Monthly" },
       variablePay:
-        payType === "Variable"
-          ? {
-              rate2kg:
-                variablePay?.rate2kg !== undefined && variablePay?.rate2kg !== ""
-                  ? Number(variablePay.rate2kg)
-                  : null,
-              rate5kg:
-                variablePay?.rate5kg !== undefined && variablePay?.rate5kg !== ""
-                  ? Number(variablePay.rate5kg)
-                  : null,
-              rate8kg:
-                variablePay?.rate8kg !== undefined && variablePay?.rate8kg !== ""
-                  ? Number(variablePay.rate8kg)
-                  : null,
-              rate10kg:
-                variablePay?.rate10kg !== undefined &&
-                variablePay?.rate10kg !== ""
-                  ? Number(variablePay.rate10kg)
-                  : null,
-            }
-          : { rate2kg: null, rate5kg: null, rate8kg: null, rate10kg: null },
+  payType === "Variable"
+    ? {
+        ratePerKg:
+          variablePay?.ratePerKg !== undefined && variablePay?.ratePerKg !== ""
+            ? Number(variablePay.ratePerKg)
+            : null,
+      }
+    : { ratePerKg: null },
     });
 
     return res.status(201).json({
@@ -407,36 +372,16 @@ const updateWorker = async (req, res) => {
         amount: Number(nextFixedPay.amount),
         cycle: nextFixedPay.cycle || "Monthly",
       };
-
-      worker.variablePay = {
-        rate2kg: null,
-        rate5kg: null,
-        rate8kg: null,
-        rate10kg: null,
-      };
+      worker.variablePay = { ratePerKg: null };
     }
 
     if (nextPayType === "Variable") {
       worker.variablePay = {
-        rate2kg:
-          nextVariablePay?.rate2kg !== undefined && nextVariablePay?.rate2kg !== ""
-            ? Number(nextVariablePay.rate2kg)
-            : null,
-        rate5kg:
-          nextVariablePay?.rate5kg !== undefined && nextVariablePay?.rate5kg !== ""
-            ? Number(nextVariablePay.rate5kg)
-            : null,
-        rate8kg:
-          nextVariablePay?.rate8kg !== undefined && nextVariablePay?.rate8kg !== ""
-            ? Number(nextVariablePay.rate8kg)
-            : null,
-        rate10kg:
-          nextVariablePay?.rate10kg !== undefined &&
-          nextVariablePay?.rate10kg !== ""
-            ? Number(nextVariablePay.rate10kg)
+        ratePerKg:
+          nextVariablePay?.ratePerKg !== undefined && nextVariablePay?.ratePerKg !== ""
+            ? Number(nextVariablePay.ratePerKg)
             : null,
       };
-
       worker.fixedPay = { amount: null, cycle: "Monthly" };
     }
 

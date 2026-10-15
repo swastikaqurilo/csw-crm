@@ -21,10 +21,6 @@ const {
   toMinutes,
 } = require("../utils/salary");
 
-/* ------------------------------------------------------------------ */
-/*  CREATE                                                             */
-/* ------------------------------------------------------------------ */
-
 const createSalary = async (req, res) => {
   try {
     const {
@@ -937,10 +933,6 @@ const deleteSalaryAdvance = async (req, res) => {
   }
 };
 
-/* ------------------------------------------------------------------ */
-/*  DELETE SALARY                                                      */
-/* ------------------------------------------------------------------ */
-
 const deleteSalary = async (req, res) => {
   try {
     const { id } = req.params;
@@ -999,10 +991,6 @@ const deleteSalary = async (req, res) => {
   }
 };
 
-/* ------------------------------------------------------------------ */
-/*  CALCULATION HELPERS                                                */
-/* ------------------------------------------------------------------ */
-
 const calculateFixedSalary = async ({
   worker,
   periodStart,
@@ -1013,12 +1001,10 @@ const calculateFixedSalary = async ({
   const effectiveStart =
     joiningDate > periodStart ? joiningDate : periodStart;
 
-  // Working days in the whole period — used for proration denominator.
   const fullPeriodWorkingDays = getDaysBetween(periodStart, periodEnd).filter(
     isWorkingDay
   ).length;
 
-  // Working days the worker was actually employed within the period.
   const employedDates = getDaysBetween(effectiveStart, periodEnd).filter(
     isWorkingDay
   );
@@ -1053,7 +1039,6 @@ const calculateFixedSalary = async ({
     attendanceMap.set(attendance.date, attendance);
   }
 
-  // ── Resolve cutoffs from Settings ──────────────────────────────
   const resolved = settings || (await getGlobalSettings());
   const policy = resolved?.attendance || {};
 
@@ -1077,7 +1062,6 @@ const calculateFixedSalary = async ({
     const dateString = getDateString(date);
     const attendance = attendanceMap.get(dateString);
 
-    // No record for the day → neutral (treated as present, no deduction).
     if (!attendance) continue;
 
     let record = null;
@@ -1096,8 +1080,6 @@ const calculateFixedSalary = async ({
       const loginMinutes = toMinutes(record.loginTime);
       const logoutMinutes = toMinutes(record.logoutTime);
 
-      // Null guards: if a cutoff failed to parse, skip the check entirely
-      // rather than letting `x > null` (== x > 0) mark everyone late.
       const isLate =
         loginMinutes !== null &&
         lateCutoff !== null &&
@@ -1114,7 +1096,6 @@ const calculateFixedSalary = async ({
       continue;
     }
 
-    // Legacy fallback for old documents written before records[] existed.
     if (attendance.allPresent === true) continue;
 
     const isAbsent =
@@ -1126,13 +1107,8 @@ const calculateFixedSalary = async ({
     if (isAbsent) absentDays++;
   }
 
-  // ── Money math ─────────────────────────────────────────────────
   const monthlySalary = Number(worker.fixedPay?.amount) || 0;
 
-  // Day basis must match the unit we count absences in (working days).
-  // Using SALARY_DAY_DIVISOR (30) against a 26-working-day month
-  // under-deducts every absence. Fall back to the fixed divisor only when
-  // the period has no working days at all (degenerate case).
   const dayBasis =
     fullPeriodWorkingDays > 0 ? fullPeriodWorkingDays : SALARY_DAY_DIVISOR;
 
@@ -1182,64 +1158,31 @@ const calculateVariableSalary = async ({ worker, periodStart, periodEnd }) => {
     "workers.worker": worker._id,
   }).select("date workers");
 
-  const quantities = { "2kg": 0, "5kg": 0, "8kg": 0, "10kg": 0 };
+  const ratePerKg = Number(worker.variablePay?.ratePerKg) || 0;
 
-  const rates = {
-    "2kg": Number(worker.variablePay?.rate2kg) || 0,
-    "5kg": Number(worker.variablePay?.rate5kg) || 0,
-    "8kg": Number(worker.variablePay?.rate8kg) || 0,
-    "10kg": Number(worker.variablePay?.rate10kg) || 0,
-  };
+  let totalKg = 0;
 
-  let totalReels = 0;
-
-  // Accumulate quantities only. Earnings are always recomputed below from
-  // quantities × current rates so that `basicSalary`, per-size `amount`,
-  // and `totalEarnings` can never disagree with each other.
   for (const production of productions) {
     const workerEntry = production.workers?.find(
       (item) => String(item.worker) === String(worker._id)
     );
     if (!workerEntry) continue;
 
-    for (const size of SIZES) {
-      const qty = Number(workerEntry.production?.[size]) || 0;
-      quantities[size] += qty;
-      totalReels += qty;
-    }
+    totalKg += Number(workerEntry.kg || 0);
   }
 
-  let totalEarnings = 0;
-  const production = {};
-
-  for (const size of SIZES) {
-    const quantity = quantities[size];
-    const rate = rates[size];
-    const weightKg = REEL_WEIGHTS[size] || 0;
-    const amount = quantity * weightKg * rate;
-
-    totalEarnings += amount;
-
-    production[size] = {
-      quantity,
-      rate,
-      amount: roundMoney(amount),
-    };
-  }
+  totalKg = Math.round(totalKg * 1000) / 1000;
+  const totalEarnings = Math.round(totalKg * ratePerKg * 100) / 100;
 
   return {
-    basicSalary: roundMoney(totalEarnings),
+    basicSalary: totalEarnings,
     production: {
-      ...production,
-      totalReels,
-      totalEarnings: roundMoney(totalEarnings),
+      totalKg,
+      ratePerKg,
+      totalEarnings,
     },
   };
 };
-
-/* ------------------------------------------------------------------ */
-/*  GENERATE                                                           */
-/* ------------------------------------------------------------------ */
 
 const generateSalaries = async (req, res) => {
   try {

@@ -9,14 +9,7 @@ import {
 } from "../api/api";
 
 const PAGE_SIZE = 10;
-const RATE_MIN = 2, RATE_MAX = 3;
 const PHONE_RE = /^[0-9+\-\s()]*$/;
-const RATE_FIELDS = [
-  { key: "rate2kg", label: "2 kg", kg: 2 },
-  { key: "rate5kg", label: "5 kg", kg: 5 },
-  { key: "rate8kg", label: "8 kg", kg: 8 },
-  { key: "rate10kg", label: "10 kg", kg: 10 },
-];
 const SALARY_STATUS = {
   Paid: "bg-emerald-50 text-emerald-700 ring-emerald-200",
   Partial: "bg-sky-50 text-sky-700 ring-sky-200",
@@ -65,7 +58,7 @@ const blankForm = () => ({
   name: "", phone: "", role: "", department: "",
   joiningDate: todayISO(), status: "Active", payType: "Fixed",
   fixedPay: { amount: "", cycle: "Monthly" },
-  variablePay: { rate2kg: "", rate5kg: "", rate8kg: "", rate10kg: "" },
+  variablePay: { ratePerKg: "" },
 });
 
 const INPUT = "h-10 w-full rounded-lg border bg-white px-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:ring-2 disabled:bg-slate-50 disabled:text-slate-500";
@@ -211,18 +204,13 @@ function PayCell({ worker }) {
       </div>
     );
   }
+  const rate = worker.variablePay?.ratePerKg;
   return (
-    <div className="mt-1.5 flex flex-wrap gap-1">
-      {RATE_FIELDS.map((f) => {
-        const v = worker.variablePay?.[f.key];
-        const has = v != null;
-        return (
-          <span key={f.key} title={has ? `${f.label} reel, per kg` : `No ${f.label} rate set`}
-            className={`rounded-md px-1.5 py-0.5 text-[11px] font-medium tabular-nums ring-1 ring-inset ${has ? "bg-white text-slate-700 ring-slate-200" : "bg-white text-slate-300 ring-slate-100"}`}>
-            {f.label} {has ? money(v) : "—"}
-          </span>
-        );
-      })}
+    <div className="mt-1.5 flex items-baseline gap-1.5">
+      <span className="text-sm font-semibold tabular-nums text-slate-900">
+        {rate != null ? money(rate) : "—"}
+      </span>
+      <span className="text-xs text-slate-400">/ kg</span>
     </div>
   );
 }
@@ -304,7 +292,7 @@ function Workers() {
       name: w.name || "", phone: w.phone || "", role: w.role || "", department: w.department || "",
       joiningDate: toInputDate(w.joiningDate), status: w.status || "Active", payType: w.payType || "Fixed",
       fixedPay: { amount: str(w.fixedPay?.amount), cycle: w.fixedPay?.cycle || "Monthly" },
-      variablePay: Object.fromEntries(RATE_FIELDS.map((f) => [f.key, str(w.variablePay?.[f.key])])),
+      variablePay: { ratePerKg: str(w.variablePay?.ratePerKg) },
     },
   });
   const closeForm = () => { if (!saving) setFormState(null); };
@@ -338,15 +326,10 @@ function Workers() {
       if (amt === "" || !Number.isFinite(Number(amt)) || Number(amt) < 0)
         e.fixedAmount = "Enter a pay amount of 0 or more.";
     } else {
-      let any = false;
-      for (const f of RATE_FIELDS) {
-        const v = form.variablePay[f.key];
-        if (v === "") continue;
-        any = true;
-        const n = Number(v);
-        if (!Number.isFinite(n) || n < RATE_MIN || n > RATE_MAX) e[f.key] = `₹${RATE_MIN} to ₹${RATE_MAX}`;
+      const v = form.variablePay.ratePerKg;
+      if (v === "" || !Number.isFinite(Number(v)) || Number(v) <= 0) {
+        e.ratePerKg = "Enter a rate greater than 0.";
       }
-      if (!any) e.variable = "Enter at least one rate.";
     }
     return e;
   };
@@ -358,14 +341,14 @@ function Workers() {
     setFormState((s) => ({ ...s, errors }));
     if (Object.keys(errors).length) return;
 
-    const rate = (v) => (v !== "" ? Number(v) : null);
     const isFixed = f.payType === "Fixed";
+    const rate = (v) => (v !== "" && v !== null && v !== undefined ? Number(v) : null);
     const payload = {
       name: f.name.trim(), phone: f.phone.trim(), role: f.role.trim(), department: f.department.trim(),
       joiningDate: f.joiningDate, status: f.status, payType: f.payType,
       ...(isFixed
         ? { fixedPay: { amount: Number(f.fixedPay.amount), cycle: f.fixedPay.cycle || "Monthly" } }
-        : { variablePay: Object.fromEntries(RATE_FIELDS.map((r) => [r.key, rate(f.variablePay[r.key])])) }),
+        : { variablePay: { ratePerKg: rate(f.variablePay.ratePerKg) } }),
     };
 
     try {
@@ -679,29 +662,12 @@ function Workers() {
                     )}
                   </div>
                 ) : (
-                  <div className="overflow-hidden rounded-lg border border-slate-200">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="bg-slate-50 text-xs font-medium text-slate-500">
-                          <th className="px-3 py-2 text-left">Reel size</th>
-                          <th className="px-3 py-2 text-right">Per kg</th>
-                          {/* <th className="px-3 py-2 text-right">Per reel</th> */}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {RATE_FIELDS.map((f) => {
-                          const v = view.variablePay?.[f.key];
-                          const has = v != null;
-                          return (
-                            <tr key={f.key} className="border-t border-slate-100">
-                              <td className="px-3 py-2 text-slate-700">{f.label} reel</td>
-                              <td className="px-3 py-2 text-right tabular-nums">{has ? money(v) : <span className="text-slate-400">—</span>}</td>
-                              {/* <td className="px-3 py-2 text-right tabular-nums">{has ? money(Number(v) * f.kg) : <span className="text-slate-400">—</span>}</td> */}
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                  <div className="space-y-2.5 rounded-lg border border-slate-200 bg-slate-50/50 p-4">
+                    <Row
+                      label="Rate per kg"
+                      value={view.variablePay?.ratePerKg != null ? money(view.variablePay.ratePerKg) : "—"}
+                    />
+                    <p className="text-xs text-slate-400">Applied to total kg produced, regardless of reel size.</p>
                   </div>
                 )}
               </section>
@@ -819,29 +785,29 @@ function Workers() {
                   )}
                 </div>
               ) : (
-                <div className="space-y-3">
-                  {formState.errors.variable && <p className="text-xs text-red-600">{formState.errors.variable}</p>}
-                  <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-                    {RATE_FIELDS.map((f) => {
-                      const raw = form.variablePay[f.key];
-                      const n = Number(raw);
-                      const valid = raw !== "" && n >= RATE_MIN && n <= RATE_MAX;
-                      return (
-                        <Field key={f.key} label={`${f.label} reel`} error={formState.errors[f.key]}
-                          hint={valid ? `${money(n * f.kg)} per reel` : undefined}>
-                          <div className="relative">
-                            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">₹</span>
-                            <input type="number" inputMode="decimal" min={RATE_MIN} max={RATE_MAX} step="0.01" placeholder="0.00"
-                              className={`${inp(formState.errors[f.key])} pl-7`} value={raw}
-                              onChange={(e) => set(["variablePay", f.key], e.target.value)} />
-                          </div>
-                        </Field>
-                      );
-                    })}
+              <div className="space-y-3">
+                <Field
+                  label="Rate (₹ per kg)"
+                  error={formState.errors.ratePerKg}
+                  hint="Applied to total kg produced, regardless of reel size."
+                >
+                  <div className="relative">
+                    <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">₹</span>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      className={`${inp(formState.errors.ratePerKg)} pl-7`}
+                      value={form.variablePay.ratePerKg}
+                      onChange={(e) => set(["variablePay", "ratePerKg"], e.target.value, "ratePerKg")}
+                    />
                   </div>
-                  <Note>Rates are per kg and must be between ₹{RATE_MIN} and ₹{RATE_MAX}. A size left blank pays ₹0, so fill in every size this worker makes.</Note>
-                </div>
-              )}
+                </Field>
+                <Note>One rate per kg. Worker earns: total kg produced × this rate.</Note>
+              </div>
+            )}
             </section>
           </form>
         </Modal>

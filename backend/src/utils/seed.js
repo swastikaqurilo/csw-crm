@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 require("dotenv").config();
 
 const MONGO_URI =
-  process.env.MONGO_URI || "mongodb://localhost:27017/csw-crm";
+  process.env.MONGO_URI || "mongodb+srv://swastikaqurilo_db_user:Swastika123@cluster0.odqifnd.mongodb.net/csw-crm";
 
 async function clearAll() {
   try {

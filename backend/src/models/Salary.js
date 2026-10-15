@@ -98,35 +98,6 @@ const salaryAdvanceSchema = new mongoose.Schema(
   { _id: true }
 );
 
-const productionBreakdownSchema = new mongoose.Schema(
-  {
-    "2kg": {
-      quantity: { type: Number, default: 0, min: 0 },
-      rate: { type: Number, default: 0, min: 0 },
-      amount: { type: Number, default: 0, min: 0 },
-    },
-
-    "5kg": {
-      quantity: { type: Number, default: 0, min: 0 },
-      rate: { type: Number, default: 0, min: 0 },
-      amount: { type: Number, default: 0, min: 0 },
-    },
-
-    "8kg": {
-      quantity: { type: Number, default: 0, min: 0 },
-      rate: { type: Number, default: 0, min: 0 },
-      amount: { type: Number, default: 0, min: 0 },
-    },
-
-    "10kg": {
-      quantity: { type: Number, default: 0, min: 0 },
-      rate: { type: Number, default: 0, min: 0 },
-      amount: { type: Number, default: 0, min: 0 },
-    },
-  },
-  { _id: false }
-);
-
 const salarySchema = new mongoose.Schema(
   {
     worker: {
@@ -209,31 +180,13 @@ const salarySchema = new mongoose.Schema(
     },
 
     production: {
-      "2kg": {
-        quantity: { type: Number, default: 0, min: 0 },
-        rate: { type: Number, default: 0, min: 0 },
-        amount: { type: Number, default: 0, min: 0 },
+      totalKg: {
+        type: Number,
+        default: 0,
+        min: 0,
       },
 
-      "5kg": {
-        quantity: { type: Number, default: 0, min: 0 },
-        rate: { type: Number, default: 0, min: 0 },
-        amount: { type: Number, default: 0, min: 0 },
-      },
-
-      "8kg": {
-        quantity: { type: Number, default: 0, min: 0 },
-        rate: { type: Number, default: 0, min: 0 },
-        amount: { type: Number, default: 0, min: 0 },
-      },
-
-      "10kg": {
-        quantity: { type: Number, default: 0, min: 0 },
-        rate: { type: Number, default: 0, min: 0 },
-        amount: { type: Number, default: 0, min: 0 },
-      },
-
-      totalReels: {
+      ratePerKg: {
         type: Number,
         default: 0,
         min: 0,

@@ -20,7 +20,6 @@ const REEL_COMPOSITION = {
   "10kg": { spoolKg: 0.7, steelKg: 9.3 },
 };
 const SIZE_META = SIZES.map((size) => ({ size, key: `qty${size}`, weight: parseFloat(size) }));
-const SIZE_META_RATE = SIZES.map((size) => ({ size, rateKey: `rate${size}`, weight: parseFloat(size) }));
 
 const pad = (n) => String(n).padStart(2, "0");
 const toLocalDateString = (d) => {
@@ -54,19 +53,10 @@ function getEntryMetrics(entry) {
 }
 
 function getWorkerEarnings(workerEntry) {
-  const production = workerEntry?.production || {};
-  const rates = workerEntry?.worker?.variablePay || {};
-  const rows = SIZE_META_RATE.map(({ size, rateKey, weight }) => {
-    const reels = Number(production[size] || 0);
-    const rate = Number(rates[rateKey] || 0);
-    return { size, reels, rate, weight, kg: reels * weight, earned: reels * weight * rate };
-  }).filter((r) => r.reels > 0);
-  return {
-    rows,
-    totalReels: rows.reduce((s, r) => s + r.reels, 0),
-    totalGrossKg: rows.reduce((s, r) => s + r.kg, 0),
-    totalEarnings: rows.reduce((s, r) => s + r.earned, 0),
-  };
+  const kg = Number(workerEntry?.kg ?? workerEntry?.grossKg ?? 0);
+  const ratePerKg = Number(workerEntry?.worker?.variablePay?.ratePerKg || 0);
+  const totalEarnings = Number(workerEntry?.totalEarnings ?? kg * ratePerKg);
+  return { kg, ratePerKg, totalEarnings };
 }
 
 function stockStatus(item) {
@@ -252,9 +242,6 @@ const KPIS = [
   { id: "stockReserved", label: "Reserved", icon: Layers, top: "bg-gradient-to-r from-indigo-400 to-violet-600", bg: "bg-gradient-to-br from-indigo-50 to-violet-100 text-violet-700" },
 ];
 
-/* ================================================================
- *  MAIN
- * ================================================================ */
 function Products() {
   /* ── data ── */
   const [entries, setEntries] = useState([]);
@@ -266,22 +253,17 @@ function Products() {
   const [absentIds, setAbsentIds] = useState(() => new Set());
   const [attendanceLoading, setAttendanceLoading] = useState(false);
 
-  /* ── shared ── */
   const [saving, setSaving] = useState(false);
   const [flash, setFlash] = useState({ error: "", success: "" });
   const flashMsg = (patch) => setFlash((f) => ({ ...f, ...patch }));
 
-  /* ── filters ── */
   const [filters, setFilters] = useState({ from: "", to: "", page: 1 });
   const patchFilters = (patch) => setFilters((f) => ({ ...f, page: patch.page ?? f.page, ...patch }));
 
-  /* ── modals ── */
   const [detailId, setDetailId] = useState(null);
-  const [prodModal, setProdModal] = useState(null); // { editing, form, workerRows }
-  const [stockModal, setStockModal] = useState(null); // { kind, item, form }
-  const [conflict, setConflict] = useState(null); // { info, pending }
-
-  /* ── fetchers ── */
+  const [prodModal, setProdModal] = useState(null); 
+  const [stockModal, setStockModal] = useState(null);
+  const [conflict, setConflict] = useState(null); 
   
 const fetchEntries = useCallback(async () => {
   try {
@@ -406,7 +388,6 @@ const fetchEntries = useCallback(async () => {
 
   const selectedEntry = useMemo(() => entries.find((e) => e._id === detailId) || null, [entries, detailId]);
 
-  /* ── preview (production form) ── */
   const preview = useMemo(() => {
     if (!prodModal) return { totalReels: 0, totalKg: 0, steelNeeded: 0, reelsBySize: {} };
     const f = prodModal.form;
@@ -439,31 +420,26 @@ const fetchEntries = useCallback(async () => {
         notes: entry.notes || "",
       },
       workerRows: (entry.workers || []).map((item) => ({
-      worker: typeof item.worker === "object" ? item.worker._id : item.worker,
-      production: {
-        "2kg": item.production?.["2kg"] === 0 ? "" : (item.production?.["2kg"] ?? ""),
-        "5kg": item.production?.["5kg"] === 0 ? "" : (item.production?.["5kg"] ?? ""),
-        "8kg": item.production?.["8kg"] === 0 ? "" : (item.production?.["8kg"] ?? ""),
-        "10kg": item.production?.["10kg"] === 0 ? "" : (item.production?.["10kg"] ?? ""),
-      },
+        worker: typeof item.worker === "object" ? item.worker._id : item.worker,
+        kg: item.kg === 0 || item.kg == null ? "" : String(item.kg),
       })),
     });
   };
 
   const closeProdModal = () => { if (!saving) setProdModal(null); };
   const setFormField = (patch) => setProdModal((m) => ({ ...m, form: { ...m.form, ...patch } }));
-  const addWorkerRow = () => setProdModal((m) => ({ ...m, workerRows: [...m.workerRows, { worker: "", production: { "2kg": "", "5kg": "", "8kg": "", "10kg": "" } }] }));
+  const addWorkerRow = () => setProdModal((m) => ({ ...m, workerRows: [...m.workerRows, { worker: "", kg: "" }] }));
   const removeWorkerRow = (i) => setProdModal((m) => ({ ...m, workerRows: m.workerRows.filter((_, idx) => idx !== i) }));
   const updateWorkerRow = (i, worker) => setProdModal((m) => ({ ...m, workerRows: m.workerRows.map((r, idx) => idx === i ? { ...r, worker } : r) }));
-  const updateWorkerProd = (i, size, value) => setProdModal((m) => ({
+  const updateWorkerKg = (i, value) => setProdModal((m) => ({
     ...m,
-    workerRows: m.workerRows.map((r, idx) => idx === i ? { ...r, production: { ...r.production, [size]: value || 0 } } : r),
+    workerRows: m.workerRows.map((r, idx) => idx === i ? { ...r, kg: value } : r),
   }));
 
   const validateWorkerProduction = () => {
-    const daily = Object.fromEntries(SIZE_META.map(({ size, key }) => [size, Number(prodModal.form[key]) || 0]));
-    const assigned = { "2kg": 0, "5kg": 0, "8kg": 0, "10kg": 0 };
+    const dayTotalKg = preview.totalKg;
     const seen = new Set();
+    let assignedKg = 0;
     for (const row of prodModal.workerRows) {
       if (!row.worker) return "Please select a worker.";
       if (seen.has(row.worker)) return "The same worker cannot be added twice.";
@@ -472,11 +448,11 @@ const fetchEntries = useCallback(async () => {
         return `${w?.name || "This worker"} is marked absent on the selected date and can't be assigned production.`;
       }
       seen.add(row.worker);
-      for (const size of SIZES) {
-        const qty = Number(row.production?.[size]) || 0;
-        if (!Number.isInteger(qty) || qty < 0) return `${size} production must be a whole number.`;
-        assigned[size] += qty;
-        if (assigned[size] > daily[size]) return `${size} worker production cannot exceed today's production.`;
+      const kg = Number(row.kg) || 0;
+      if (kg < 0) return "Kg produced cannot be negative.";
+      assignedKg += kg;
+      if (assignedKg > dayTotalKg) {
+        return `Workers assigned ${assignedKg} kg, but only ${dayTotalKg} kg was produced today.`;
       }
     }
     return null;
@@ -501,12 +477,7 @@ const fetchEntries = useCallback(async () => {
       notes: form.notes.trim() || undefined,
       workers: workerRows.map((row) => ({
         worker: row.worker,
-        production: {
-          "2kg": Number(row.production["2kg"]) || 0,
-          "5kg": Number(row.production["5kg"]) || 0,
-          "8kg": Number(row.production["8kg"]) || 0,
-          "10kg": Number(row.production["10kg"]) || 0,
-        },
+        kg: Number(row.kg) || 0,
       })),
     };
     try {
@@ -815,9 +786,6 @@ const fetchEntries = useCallback(async () => {
     );
   };
 
-  /* ================================================================
-   *  RENDER
-   * ================================================================ */
   return (
     <div className="w-full min-w-0 space-y-4 pb-6 sm:space-y-5">
       {/* HEADER */}
@@ -1024,62 +992,40 @@ const fetchEntries = useCallback(async () => {
                   <div className="flex items-center justify-between gap-3 border-b border-emerald-200 bg-emerald-50/60 px-4 py-3">
                     <div>
                       <p className="text-[10.5px] font-bold uppercase tracking-wider text-emerald-800">Worker Production & Earnings</p>
-                      <p className="mt-0.5 text-[10px] text-emerald-600">Daily production completed by each worker</p>
+                      <p className="mt-0.5 text-[10px] text-emerald-600">Kg produced and earnings per worker</p>
                     </div>
                     <div className="rounded-lg bg-emerald-100 px-2.5 py-1.5 text-right">
                       <p className="text-[9px] font-semibold uppercase tracking-wider text-emerald-600">Total Earnings</p>
                       <p className="text-sm font-bold tabular-nums text-emerald-800">₹{fmtMoney(totalEarnings)}</p>
                     </div>
                   </div>
-                  <div className="divide-y divide-slate-100">
-                    {selectedEntry.workers.map((workerEntry, i) => {
-                      const w = workerEntry.worker;
-                      const { rows, totalGrossKg, totalEarnings: earned } = getWorkerEarnings(workerEntry);
-                      return (
-                        <div key={workerEntry._id || i} className="p-4">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="flex min-w-0 items-center gap-3">
-                              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-bold text-slate-700">
+                  <div className="overflow-hidden">
+                    <div className="grid grid-cols-[1.6fr_1fr_1fr_1fr] bg-slate-50 px-4 py-2 border-b border-slate-200">
+                      {["Worker", "Kg Produced", "Rate / Kg", "Earned"].map((h, idx) => (
+                        <span key={h} className={`text-[9px] font-bold uppercase tracking-wider text-slate-500 ${idx === 0 ? "text-left" : "text-right"}`}>{h}</span>
+                      ))}
+                    </div>
+                    <div className="divide-y divide-slate-100">
+                      {selectedEntry.workers.map((workerEntry, i) => {
+                        const w = workerEntry.worker;
+                        const { kg, ratePerKg, totalEarnings: earned } = getWorkerEarnings(workerEntry);
+                        return (
+                          <div key={workerEntry._id || i} className="grid grid-cols-[1.6fr_1fr_1fr_1fr] items-center px-4 py-2.5">
+                            <div className="min-w-0 flex items-center gap-2">
+                              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-slate-100 text-[10px] font-bold text-slate-700">
                                 {w?.name ? w.name.split(" ").map((p) => p[0]).slice(0, 2).join("").toUpperCase() : "W"}
                               </div>
-                              <div className="min-w-0">
-                                <p className="truncate text-sm font-semibold text-slate-900">{w?.name || "Unknown Worker"}</p>
-                                <p className="mt-0.5 text-[10px] text-slate-500">{fmtNum(totalGrossKg)} kg gross production</p>
-                              </div>
+                              <span className="truncate text-xs font-semibold text-slate-800">{w?.name || "Unknown Worker"}</span>
                             </div>
-                            <div className="shrink-0 text-right">
-                              <p className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">Earned Today</p>
-                              <p className="mt-0.5 text-base font-bold tabular-nums text-emerald-600">₹{fmtMoney(earned)}</p>
-                            </div>
+                            <span className="text-right text-xs font-semibold tabular-nums text-slate-700">
+                              {fmtNum(kg)} <span className="text-[10px] font-medium text-slate-400">kg</span>
+                            </span>
+                            <span className="text-right text-xs tabular-nums text-slate-600">₹{fmtMoney(ratePerKg)}</span>
+                            <span className="text-right text-xs font-bold tabular-nums text-emerald-700">₹{fmtMoney(earned)}</span>
                           </div>
-                          {rows.length > 0 ? (
-                            <div className="mt-3 overflow-hidden rounded-lg border border-slate-200">
-                              <div className="grid grid-cols-4 bg-slate-50 px-3 py-2">
-                                {["Reel", "Qty", "Rate / KG", "Earned"].map((h, idx) => (
-                                  <span key={h} className={`text-[9px] font-bold uppercase tracking-wider text-slate-400 ${idx === 0 ? "" : "text-right"}`}>{h}</span>
-                                ))}
-                              </div>
-                              {rows.map((r) => (
-                                <div key={r.size} className="grid grid-cols-4 border-t border-slate-100 px-3 py-2.5">
-                                  <span className="text-xs font-semibold text-slate-800">{r.size}</span>
-                                  <span className="text-right text-xs tabular-nums text-slate-700">{fmtNum(r.reels)}</span>
-                                  <span className="text-right text-xs tabular-nums text-slate-600">₹{fmtMoney(r.rate)}</span>
-                                  <span className="text-right text-xs font-semibold tabular-nums text-slate-900">₹{fmtMoney(r.earned)}</span>
-                                </div>
-                              ))}
-                              <div className="grid grid-cols-4 border-t border-slate-200 bg-slate-50 px-3 py-2.5">
-                                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-600">Total</span>
-                                <span className="text-right text-xs font-bold tabular-nums text-slate-900">{fmtNum(rows.reduce((s, r) => s + r.reels, 0))}</span>
-                                <span />
-                                <span className="text-right text-xs font-bold tabular-nums text-emerald-700">₹{fmtMoney(earned)}</span>
-                              </div>
-                            </div>
-                          ) : (
-                            <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-400">No production assigned to this worker.</p>
-                          )}
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
                   </div>
                 </section>
               )}
@@ -1205,48 +1151,48 @@ const fetchEntries = useCallback(async () => {
                           </div>
                           <button type="button" onClick={() => removeWorkerRow(index)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-red-200 bg-white text-red-600 transition-colors hover:bg-red-50" title="Remove worker"><Trash2 size={15} /></button>
                         </div>
-                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                          {SIZES.map((size) => (
-                            <Field key={size} label={`${size} Reels`}>
-                              <input type="number" min="0" step="1" inputMode="numeric" value={row.production[size]} onChange={(e) => updateWorkerProd(index, size, e.target.value)} placeholder="0" className={INPUT} />
-                            </Field>
-                          ))}
-                        </div>
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                            <div className="sm:col-span-2">
+                              <Field label="Kg Produced" required hint="Total kg this worker produced today.">
+                                <div className="relative">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    inputMode="decimal"
+                                    value={row.kg}
+                                    onChange={(e) => updateWorkerKg(index, e.target.value)}
+                                    placeholder="0"
+                                    className={`${INPUT} pr-12`}
+                                  />
+                                  <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">kg</span>
+                                </div>
+                              </Field>
+                            </div>
+                            <div className="flex items-end">
+                              <div className="w-full rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5">
+                                <p className="text-[9px] font-bold uppercase tracking-wider text-emerald-700">Earned</p>
+                                <p className="mt-0.5 text-base font-bold tabular-nums text-emerald-800">
+                                  ₹{((Number(row.kg) || 0) * Number(workers.find((w) => w._id === row.worker)?.variablePay?.ratePerKg || 0)).toFixed(2)}
+                                </p>
+                                <p className="text-[9px] text-emerald-600">
+                                  @ ₹{Number(workers.find((w) => w._id === row.worker)?.variablePay?.ratePerKg || 0)}/kg
+                                </p>
+                              </div>
+                            </div>
+                          </div>
                         <div className="mt-3 flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2">
                           <span className="text-[10px] font-medium text-slate-500">Worker total</span>
                           <span className="text-xs font-bold tabular-nums text-slate-800">
-                            {SIZES.reduce((t, s) => t + (Number(row.production[s]) || 0), 0)} reels
+                            {Number(row.kg) || 0} kg
                           </span>
                         </div>
                       </div>
                     ))}
                   </div>
                 )}
-
-                {prodModal.workerRows.length > 0 && (
-                  <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50/60 p-3">
-                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-blue-700">Assigned Production</p>
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                      {SIZES.map((size) => {
-                        const key = `qty${size}`;
-                        const assigned = prodModal.workerRows.reduce((s, r) => s + (Number(r.production[size]) || 0), 0);
-                        const total = Number(prodModal.form[key] || 0);
-                        const complete = assigned === total;
-                        const over = assigned > total;
-                        return (
-                          <div key={size} className={`rounded-lg border bg-white px-3 py-2 ${over ? "border-red-200" : complete ? "border-emerald-200" : "border-slate-200"}`}>
-                            <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">{size}</p>
-                            <p className={`mt-1 text-sm font-bold tabular-nums ${over ? "text-red-600" : complete ? "text-emerald-600" : "text-slate-800"}`}>{assigned} / {total}</p>
-                            <p className="text-[9px] text-slate-400">reels assigned</p>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
               </section>
 
-              {/* CONSUMED / SCRAPPED */}
               <section>
                 <div className="mb-3"><SectionLabel icon={PackageX} label="Consumed / Scrapped" tint="rose" /></div>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

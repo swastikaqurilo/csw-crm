@@ -78,31 +78,9 @@ const workerSchema = new mongoose.Schema(
     },
     
     variablePay: {
-      rate2kg: {
+      ratePerKg: {
         type: Number,
-        min: [2, "2 KG rate cannot be less than ₹2"],
-        max: [3, "2 KG rate cannot be more than ₹3"],
-        default: null,
-      },
-
-      rate5kg: {
-        type: Number,
-        min: [2, "5 KG rate cannot be less than ₹2"],
-        max: [3, "5 KG rate cannot be more than ₹3"],
-        default: null,
-      },
-
-      rate8kg: {
-        type: Number,
-        min: [2, "8 KG rate cannot be less than ₹2"],
-        max: [3, "8 KG rate cannot be more than ₹3"],
-        default: null,
-      },
-
-      rate10kg: {
-        type: Number,
-        min: [2, "10 KG rate cannot be less than ₹2"],
-        max: [3, "10 KG rate cannot be more than ₹3"],
+        min: [0, "Rate cannot be negative"],
         default: null,
       },
     },
