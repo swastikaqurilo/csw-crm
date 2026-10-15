@@ -10,6 +10,11 @@ const getNotifications = async (req, res) => {
     const settings = await getGlobalSettings();
     const threshold = Number(settings?.preferences?.lowStockThreshold ?? 10);
 
+    console.log("[notifications] deployed controller check", {
+      version: "zero-stock-filter-v2",
+      environment: process.env.NODE_ENV,
+    });
+
     
 const lowStockItems = await ProductStock.find({
   isActive: true,
@@ -29,12 +34,20 @@ const lowStockItems = await ProductStock.find({
     ],
   },
 })
-  .select("name size quantity reservedQty unit updatedAt")
+  .select("name size quantity reservedQty unit updatedAt lastReceivedAt")
   .sort({ quantity: 1 })
   .limit(MAX_ALERTS_PER_TYPE)
   .lean();
 
-
+  
+console.log(
+  "[notifications] low-stock results:",
+  lowStockItems.map((item) => ({
+    name: item.name,
+    quantity: item.quantity,
+    lastReceivedAt: item.lastReceivedAt,
+  }))
+);
     const lowStockAlerts = lowStockItems.map((item) => {
       const free = Math.max(
         0,
