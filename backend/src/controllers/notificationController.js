@@ -12,8 +12,9 @@ const getNotifications = async (req, res) => {
 
     const lowStockItems = await ProductStock.find({
       isActive: true,
+      // Only consider items that have actually received stock at least once.
       $or: [
-        { lastReceivedAt: { $ne: null } },
+        { lastReceivedAt: { $exists: true, $ne: null } },   // ← fixed
         { "movementLog.0": { $exists: true } },
         { quantity: { $gt: 0 } },
       ],
