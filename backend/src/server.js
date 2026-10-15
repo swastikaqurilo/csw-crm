@@ -28,20 +28,32 @@ const quoteRoutes = require("./routes/quoteRoutes");
 const authRoutes = require("./routes/authRoutes");
 const { protect } = require("./middleware/auth");
 
+
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://192.168.88.6:5173",
+  "https://4nq08695-5173.inc1.devtunnels.ms",
+  "https://csw-crm-4l2j.vercel.app",
+  "https://crm.corvexsteelwires.com",
+];
+
 app.use(
   cors({
-    origin: [
-      "http://localhost:5173",
-      "http://192.168.88.6:5173",
-      "https://4nq08695-5173.inc1.devtunnels.ms",
-      "https://csw-crm-4l2j.vercel.app",
-      "https://crm.corvexsteelwires.com"
-    ],
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error(`CORS blocked origin: ${origin}`));
+    },
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
 app.use(express.json());
+
 
 app.get("/", (req, res) => {
   res.status(200).json({
