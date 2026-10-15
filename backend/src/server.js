@@ -33,7 +33,7 @@ const allowedOrigins = [
   "http://localhost:5173",
   "http://192.168.88.6:5173",
   "https://4nq08695-5173.inc1.devtunnels.ms",
-  "https://csw-crm-4l2j.vercel.app",
+  "https://csw-crm-4l2j-git-features-swastikaqurilo-5128.vercel.app",
   "https://crm.corvexsteelwires.com",
 ];
 
@@ -62,10 +62,8 @@ app.get("/", (req, res) => {
   });
 });
 
-// Public auth routes
 app.use("/api/auth", authRoutes);
 
-// All business routes require authentication
 app.use("/api/enquiries", protect, enquiryRoutes);
 app.use("/api/contacts", protect, contactRoutes);
 app.use("/api/follow-ups", protect, followUpRoutes);
@@ -82,7 +80,6 @@ app.use("/api/notifications", protect, notificationRoutes);
 app.use("/api/salaries", protect, salaryRoutes);
 app.use("/api/quotes", protect, quoteRoutes);
 
-// 404 handler
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -90,7 +87,6 @@ app.use((req, res) => {
   });
 });
 
-// Central error handler (ValidationError, CastError, duplicate key, etc.)
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
