@@ -28,13 +28,13 @@ const quoteRoutes = require("./routes/quoteRoutes");
 const authRoutes = require("./routes/authRoutes");
 const { protect } = require("./middleware/auth");
 
-
 const allowedOrigins = [
-  "http://localhost:5173",
-  "http://192.168.88.6:5173",
-  "https://4nq08695-5173.inc1.devtunnels.ms",
-  "https://csw-crm-4l2j-git-features-swastikaqurilo-5128.vercel.app",
-  "https://crm.corvexsteelwires.com",
+"http://localhost:5173",
+"http://192.168.88.6:5173",
+"https://4nq08695-5173.inc1.devtunnels.ms",
+"https://crm.corvexsteelwires.com",
+"https://csw-crm-4l2j-evgx9tl9c-swastikaqurilo-5128.vercel.app",
+"https://csw-crm-4l2j-git-features-swastikaqurilo-5128.vercel.app",
 ];
 
 app.use(
