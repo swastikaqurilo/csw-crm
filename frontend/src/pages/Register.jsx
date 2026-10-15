@@ -60,12 +60,16 @@ function Register() {
     try {
       setLoading(true);
 
-      await register({
+      console.log(form)
+
+      const response = await register({
         name: form.name.trim(),
         email: form.email.trim(),
         password: form.password,
         // role: form.role,
       });
+
+      console.log(response)
 
       setSuccess(true);
 

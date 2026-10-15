@@ -1,9 +1,7 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: import.meta.env.PROD
-    ? 'https://csw-crm.vercel.app/api'
-    : '/api',
+  baseURL: 'https://csw-crm.vercel.app/api',
   headers: {
     'Content-Type': 'application/json',
   },
