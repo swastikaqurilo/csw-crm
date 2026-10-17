@@ -1,4 +1,4 @@
-const Contact = require("../models/Contact");
+const Contact = require("../models/Contacts");
 const ProductStock = require("../models/ProductStock");
 
 const MAX_PAGE = 500;

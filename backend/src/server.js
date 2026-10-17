@@ -80,7 +80,7 @@ app.use("/api/settings", protect, settingRoutes);
 app.use("/api/notifications", protect, notificationRoutes);
 app.use("/api/salaries", protect, salaryRoutes);
 app.use("/api/quotes", protect, quoteRoutes);
-app.use("/api/sync", require("./routes/sync"));
+app.use("/api/sync", protect, syncRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
