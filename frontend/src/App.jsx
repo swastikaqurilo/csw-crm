@@ -29,6 +29,9 @@ function App() {
     <BrowserRouter>
       <AuthProvider>
         <Routes>
+
+          <p>build-2</p> 
+          
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />

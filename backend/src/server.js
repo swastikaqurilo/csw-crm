@@ -24,6 +24,7 @@ const settingRoutes = require("./routes/settingRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const salaryRoutes = require("./routes/salaryRoutes");
 const quoteRoutes = require("./routes/quoteRoutes");
+const syncRoutes = require("./routes/syncRoutes");
 
 const authRoutes = require("./routes/authRoutes");
 const { protect } = require("./middleware/auth");
@@ -79,6 +80,7 @@ app.use("/api/settings", protect, settingRoutes);
 app.use("/api/notifications", protect, notificationRoutes);
 app.use("/api/salaries", protect, salaryRoutes);
 app.use("/api/quotes", protect, quoteRoutes);
+app.use("/api/sync", require("./routes/sync"));
 
 app.use((req, res) => {
   res.status(404).json({

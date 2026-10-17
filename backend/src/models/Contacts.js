@@ -138,10 +138,12 @@ const contactSchema = new Schema(
   { timestamps: true }
 );
 
-// Race-safe contactId generation using atomic Counter (same pattern as orders/invoices)
 contactSchema.pre("save", async function () {
+  if (!this.isNew) {
+    this.version = (this.version || 1) + 1;
+    return;
+  }
   if (this.contactId) return;
-
   const seq = await getNextSequence("contact");
   this.contactId = `CON-${String(seq).padStart(3, "0")}`;
 });
@@ -151,5 +153,8 @@ contactSchema.index({
   company: "text",
   email: "text",
 });
+
+contactSchema.index({ updatedAt: 1 });
+contactSchema.index({ deletedAt: 1, updatedAt: 1 });
 
 module.exports = mongoose.model("Contact", contactSchema);

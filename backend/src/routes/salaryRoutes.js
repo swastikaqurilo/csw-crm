@@ -14,11 +14,9 @@ const {
 
 const router = express.Router();
 
-// Read
 router.get("/", getSalaries);
 router.get("/:id", getSalary);
 
-// Write / pay / delete
 router.post("/generate", generateSalaries);
 router.post("/", createSalary);
 router.put("/:id", updateSalary);

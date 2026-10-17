@@ -1534,14 +1534,14 @@ export default function Dashboard() {
         {/* HEADER */}
         <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+            {/* <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
               <span>Command Console</span>
               <span className="text-slate-300">/</span>
               <span className="flex items-center gap-1.5 text-emerald-600">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
                 Live
               </span>
-            </div>
+            </div> */}
             <h1 className="text-[1.75rem] font-semibold tracking-tight text-black sm:text-[1.875rem]">
               Welcome, Admin
             </h1>

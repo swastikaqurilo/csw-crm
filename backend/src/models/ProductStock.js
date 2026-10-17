@@ -183,6 +183,10 @@ const productStockSchema = new mongoose.Schema(
       default: true,
     },
 
+    deletedAt: { type: Date, default: null },
+
+    version:   { type: Number, default: 1, min: 0 },
+
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -215,7 +219,13 @@ productStockSchema.virtual("freeQty").get(function () {
 productStockSchema.set("toJSON", { virtuals: true });
 productStockSchema.set("toObject", { virtuals: true });
 
+productStockSchema.pre("save", function () {
+  if (!this.isNew) this.version = (this.version || 1) + 1;
+});
+
 productStockSchema.index({ isActive: 1 });
+productStockSchema.index({ updatedAt: 1 });
+productStockSchema.index({ deletedAt: 1, updatedAt: 1 });
 
 const ProductStock = mongoose.model("ProductStock", productStockSchema);
 
