@@ -1,9 +1,7 @@
 import axios from "axios";
 
 const api = axios.create({
-  baseURL: import.meta.env.DEV
-    ? "/api"
-    : "https://csw-crm.vercel.app/api",
+  baseURL: "http://localhost:5000/api",
   headers: {
     "Content-Type": "application/json",
   },
@@ -26,17 +24,6 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
-
-      const path = window.location.pathname;
-
-      if (!path.includes("/login") && !path.includes("/register")) {
-        window.location.href = "/login";
-      }
-    }
-
     return Promise.reject(error);
   }
 );

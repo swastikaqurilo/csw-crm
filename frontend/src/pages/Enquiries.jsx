@@ -39,6 +39,11 @@ import {
 } from "../api/api";
 import { toast } from "react-toastify";
 
+import {
+  cacheEnquiries,
+  getCachedEnquiries,
+} from "../db/enquiriesCache";
+
 const STATUS_OPTIONS = [
   "New",
   "Contacted",
@@ -367,42 +372,97 @@ function Enquiries() {
     notes: "",
   });
 
-  /* ------------------------------------------------------------------ */
-  /*  Data loading                                                       */
-  /* ------------------------------------------------------------------ */
-  const loadEnquiries = async () => {
-    try {
-      setLoading(true);
-      const params = { page, limit };
-      if (search.trim()) params.search = search.trim();
-      if (statusFilter !== "All Statuses") params.status = statusFilter;
-      if (sourceFilter !== "All Sources") params.source = sourceFilter;
+  
+const loadEnquiries = async () => {
+  try {
+    setLoading(true);
 
-      const response = await getEnquiries(params);
-      const data = response?.data?.data || [];
-      const mapped = data.map(mapEnquiry);
+    const params = { page, limit };
 
-      setEnquiries(mapped);
-      setTotal(response?.data?.total || 0);
-      setPages(response?.data?.pages || 1);
-
-      if (selectedId) {
-        const stillExists = mapped.some((it) => it.id === selectedId);
-        if (!stillExists) setSelectedId(null);
-      }
-    } catch (err) {
-      toast.error(
-        err?.response?.data?.message ||
-          "Failed to load enquiries. Make sure your backend is running."
-      );
-    } finally {
-      setLoading(false);
+    if (search.trim()) params.search = search.trim();
+    if (statusFilter !== "All Statuses") {
+      params.status = statusFilter;
     }
-  };
+    if (sourceFilter !== "All Sources") {
+      params.source = sourceFilter;
+    }
+
+    const response = await getEnquiries(params);
+
+    const payload = {
+      data: response?.data?.data || [],
+      total: response?.data?.total || 0,
+      pages: response?.data?.pages || 1,
+    };
+
+    // Save the successful server response locally.
+    await cacheEnquiries(params, payload);
+
+    const mapped = payload.data.map(mapEnquiry);
+
+    setEnquiries(mapped);
+    setTotal(payload.total);
+    setPages(payload.pages);
+
+    if (selectedId) {
+      const stillExists = mapped.some(
+        (item) => item.id === selectedId
+      );
+
+      if (!stillExists) setSelectedId(null);
+    }
+  } catch (err) {
+    // Only use the cache for network/offline failures.
+    // Do not bypass server authentication or authorization errors.
+    const isNetworkFailure =
+      !err?.response || !navigator.onLine;
+
+    if (isNetworkFailure) {
+      try {
+        const cached = await getCachedEnquiries(params);
+
+        if (cached) {
+          const mapped = cached.data.map(mapEnquiry);
+
+          setEnquiries(mapped);
+          setTotal(cached.total);
+          setPages(cached.pages);
+
+          if (selectedId) {
+            const stillExists = mapped.some(
+              (item) => item.id === selectedId
+            );
+
+            if (!stillExists) setSelectedId(null);
+          }
+
+          toast.info(
+            "Offline mode: showing saved enquiries. Changes require an internet connection."
+          );
+          return;
+        }
+      } catch (cacheError) {
+        console.error(
+          "Failed to read cached enquiries:",
+          cacheError
+        );
+      }
+    }
+
+    toast.error(
+      isNetworkFailure
+        ? "No saved enquiries are available offline. Connect to the internet and open Enquiries to cache them."
+        : err?.response?.data?.message ||
+            "Failed to load enquiries."
+    );
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   useEffect(() => {
     loadEnquiries();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, statusFilter, sourceFilter]);
 
   useEffect(() => {
@@ -411,7 +471,6 @@ function Enquiries() {
       else loadEnquiries();
     }, 400);
     return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
 
   useEffect(() => {
@@ -696,10 +755,6 @@ function Enquiries() {
   };
 
   const closeDetailModal = () => setSelectedId(null);
-
-  /* ------------------------------------------------------------------ */
-  /*  Quotation builder                                                  */
-  /* ------------------------------------------------------------------ */
   const quoteNumber = selectedEnquiry ? `QT-${selectedEnquiry.id}` : "QT-DRAFT";
 
   const quoteComputed = useMemo(() => {

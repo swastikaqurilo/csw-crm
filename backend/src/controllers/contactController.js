@@ -131,7 +131,9 @@ const getContacts = async (req, res) => {
   try {
     const { q, company, page = 1, limit = 5, status } = req.query;
 
-    const filter = {};
+    const filter = {
+      deletedAt: null,
+    };
 
     if (q && typeof q === "string" && q.trim()) {
       const safe = escapeRegex(q.trim().slice(0, 100));
@@ -191,7 +193,10 @@ const getContact = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid contact ID" });
     }
 
-    const contact = await Contact.findById(req.params.id).populate("enquiry");
+    const contact = await Contact.findOne({
+      _id: req.params.id,
+      deletedAt: null,
+    }).populate("enquiry");
 
     if (!contact) {
       return res.status(404).json({ success: false, message: "Contact not found" });
@@ -210,7 +215,10 @@ const updateContact = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid contact ID" });
     }
 
-    const contact = await Contact.findById(req.params.id);
+    const contact = await Contact.findOne({
+      _id: req.params.id,
+      deletedAt: null,
+    });
     if (!contact) {
       return res.status(404).json({ success: false, message: "Contact not found" });
     }
@@ -295,6 +303,8 @@ const updateContact = async (req, res) => {
       contact.status = status;
     }
 
+    contact.lastContact = new Date();
+
     await contact.save();
 
     const updated = await Contact.findById(contact._id).populate("enquiry");
@@ -303,7 +313,12 @@ const updateContact = async (req, res) => {
       success: true,
       message: "Contact updated successfully",
       data: updated,
+      sync: {
+        version: updated.version,
+        updatedAt: updated.updatedAt,
+      },
     });
+
   } catch (error) {
     if (error.code === 11000) {
       const field = Object.keys(error.keyValue || {})[0] || "field";
@@ -355,7 +370,21 @@ const deleteContact = async (req, res) => {
       });
     }
 
-    contact.status = "inactive";
+    if (contact.deletedAt) {
+      return res.status(200).json({
+        success: true,
+        message: "Contact is already deleted",
+        data: {
+          _id: contact._id,
+          deletedAt: contact.deletedAt,
+          version: contact.version,
+          updatedAt: contact.updatedAt,
+        },
+      });
+    }
+
+    contact.deletedAt = new Date();
+
     await contact.save();
 
     return res.status(200).json({
@@ -364,7 +393,12 @@ const deleteContact = async (req, res) => {
         orderCount + paymentCount > 0
           ? "Contact deactivated (linked orders/payments preserved)"
           : "Contact deactivated successfully",
-      data: contact,
+      data: {
+        _id: contact._id,
+        deletedAt: contact.deletedAt,
+        version: contact.version,
+        updatedAt: contact.updatedAt,
+      },
     });
   } catch (error) {
     console.error("[deleteContact]", error);

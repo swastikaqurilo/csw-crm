@@ -5,28 +5,98 @@ const syncOperationSchema = new mongoose.Schema(
     operationId: {
       type: String,
       required: true,
-      unique: true,
+      trim: true,
+      maxlength: 100,
     },
-    endpoint: { type: String, required: true },
-    method: { type: String, required: true },
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+      immutable: true,
+    },
+
+    endpoint: {
+      type: String,
+      required: true,
+      maxlength: 500,
+    },
+
+    method: {
+      type: String,
+      required: true,
+      uppercase: true,
+      maxlength: 10,
+    },
+
+    requestHash: {
+      type: String,
+      required: true,
+      immutable: true,
+      match: /^[a-f0-9]{64}$/,
+    },
+
     status: {
       type: String,
-      enum: ["in_progress", "completed"],
+      enum: ["in_progress", "completed", "failed"],
       default: "in_progress",
       required: true,
     },
-    statusCode: { type: Number, default: null },
-    result: { type: mongoose.Schema.Types.Mixed, default: null },
-    createdAt: { type: Date, default: Date.now },
-    completedAt: { type: Date, default: null },
+
+    claimToken: {
+      type: String,
+      required: true,
+    },
+
+    statusCode: {
+      type: Number,
+      default: null,
+      min: 100,
+      max: 599,
+    },
+
+    result: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+
+    failureReason: {
+      type: String,
+      default: null,
+      maxlength: 1000,
+    },
+
+    createdAt: {
+      type: Date,
+      default: Date.now,
+      immutable: true,
+    },
+
+    completedAt: {
+      type: Date,
+      default: null,
+    },
   },
-  { versionKey: false }
+  {
+    versionKey: false,
+    strict: true,
+  }
 );
 
 syncOperationSchema.index(
-  { createdAt: 1 },
-  { expireAfterSeconds: 90 * 24 * 60 * 60, name: "idempotency_ttl_90d" }
+  { userId: 1, operationId: 1 },
+  {
+    unique: true,
+    name: "user_operation_unique",
+  }
 );
 
-module.exports = mongoose.model("SyncOperation", syncOperationSchema);
+syncOperationSchema.index(
+  { status: 1, createdAt: 1 },
+  { name: "sync_operation_status_created" }
+);
+
+module.exports = mongoose.model(
+  "SyncOperation",
+  syncOperationSchema
+);

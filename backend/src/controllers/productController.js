@@ -457,7 +457,13 @@ const ensureProductStock = async (size, userId) => {
   return doc;
 };
 
-const applyProductionToStock = async ({ qtys, productionId, userId, session = null }) => {
+
+const applyProductionToStock = async ({
+  qtys,
+  productionId,
+  userId,
+  session = null,
+}) => {
   for (const size of SIZES) {
     const qty = Number(qtys[size] || 0);
     if (qty <= 0) continue;
@@ -465,18 +471,33 @@ const applyProductionToStock = async ({ qtys, productionId, userId, session = nu
     let doc = session
       ? await ProductStock.findOne({ size, isActive: true }).session(session)
       : await ProductStock.findOne({ size, isActive: true });
+
     if (!doc) {
       const created = await ProductStock.create(
-        [{ size, name: `${size} Reel`, unit: "Reel", createdBy: userId || null }],
+        [
+          {
+            size,
+            name: `${size} Reel`,
+            unit: "Reel",
+            createdBy: userId || null,
+          },
+        ],
         session ? { session } : undefined
       );
+
       doc = Array.isArray(created) ? created[0] : created;
     }
 
     const before = Number(doc.quantity || 0);
     const after = before + qty;
+    const now = new Date();
 
-    const filter = { _id: doc._id, isActive: true, quantity: before };
+    const filter = {
+      _id: doc._id,
+      isActive: true,
+      quantity: before,
+    };
+
     const logEntry = {
       type: "production",
       quantity: qty,
@@ -489,36 +510,61 @@ const applyProductionToStock = async ({ qtys, productionId, userId, session = nu
       refId: productionId,
       refLabel: `PRD-${String(productionId).slice(-6)}`,
       by: userId || null,
-      at: new Date(),
+      at: now,
     };
 
-    const opts = session ? { session, updatePipeline: true } : { updatePipeline: true };
+    const opts = session
+      ? { session, updatePipeline: true }
+      : { updatePipeline: true };
 
     const result = await ProductStock.updateOne(
       filter,
-      [{
-        $set: {
-          quantity: after,
-          lastReceivedAt: new Date(),
-          updatedBy: userId || null,
-          movementLog: {
-            $slice: [
-              { $concatArrays: [{ $ifNull: ["$movementLog", []] }, [logEntry]] },
-              -MAX_MOVEMENT_LOG,
-            ],
+      [
+        {
+          $set: {
+            quantity: after,
+            lastReceivedAt: now,
+            updatedAt: now,
+            updatedBy: userId || null,
+
+            version: {
+              $add: [{ $ifNull: ["$version", 1] }, 1],
+            },
+
+            movementLog: {
+              $slice: [
+                {
+                  $concatArrays: [
+                    { $ifNull: ["$movementLog", []] },
+                    [logEntry],
+                  ],
+                },
+                -MAX_MOVEMENT_LOG,
+              ],
+            },
           },
         },
-      }],
+      ],
       opts
     );
 
     if (result.modifiedCount !== 1) {
-      throw { status: 409, code: "STOCK_CHANGED", message: `Finished-goods stock for ${size} changed during production. Please retry.` };
+      throw {
+        status: 409,
+        code: "STOCK_CHANGED",
+        message: `Finished-goods stock for ${size} changed during production. Please retry.`,
+      };
     }
   }
 };
 
-const revertProductionFromStock = async ({ qtys, productionId, userId, session = null }) => {
+
+const revertProductionFromStock = async ({
+  qtys,
+  productionId,
+  userId,
+  session = null,
+}) => {
   for (const size of SIZES) {
     const qty = Number(qtys[size] || 0);
     if (qty <= 0) continue;
@@ -526,6 +572,7 @@ const revertProductionFromStock = async ({ qtys, productionId, userId, session =
     const doc = session
       ? await ProductStock.findOne({ size, isActive: true }).session(session)
       : await ProductStock.findOne({ size, isActive: true });
+
     if (!doc) continue;
 
     const before = Number(doc.quantity || 0);
@@ -541,8 +588,14 @@ const revertProductionFromStock = async ({ qtys, productionId, userId, session =
     }
 
     const after = before - qty;
+    const now = new Date();
 
-    const filter = { _id: doc._id, isActive: true, quantity: before };
+    const filter = {
+      _id: doc._id,
+      isActive: true,
+      quantity: before,
+    };
+
     const logEntry = {
       type: "adjustment",
       quantity: qty,
@@ -555,36 +608,60 @@ const revertProductionFromStock = async ({ qtys, productionId, userId, session =
       refId: productionId,
       refLabel: `PRD-rev-${String(productionId).slice(-6)}`,
       by: userId || null,
-      at: new Date(),
+      at: now,
     };
 
-    const opts = session ? { session, updatePipeline: true } : { updatePipeline: true };
+    const opts = session
+      ? { session, updatePipeline: true }
+      : { updatePipeline: true };
 
     const result = await ProductStock.updateOne(
       filter,
-      [{
-        $set: {
-          quantity: after,
-          updatedBy: userId || null,
-          movementLog: {
-            $slice: [
-              { $concatArrays: [{ $ifNull: ["$movementLog", []] }, [logEntry]] },
-              -MAX_MOVEMENT_LOG,
-            ],
+      [
+        {
+          $set: {
+            quantity: after,
+            updatedAt: now,
+            updatedBy: userId || null,
+
+            version: {
+              $add: [{ $ifNull: ["$version", 1] }, 1],
+            },
+
+            movementLog: {
+              $slice: [
+                {
+                  $concatArrays: [
+                    { $ifNull: ["$movementLog", []] },
+                    [logEntry],
+                  ],
+                },
+                -MAX_MOVEMENT_LOG,
+              ],
+            },
           },
         },
-      }],
+      ],
       opts
     );
 
     if (result.modifiedCount !== 1) {
-      throw { status: 409, code: "STOCK_CHANGED", message: `Finished-goods stock for ${size} changed during production reversal. Please retry.` };
+      throw {
+        status: 409,
+        code: "STOCK_CHANGED",
+        message: `Finished-goods stock for ${size} changed during production reversal. Please retry.`,
+      };
     }
   }
 };
 
-// Apply only the difference between old and new production quantities.
-const adjustProductionStockByDelta = async ({ oldQtys, newQtys, productionId, userId, session = null }) => {
+const adjustProductionStockByDelta = async ({
+  oldQtys,
+  newQtys,
+  productionId,
+  userId,
+  session = null,
+}) => {
   for (const size of SIZES) {
     const oldQty = Number(oldQtys[size] || 0);
     const newQty = Number(newQtys[size] || 0);
@@ -598,10 +675,19 @@ const adjustProductionStockByDelta = async ({ oldQtys, newQtys, productionId, us
 
     if (!doc) {
       if (delta < 0) continue;
+
       const created = await ProductStock.create(
-        [{ size, name: `${size} Reel`, unit: "Reel", createdBy: userId || null }],
+        [
+          {
+            size,
+            name: `${size} Reel`,
+            unit: "Reel",
+            createdBy: userId || null,
+          },
+        ],
         session ? { session } : undefined
       );
+
       doc = Array.isArray(created) ? created[0] : created;
     }
 
@@ -629,6 +715,8 @@ const adjustProductionStockByDelta = async ({ oldQtys, newQtys, productionId, us
       };
     }
 
+    const now = new Date();
+
     const logEntry = {
       type: delta > 0 ? "production" : "adjustment",
       quantity: Math.abs(delta),
@@ -644,31 +732,52 @@ const adjustProductionStockByDelta = async ({ oldQtys, newQtys, productionId, us
       refId: productionId,
       refLabel: `PRD-adj-${String(productionId).slice(-6)}`,
       by: userId || null,
-      at: new Date(),
+      at: now,
     };
 
-    const opts = session ? { session, updatePipeline: true } : { updatePipeline: true };
+    const opts = session
+      ? { session, updatePipeline: true }
+      : { updatePipeline: true };
 
     const result = await ProductStock.updateOne(
       { _id: doc._id, isActive: true, quantity: before },
-      [{
-        $set: {
-          quantity: after,
-          ...(delta > 0 ? { lastReceivedAt: new Date() } : { lastIssuedAt: new Date() }),
-          updatedBy: userId || null,
-          movementLog: {
-            $slice: [
-              { $concatArrays: [{ $ifNull: ["$movementLog", []] }, [logEntry]] },
-              -MAX_MOVEMENT_LOG,
-            ],
+      [
+        {
+          $set: {
+            quantity: after,
+            ...(delta > 0
+              ? { lastReceivedAt: now }
+              : { lastIssuedAt: now }),
+            updatedAt: now,
+            updatedBy: userId || null,
+
+            version: {
+              $add: [{ $ifNull: ["$version", 1] }, 1],
+            },
+
+            movementLog: {
+              $slice: [
+                {
+                  $concatArrays: [
+                    { $ifNull: ["$movementLog", []] },
+                    [logEntry],
+                  ],
+                },
+                -MAX_MOVEMENT_LOG,
+              ],
+            },
           },
         },
-      }],
+      ],
       opts
     );
 
     if (result.modifiedCount !== 1) {
-      throw { status: 409, code: "STOCK_CHANGED", message: `Finished-goods stock for ${size} changed during edit. Please retry.` };
+      throw {
+        status: 409,
+        code: "STOCK_CHANGED",
+        message: `Finished-goods stock for ${size} changed during edit. Please retry.`,
+      };
     }
   }
 };
@@ -679,10 +788,6 @@ const buildQtys = (entry) => ({
   "8kg": Number(entry.qty8kg || 0),
   "10kg": Number(entry.qty10kg || 0),
 });
-
-/* ------------------------------------------------------------------ */
-/*  SALARY LOCK — prevent desyncing reels once a salary was generated  */
-/* ------------------------------------------------------------------ */
 
 const findSalaryForWorkerOnDate = (workerId, date) =>
   Salary.findOne({
@@ -707,7 +812,6 @@ const detectWorkerDowngrades = (oldWorkers = [], newWorkers = []) => {
     if (id) newMap.set(id, w);
   }
 
-  // Worker removed entirely → treat as a downgrade
   for (const [workerId, oldW] of oldMap) {
     if (!newMap.has(workerId)) {
       changes.push({ workerId, removed: true, oldW });
@@ -789,7 +893,6 @@ const buildWorkerProduction = async (workers, dailyQtys, productionDate) => {
       .select("allPresent absentWorkers records");
   }
 
-  // Day's total kg = sum across all sizes produced
   const dayTotalKg =
     Number(dailyQtys["2kg"] || 0) * 2 +
     Number(dailyQtys["5kg"] || 0) * 5 +
@@ -896,6 +999,7 @@ const getAllProductStock = async (req, res) => {
   }
 };
 
+
 const updateProductReserved = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
@@ -903,12 +1007,14 @@ const updateProductReserved = async (req, res) => {
     }
 
     const doc = await ProductStock.findById(req.params.id);
+
     if (!doc || !doc.isActive) {
       return res.status(404).json({ success: false, message: "Not found" });
     }
 
     const qtyBefore = Number(doc.quantity || 0);
     const reservedBefore = Number(doc.reservedQty || 0);
+
     let reservedAfter = reservedBefore;
     let reorderLevel = doc.reorderLevel;
     let criticalLevel = doc.criticalLevel;
@@ -916,16 +1022,23 @@ const updateProductReserved = async (req, res) => {
 
     if (req.body.reservedQty !== undefined) {
       const n = Number(req.body.reservedQty);
+
       if (!Number.isFinite(n) || n < 0 || n > MAX_QTY) {
-        return res.status(400).json({ success: false, message: "Invalid reservedQty" });
+        return res.status(400).json({
+          success: false,
+          message: "Invalid reservedQty",
+        });
       }
+
       if (n > qtyBefore) {
         return res.status(400).json({
           success: false,
           message: `Cannot reserve more than available (${qtyBefore} ${doc.unit})`,
         });
       }
+
       reservedAfter = n;
+
       logEntry = {
         type: "adjustment",
         quantity: Math.abs(n - reservedBefore),
@@ -949,17 +1062,27 @@ const updateProductReserved = async (req, res) => {
 
     if (req.body.reorderLevel !== undefined) {
       const r = Number(req.body.reorderLevel);
+
       if (!Number.isFinite(r) || r < 0 || r > MAX_QTY) {
-        return res.status(400).json({ success: false, message: "Invalid reorderLevel" });
+        return res.status(400).json({
+          success: false,
+          message: "Invalid reorderLevel",
+        });
       }
+
       reorderLevel = r;
     }
 
     if (req.body.criticalLevel !== undefined) {
       const c = Number(req.body.criticalLevel);
+
       if (!Number.isFinite(c) || c < 0 || c > MAX_QTY) {
-        return res.status(400).json({ success: false, message: "Invalid criticalLevel" });
+        return res.status(400).json({
+          success: false,
+          message: "Invalid criticalLevel",
+        });
       }
+
       criticalLevel = c;
     }
 
@@ -970,19 +1093,29 @@ const updateProductReserved = async (req, res) => {
       });
     }
 
+    const now = new Date();
+
     const setFields = {
       reservedQty: reservedAfter,
       reorderLevel,
       criticalLevel,
+      updatedAt: now,
       updatedBy: req.user?._id || null,
+      version: {
+        $add: [{ $ifNull: ["$version", 1] }, 1],
+      },
     };
 
-    const pipeline = [{ $set: setFields }];
     if (logEntry) {
-      pipeline[0].$set.movementLog = {
+      logEntry.at = now;
+
+      setFields.movementLog = {
         $slice: [
           {
-            $concatArrays: [{ $ifNull: ["$movementLog", []] }, [logEntry]],
+            $concatArrays: [
+              { $ifNull: ["$movementLog", []] },
+              [logEntry],
+            ],
           },
           -MAX_MOVEMENT_LOG,
         ],
@@ -995,8 +1128,9 @@ const updateProductReserved = async (req, res) => {
         isActive: true,
         quantity: qtyBefore,
         reservedQty: reservedBefore,
+        version: doc.version,
       },
-      pipeline,
+      [{ $set: setFields }],
       { updatePipeline: true }
     );
 
@@ -1009,6 +1143,7 @@ const updateProductReserved = async (req, res) => {
     }
 
     const updated = await ProductStock.findById(doc._id);
+
     return res.status(200).json({
       success: true,
       message: "Stock settings updated",
@@ -1115,32 +1250,46 @@ const adjustProductStock = async (req, res) => {
       at: new Date(),
     };
 
-    const setFields = {
-      quantity: after,
-      reservedQty: reservedAfter,
-      updatedBy: req.user?._id || null,
-      movementLog: {
-        $slice: [
-          {
-            $concatArrays: [{ $ifNull: ["$movementLog", []] }, [logEntry]],
-          },
-          -MAX_MOVEMENT_LOG,
-        ],
-      },
-    };
-    if (type === "in") setFields.lastReceivedAt = new Date();
-    if (type === "out") setFields.lastIssuedAt = new Date();
+    const now = new Date();
 
-    const result = await ProductStock.updateOne(
+const setFields = {
+  quantity: after,
+  reservedQty: reservedAfter,
+
+  updatedBy: req.user?._id || null,
+
+  updatedAt: now,
+
+  version: {
+    $add: [{ $ifNull: ["$version", 1] }, 1],
+  },
+
+  movementLog: {
+    $slice: [
       {
-        _id: doc._id,
-        isActive: true,
-        quantity: before,
-        reservedQty: reservedBefore,
+        $concatArrays: [{ $ifNull: ["$movementLog", []] }, [logEntry]],
       },
-      [{ $set: setFields }],
-      { updatePipeline: true }
-    );
+      -MAX_MOVEMENT_LOG,
+    ],
+  },
+};
+
+if (type === "in") setFields.lastReceivedAt = now;
+if (type === "out") setFields.lastIssuedAt = now;
+
+    
+  const result = await ProductStock.updateOne(
+    {
+      _id: doc._id,
+      isActive: true,
+      quantity: before,
+      reservedQty: reservedBefore,
+      version: doc.version,
+    },
+    [{ $set: setFields }],
+    { updatePipeline: true }
+  );
+
 
     if (result.modifiedCount !== 1) {
       return res.status(409).json({
@@ -1163,26 +1312,48 @@ const adjustProductStock = async (req, res) => {
   }
 };
 
+
 const recordProductScrap = async (req, res) => {
   try {
     if (!isValidId(req.params.id)) {
-      return res.status(400).json({ success: false, message: "Invalid ID" });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid ID",
+      });
     }
 
     const scrapKg = Number(req.body.quantity);
+
     if (!Number.isFinite(scrapKg) || scrapKg <= 0 || scrapKg > MAX_QTY) {
-      return res.status(400).json({ success: false, message: "Scrap (kg) must be > 0" });
+      return res.status(400).json({
+        success: false,
+        message: "Scrap (kg) must be > 0",
+      });
     }
 
     const doc = await ProductStock.findById(req.params.id);
+
     if (!doc || !doc.isActive) {
-      return res.status(404).json({ success: false, message: "Not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Not found",
+      });
     }
 
-    const REEL_WEIGHT_KG = { "2kg": 2, "5kg": 5, "8kg": 8, "10kg": 10 };
+    const REEL_WEIGHT_KG = {
+      "2kg": 2,
+      "5kg": 5,
+      "8kg": 8,
+      "10kg": 10,
+    };
+
     const reelWeight = REEL_WEIGHT_KG[doc.size];
+
     if (!reelWeight) {
-      return res.status(400).json({ success: false, message: "Unknown reel size" });
+      return res.status(400).json({
+        success: false,
+        message: "Unknown reel size",
+      });
     }
 
     const reelsToScrap = scrapKg / reelWeight;
@@ -1198,6 +1369,7 @@ const recordProductScrap = async (req, res) => {
 
     const after = before - reelsToScrap;
     const reservedAfter = Math.min(reservedBefore, after);
+    const now = new Date();
 
     const logEntry = {
       type: "scrap",
@@ -1211,7 +1383,7 @@ const recordProductScrap = async (req, res) => {
       refId: null,
       refLabel: `${reelsToScrap} ${doc.unit}`,
       by: req.user?._id || null,
-      at: new Date(),
+      at: now,
     };
 
     const result = await ProductStock.updateOne(
@@ -1220,19 +1392,31 @@ const recordProductScrap = async (req, res) => {
         isActive: true,
         quantity: before,
         reservedQty: reservedBefore,
+        version: doc.version,
       },
       [
         {
           $set: {
             quantity: after,
             reservedQty: reservedAfter,
-            scrapQty: { $add: [{ $ifNull: ["$scrapQty", 0] }, scrapKg] },
-            lastScrapAt: new Date(),
+            scrapQty: {
+              $add: [{ $ifNull: ["$scrapQty", 0] }, scrapKg],
+            },
+            lastScrapAt: now,
+            updatedAt: now,
             updatedBy: req.user?._id || null,
+
+            version: {
+              $add: [{ $ifNull: ["$version", 1] }, 1],
+            },
+
             movementLog: {
               $slice: [
                 {
-                  $concatArrays: [{ $ifNull: ["$movementLog", []] }, [logEntry]],
+                  $concatArrays: [
+                    { $ifNull: ["$movementLog", []] },
+                    [logEntry],
+                  ],
                 },
                 -MAX_MOVEMENT_LOG,
               ],
@@ -1252,6 +1436,7 @@ const recordProductScrap = async (req, res) => {
     }
 
     const updated = await ProductStock.findById(doc._id);
+
     return res.status(200).json({
       success: true,
       message: `Scrapped ${scrapKg} kg (${reelsToScrap} ${doc.unit})`,
@@ -1446,7 +1631,6 @@ const createProduction = async (req, res) => {
     await session.endSession();
   }
 };
-
 
 const updateProduction = async (req, res) => {
   const session = await mongoose.startSession();
@@ -1699,7 +1883,6 @@ const updateProduction = async (req, res) => {
     await session.endSession();
   }
 };
-
 
 const deleteProduction = async (req, res) => {
   const session = await mongoose.startSession();

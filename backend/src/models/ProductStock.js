@@ -224,7 +224,10 @@ productStockSchema.pre("save", function () {
 });
 
 productStockSchema.index({ isActive: 1 });
-productStockSchema.index({ updatedAt: 1 });
+productStockSchema.index(
+  { updatedAt: 1, _id: 1 },
+  { name: "products_sync_cursor" }
+);
 productStockSchema.index({ deletedAt: 1, updatedAt: 1 });
 
 const ProductStock = mongoose.model("ProductStock", productStockSchema);
