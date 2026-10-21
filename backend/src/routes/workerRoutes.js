@@ -10,19 +10,19 @@ const {
   saveAttendance,
   getAttendanceHistory,
 } = require("../controllers/workerController");
+const idempotency = require("../middleware/idempotency");
 
 const router = express.Router();
 
-// Static paths BEFORE /:id
 router.get("/attendance/history", getAttendanceHistory);
 router.get("/attendance", getAttendance);
-router.post("/attendance", saveAttendance);
 
 router.get("/", getWorkers);
 router.post("/", createWorker);
 
-router.get("/:id", getWorker);
-router.put("/:id", updateWorker);
-router.delete("/:id", deleteWorker);
+router.post("/attendance", idempotency(), saveAttendance);
+router.post("/", idempotency(), createWorker);
+router.put("/:id", idempotency(), updateWorker);
+router.delete("/:id", idempotency(), deleteWorker);
 
 module.exports = router;

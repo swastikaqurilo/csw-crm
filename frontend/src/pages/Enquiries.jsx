@@ -395,8 +395,9 @@ const loadEnquiries = async () => {
       pages: response?.data?.pages || 1,
     };
 
-    // Save the successful server response locally.
-    await cacheEnquiries(params, payload);
+    cacheEnquiries(params, payload).catch((e) =>
+      console.warn("[enquiries] cache write failed:", e)
+    );
 
     const mapped = payload.data.map(mapEnquiry);
 

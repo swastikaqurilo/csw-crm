@@ -1,6 +1,6 @@
-
 import api from "../api/axios";
-import { db } from "./database";
+import { db, openDb } from "./database";
+import { flush } from "./outbox.js";
 
 const MODULES = {
   contacts: "/sync/contacts",
@@ -24,20 +24,17 @@ async function saveCheckpoint(module, value) {
   });
 }
 
-
 async function saveRecords(module, records = []) {
   if (!records.length) return;
 
   await db.transaction("rw", db.cachedRecords, async () => {
     for (const record of records) {
       const recordId = String(record._id ?? record.id ?? "");
-
       if (!recordId) continue;
 
-      const key = [module, recordId];
       const existing = await db.cachedRecords
         .where("[module+recordId]")
-        .equals(key)
+        .equals([module, recordId])
         .first();
 
       const cachedVersion = Number(existing?.data?.version);
@@ -73,14 +70,12 @@ async function applyTombstones(module, tombstones = []) {
       const recordId = String(
         typeof item === "string" ? item : item._id ?? item.id ?? ""
       );
-
       if (!recordId) continue;
 
       const existing = await db.cachedRecords
         .where("[module+recordId]")
         .equals([module, recordId])
         .first();
-
       if (!existing) continue;
 
       if (typeof item === "string") continue;
@@ -100,7 +95,6 @@ async function applyTombstones(module, tombstones = []) {
   });
 }
 
-
 async function syncModule(module, endpoint) {
   let cursor = null;
   let since = await getCheckpoint(module);
@@ -110,16 +104,19 @@ async function syncModule(module, endpoint) {
 
   do {
     const params = { limit: PAGE_SIZE };
+    if (cursor) params.cursor = cursor;
+    else if (since) params.since = since;
 
-    if (cursor) {
-      params.cursor = cursor;
-    } else if (since) {
-      params.since = since;
-    }
+    // __fromOutbox: true → axios interceptor skips writeCachedResponse,
+    // so pagination responses don't churn the http cache.
+    const response = await api.request({
+      method: "GET",
+      url: endpoint,
+      params,
+      __fromOutbox: true,
+    });
 
-    const response = await api.get(endpoint, { params });
     const payload = response?.data?.data ?? response?.data;
-
     const records = payload?.records ?? [];
     const tombstones = payload?.tombstones ?? [];
     const nextCursor = payload?.nextCursor ?? null;
@@ -136,10 +133,7 @@ async function syncModule(module, endpoint) {
       cursor = nextCursor;
     } else {
       cursor = null;
-
-      if (checkpoint) {
-        await saveCheckpoint(module, checkpoint);
-      }
+      if (checkpoint) await saveCheckpoint(module, checkpoint);
     }
 
     if (pages > 1000) {
@@ -147,32 +141,76 @@ async function syncModule(module, endpoint) {
     }
   } while (cursor);
 
-  return {
-    module,
-    pages,
-    recordsSynced,
-    tombstonesApplied,
-  };
+  return { module, pages, recordsSynced, tombstonesApplied };
 }
 
 export function syncAll() {
   if (activeSync) return activeSync;
 
   activeSync = (async () => {
-    if (!navigator.onLine) {
-      throw new Error("You are offline. Sync will resume when connected.");
+    await openDb();
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      return { skipped: true, reason: "offline" };
     }
 
-    const results = [];
+    // Push outbox first so our own writes are reflected in the pull
+    const push = await flush({
+      send: async (op) =>
+        api.request({
+          method: op.method,
+          url: op.url,
+          data: op.data ?? undefined,
+          headers: { "Idempotency-Key": op.operationId },
+          __fromOutbox: true,
+        }),
+    }).catch(() => ({ succeeded: 0, failed: 0, deferred: 0 }));
 
+    // Then pull server deltas per module
+    const pull = [];
     for (const [module, endpoint] of Object.entries(MODULES)) {
-      results.push(await syncModule(module, endpoint));
+      try {
+        pull.push(await syncModule(module, endpoint));
+      } catch (error) {
+        pull.push({
+          module,
+          error: error?.message ?? String(error),
+        });
+      }
     }
 
-    return results;
-  })();
-
-  return activeSync.finally(() => {
+    return { push, pull };
+  })().finally(() => {
     activeSync = null;
   });
+
+  return activeSync;
+}
+
+export function installAutoSync({ intervalMs = 30_000 } = {}) {
+  if (typeof window === "undefined") return () => {};
+
+  const run = () => {
+    syncAll().catch((error) => {
+      console.warn("[sync] failed:", error?.message ?? error);
+    });
+  };
+
+  const onVisible = () => {
+    if (document.visibilityState === "visible") run();
+  };
+
+  window.addEventListener("online", run);
+  document.addEventListener("visibilitychange", onVisible);
+
+  const timer = window.setInterval(() => {
+    if (navigator.onLine) run();
+  }, intervalMs);
+
+  run();
+
+  return () => {
+    window.removeEventListener("online", run);
+    document.removeEventListener("visibilitychange", onVisible);
+    clearInterval(timer);
+  };
 }

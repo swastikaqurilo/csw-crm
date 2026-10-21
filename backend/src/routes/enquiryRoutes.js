@@ -9,16 +9,17 @@ const {
   deleteEnquiry,
   addTimelineNote,
 } = require("../controllers/enquiryController");
+const idempotency = require("../middleware/idempotency");
 
 router.route("/")
   .get(getEnquiries)
-  .post(createEnquiry);
+  .post(idempotency(), createEnquiry);
 
 router.route("/:id")
   .get(getEnquiry)
-  .put(updateEnquiry)
-  .delete(deleteEnquiry);
+  .put(idempotency(), updateEnquiry)
+  .delete(idempotency(), deleteEnquiry);
 
-router.post("/:id/notes", addTimelineNote);
+router.post("/:id/notes", idempotency(), addTimelineNote);
 
 module.exports = router;

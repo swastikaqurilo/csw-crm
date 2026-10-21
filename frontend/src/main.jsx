@@ -2,7 +2,8 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { registerSW } from "virtual:pwa-register";
 import { db } from "./db/database";
-import { syncAll } from "./db/syncEngine";
+import { startOutbox } from "./db/outbox.js";
+import { installAutoSync } from "./db/syncEngine.js";
 import "./index.css";
 import App from "./App.jsx";
 
@@ -154,6 +155,8 @@ window.inspectCSWCheckpoints = async () => {
   }
 };
 
+startOutbox();       
+installAutoSync(); 
 
 createRoot(document.getElementById("root")).render(
   <StrictMode>

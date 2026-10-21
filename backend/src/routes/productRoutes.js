@@ -15,27 +15,19 @@ const {
   deleteProduction,
   debugReels,
 } = require("../controllers/productController");
+const idempotency = require("../middleware/idempotency");
 
 router.get("/stock", getAllProductStock);
-
-router.patch("/stock/:id/reserved", updateProductReserved);
-
-router.patch("/stock/:id/adjust", adjustProductStock);
-
-router.patch("/stock/:id/scrap", recordProductScrap);
-
 router.get("/stock/:id/movements", getProductStockMovements);
-
 router.get("/debug/reels", debugReels);
-
 router.get("/", getAllProductions);
-
-router.post("/", createProduction);
-
 router.get("/:id", getProductionById);
 
-router.patch("/:id", updateProduction);
-
-router.delete("/:id", deleteProduction);
+router.patch("/stock/:id/reserved", idempotency(), updateProductReserved);
+router.patch("/stock/:id/adjust", idempotency(), adjustProductStock);
+router.patch("/stock/:id/scrap", idempotency(), recordProductScrap);
+router.post("/", idempotency(), createProduction);
+router.patch("/:id", idempotency(), updateProduction);
+router.delete("/:id", idempotency(), deleteProduction);
 
 module.exports = router;

@@ -39,13 +39,19 @@ function sendStoredResponse(res, operation) {
     .json(operation.result);
 }
 
-module.exports = function idempotency() {
+module.exports = function idempotency({ required = false } = {}) {
   return async function idempotencyMiddleware(req, res, next) {
     const rawKey =
       req.get("Idempotency-Key") ||
       req.body?.operationId;
 
     if (!rawKey) {
+      // Idempotency is optional: routes that need replay protection pass
+      // { required: true }; everything else behaves as before.
+      if (!required) {
+        return next();
+      }
+
       return res.status(400).json({
         success: false,
         error: "missing_idempotency_key",

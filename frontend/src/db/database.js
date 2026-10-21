@@ -82,6 +82,32 @@ db.version(12).stores({
   syncMetadata: "key, updatedAt",
 });
 
+db.version(13).stores({
+  cachedRecords:
+    "++localId, &[module+recordId], module, recordId, updatedAt",
+  syncQueue:
+    "++id, &operationId, module, status, createdAt, nextAttemptAt, [status+nextAttemptAt]",
+  syncMetadata: "key, updatedAt",
+});
+
+let opening = null;
+export function openDb() {
+  if (db.isOpen()) return Promise.resolve(db);
+  if (opening) return opening;
+  opening = db.open()
+    .catch(async (err) => {
+      const name = err?.name ?? err?.inner?.name;
+      if (["AbortError", "VersionError", "ConstraintError"].includes(name)) {
+        console.warn("[db] local cache is corrupt, rebuilding:", name);
+        await Dexie.delete("csw-crm-local");
+        return db.open();
+      }
+      throw err;
+    })
+    .finally(() => { opening = null; });
+  return opening;
+}
+
 
 export async function getCachedRecords(module) {
   return db.cachedRecords.where("module").equals(module).toArray();

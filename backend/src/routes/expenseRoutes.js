@@ -8,17 +8,16 @@ const {
   markExpenseAsPaid,
   deleteExpense,
 } = require("../controllers/expenseController");
-
+const idempotency = require("../middleware/idempotency");
 const router = express.Router();
 
 // GET
 router.get("/", getExpenses);
 router.get("/:id", getExpense);
 
-// Mutations
-router.post("/", createExpense);
-router.put("/:id", updateExpense);
-router.patch("/:id/pay", markExpenseAsPaid);
-router.delete("/:id", deleteExpense);
+router.post("/", idempotency(), createExpense);
+router.put("/:id", idempotency(), updateExpense);
+router.patch("/:id/pay", idempotency(), markExpenseAsPaid);
+router.delete("/:id", idempotency(), deleteExpense);
 
 module.exports = router;

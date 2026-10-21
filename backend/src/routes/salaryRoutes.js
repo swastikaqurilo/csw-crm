@@ -11,18 +11,19 @@ const {
   recordSalaryAdvance,
   deleteSalaryAdvance,
 } = require("../controllers/salaryController");
+const idempotency = require("../middleware/idempotency");
 
 const router = express.Router();
 
 router.get("/", getSalaries);
 router.get("/:id", getSalary);
 
-router.post("/generate", generateSalaries);
-router.post("/", createSalary);
-router.put("/:id", updateSalary);
-router.post("/:id/advance", recordSalaryAdvance);
-router.delete("/:id/advance/:advanceId", deleteSalaryAdvance);
-router.post("/:id/payment", recordSalaryPayment);
-router.delete("/:id", deleteSalary);
+router.post("/generate", idempotency(), generateSalaries);
+router.post("/", idempotency(), createSalary);
+router.put("/:id", idempotency(), updateSalary);
+router.post("/:id/advance", idempotency(), recordSalaryAdvance);
+router.delete("/:id/advance/:advanceId", idempotency(), deleteSalaryAdvance);
+router.post("/:id/payment", idempotency(), recordSalaryPayment);
+router.delete("/:id", idempotency(), deleteSalary);
 
 module.exports = router;

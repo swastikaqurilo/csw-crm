@@ -7,13 +7,14 @@ const {
   updateFollowUp,
   deleteFollowUp,
 } = require("../controllers/followUpController");
+const idempotency = require("../middleware/idempotency");
 
 const router = express.Router();
 
-router.post("/", createFollowUp);
 router.get("/", getFollowUps);
 router.get("/:id", getFollowUp);
-router.put("/:id", updateFollowUp);
-router.delete("/:id", deleteFollowUp);
+router.post("/", idempotency(), createFollowUp);
+router.put("/:id", idempotency(), updateFollowUp);
+router.delete("/:id", idempotency(), deleteFollowUp);
 
 module.exports = router;

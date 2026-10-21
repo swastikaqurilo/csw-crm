@@ -7,13 +7,15 @@ const {
   updateContact,
   deleteContact,
 } = require("../controllers/contactController");
+const idempotency = require("../middleware/idempotency");
 
 const router = express.Router();
 
-router.post("/", createContact);
 router.get("/", getContacts);
 router.get("/:id", getContact);
-router.put("/:id", updateContact);
-router.delete("/:id", deleteContact);
+
+router.post("/", idempotency(), createContact);
+router.put("/:id", idempotency(), updateContact);
+router.delete("/:id", idempotency(), deleteContact);
 
 module.exports = router;

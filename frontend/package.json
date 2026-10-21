@@ -8,7 +8,8 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "generate-pwa-assets": "pwa-assets-generator --preset minimal public/logo.png"
+    "generate-pwa-assets": "pwa-assets-generator --preset minimal public/logo.png",
+    "test:db": "node scripts/dexie-cache-check.mjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
@@ -29,6 +30,7 @@
     "eslint": "^10.9.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.4",
+    "fake-indexeddb": "^6.2.6",
     "globals": "^17.11.0",
     "vite": "^8.2.2",
     "vite-plugin-pwa": "^2.0.0"
