@@ -24,6 +24,7 @@ async function saveCheckpoint(module, value) {
   });
 }
 
+
 async function saveRecords(module, records = []) {
   if (!records.length) return;
 
@@ -33,7 +34,28 @@ async function saveRecords(module, records = []) {
 
       if (!recordId) continue;
 
+      const key = [module, recordId];
+      const existing = await db.cachedRecords
+        .where("[module+recordId]")
+        .equals(key)
+        .first();
+
+      const cachedVersion = Number(existing?.data?.version);
+      const serverVersion = Number(record.version);
+
+      if (
+        existing &&
+        Number.isFinite(cachedVersion) &&
+        Number.isFinite(serverVersion) &&
+        cachedVersion > serverVersion
+      ) {
+        continue;
+      }
+
       await db.cachedRecords.put({
+        ...(existing?.localId !== undefined
+          ? { localId: existing.localId }
+          : {}),
         module,
         recordId,
         data: record,
@@ -54,13 +76,30 @@ async function applyTombstones(module, tombstones = []) {
 
       if (!recordId) continue;
 
-      await db.cachedRecords
+      const existing = await db.cachedRecords
         .where("[module+recordId]")
         .equals([module, recordId])
-        .delete();
+        .first();
+
+      if (!existing) continue;
+
+      if (typeof item === "string") continue;
+
+      const cachedVersion = Number(existing.data?.version);
+      const deletedVersion = Number(item.version);
+      if (
+        !Number.isFinite(cachedVersion) ||
+        !Number.isFinite(deletedVersion) ||
+        cachedVersion > deletedVersion
+      ) {
+        continue;
+      }
+
+      await db.cachedRecords.delete(existing.localId);
     }
   });
 }
+
 
 async function syncModule(module, endpoint) {
   let cursor = null;

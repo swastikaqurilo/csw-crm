@@ -31,6 +31,7 @@ const readOfflineSession = () => {
   }
 };
 
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -40,82 +41,127 @@ export function AuthProvider({ children }) {
     let cancelled = false;
 
     const restoreSession = async () => {
-      const token = localStorage.getItem("token");
-      const cachedUser = localStorage.getItem("user");
-
-      if (!token || !cachedUser) {
-        clearSession();
-        if (!cancelled) setLoading(false);
-        return;
-      }
-
-      let parsedUser;
-
+      console.log("[Auth Restore] Started", {
+        online: navigator.onLine,
+        tokenExists: !!localStorage.getItem("token"),
+        userExists: !!localStorage.getItem("user"),
+        offlineSession: readOfflineSession(),
+      });
       try {
-        parsedUser = JSON.parse(cachedUser);
-      } catch {
-        clearSession();
-        if (!cancelled) setLoading(false);
-        return;
-      }
-      if (!cancelled) setUser(parsedUser);
+        const token = localStorage.getItem("token");
+        const cachedUser = localStorage.getItem("user");
+        const offlineSession = readOfflineSession();
 
-      try {
-        const res = await getMe();
-        const verifiedUser = res?.data?.data?.user;
-
-        if (!verifiedUser) {
-          throw new Error("The server returned no authenticated user.");
-        }
-
-        if (cancelled) return;
-
-        const now = Date.now();
-
-        setUser(verifiedUser);
-        setIsOfflineSession(false);
-
-        localStorage.setItem("user", JSON.stringify(verifiedUser));
-        localStorage.setItem(
-          "offlineSession",
-          JSON.stringify({
-            verifiedAt: now,
-            expiresAt: now + OFFLINE_SESSION_MS,
-          })
-        );
-      } catch (error) {
-        if (cancelled) return;
-
-        const status = error?.response?.status;
-
-        if (status === 401 || status === 403) {
+        if (!token || !cachedUser) {
           clearSession();
-          setUser(null);
-          setIsOfflineSession(false);
           return;
         }
-        const offlineSession = readOfflineSession();
-        const isNetworkFailure =
-          !error?.response &&
-          (error?.code === "ERR_NETWORK" ||
-            error?.code === "ECONNABORTED" ||
-            !navigator.onLine);
 
-        if (offlineSession && isNetworkFailure) {
-          setUser(parsedUser);
-          setIsOfflineSession(true);
-        } else {
+        let parsedUser;
+
+        try {
+          parsedUser = JSON.parse(cachedUser);
+
+          if (
+            !parsedUser ||
+            typeof parsedUser !== "object" ||
+            Array.isArray(parsedUser)
+          ) {
+            throw new Error("Invalid cached user.");
+          }
+        } catch {
           clearSession();
+          return;
+        }
+
+        if (!navigator.onLine) {
+          if (cancelled) return;
+
+          if (offlineSession) {
+            setUser(parsedUser);
+            setIsOfflineSession(true);
+          } else {
+            setUser(null);
+            setIsOfflineSession(false);
+          }
+
+          return;
+        }
+
+        if (!cancelled) {
+          setUser(parsedUser);
+          setIsOfflineSession(false);
+        }
+
+        try {
+          const res = await getMe();
+          const verifiedUser = res?.data?.data?.user;
+
+          if (!verifiedUser) {
+            throw new Error("The server returned no authenticated user.");
+          }
+
+          if (cancelled) return;
+
+          const now = Date.now();
+
+          setUser(verifiedUser);
+          setIsOfflineSession(false);
+
+          localStorage.setItem("user", JSON.stringify(verifiedUser));
+          localStorage.setItem(
+            "offlineSession",
+            JSON.stringify({
+              verifiedAt: now,
+              expiresAt: now + OFFLINE_SESSION_MS,
+            })
+          );
+        } catch (error) {
+          if (cancelled) return;
+
+          const status = error?.response?.status;
+
+          if (status === 401 || status === 403) {
+            clearSession();
+            setUser(null);
+            setIsOfflineSession(false);
+            return;
+          }
+
+          const isNetworkFailure =
+            !error?.response &&
+            (
+              error?.code === "ERR_NETWORK" ||
+              error?.code === "ECONNABORTED" ||
+              !navigator.onLine
+            );
+
+          if (isNetworkFailure && readOfflineSession()) {
+            setUser(parsedUser);
+            setIsOfflineSession(true);
+          } else {
+            setUser(null);
+            setIsOfflineSession(false);
+          }
+
+          console.warn(
+            "Session verification failed:",
+            error?.message
+          );
+        }
+      } catch (error) {
+        console.error("Session restoration failed:", error);
+
+        if (!cancelled) {
           setUser(null);
           setIsOfflineSession(false);
         }
 
-        console.warn(
-          "Session verification failed.",
-          error?.message
-        );
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          console.log("[Auth Restore] Finished");
+          setLoading(false);
+        }
       }
     };
 
@@ -127,12 +173,6 @@ export function AuthProvider({ children }) {
   }, []);
 
   const loginSuccess = (token, userData) => {
-    console.log("[Auth] loginSuccess called", {
-      tokenReceived: !!token,
-      userReceived: !!userData,
-      origin: window.location.origin,
-    });
-
     const now = Date.now();
 
     localStorage.setItem("token", token);
@@ -145,12 +185,6 @@ export function AuthProvider({ children }) {
       })
     );
 
-    console.log("[Auth] Storage after save", {
-      tokenExists: !!localStorage.getItem("token"),
-      userExists: !!localStorage.getItem("user"),
-      offlineSessionExists: !!localStorage.getItem("offlineSession"),
-    });
-
     setUser(userData);
     setIsOfflineSession(false);
   };
@@ -159,12 +193,23 @@ export function AuthProvider({ children }) {
     try {
       await apiLogout();
     } catch {
+      // Local logout must still work if the server is unavailable.
     }
 
     clearSession();
     setUser(null);
     setIsOfflineSession(false);
   };
+
+  useEffect(() => {
+    console.log("[Offline Auth Diagnostic]", {
+      loading,
+      isAuthenticated: !!user,
+      isOfflineSession,
+      user: user?.email ?? null,
+      online: navigator.onLine,
+    });
+  }, [loading, user, isOfflineSession]);
 
   return (
     <AuthContext.Provider
@@ -181,6 +226,7 @@ export function AuthProvider({ children }) {
     </AuthContext.Provider>
   );
 }
+
 
 export function useAuth() {
   const ctx = useContext(AuthContext);
