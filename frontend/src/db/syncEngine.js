@@ -3,8 +3,14 @@ import { db, openDb } from "./database";
 import { flush } from "./outbox.js";
 
 const MODULES = {
-  contacts: "/sync/contacts",
-  products: "/sync/products",
+  contacts:  "/sync/contacts",
+  products:  "/sync/products",
+  enquiries: "/sync/enquiries",
+  orders:    "/sync/orders",
+  payments:  "/sync/payments",
+  expenses:  "/sync/expenses",
+  rawStock:  "/sync/raw-stock", 
+
 };
 
 const PAGE_SIZE = 200;
@@ -76,15 +82,20 @@ async function applyTombstones(module, tombstones = []) {
         .where("[module+recordId]")
         .equals([module, recordId])
         .first();
+
       if (!existing) continue;
 
-      if (typeof item === "string") continue;
+      if (typeof item === "string") {
+        await db.cachedRecords.delete(existing.localId);
+        continue;
+      }
 
       const cachedVersion = Number(existing.data?.version);
       const deletedVersion = Number(item.version);
+
       if (
-        !Number.isFinite(cachedVersion) ||
-        !Number.isFinite(deletedVersion) ||
+        Number.isFinite(cachedVersion) &&
+        Number.isFinite(deletedVersion) &&
         cachedVersion > deletedVersion
       ) {
         continue;
@@ -107,8 +118,6 @@ async function syncModule(module, endpoint) {
     if (cursor) params.cursor = cursor;
     else if (since) params.since = since;
 
-    // __fromOutbox: true → axios interceptor skips writeCachedResponse,
-    // so pagination responses don't churn the http cache.
     const response = await api.request({
       method: "GET",
       url: endpoint,
@@ -149,11 +158,12 @@ export function syncAll() {
 
   activeSync = (async () => {
     await openDb();
+
     if (typeof navigator !== "undefined" && !navigator.onLine) {
       return { skipped: true, reason: "offline" };
     }
 
-    // Push outbox first so our own writes are reflected in the pull
+    // 1. Push local outbox first
     const push = await flush({
       send: async (op) =>
         api.request({
@@ -163,18 +173,21 @@ export function syncAll() {
           headers: { "Idempotency-Key": op.operationId },
           __fromOutbox: true,
         }),
-    }).catch(() => ({ succeeded: 0, failed: 0, deferred: 0 }));
+    });
 
-    // Then pull server deltas per module
+    // 🚨 THE FIX: If we got a 401, stop syncing but DO NOT redirect
+    if (push.authError) {
+      console.warn("Sync paused: Auth expired. Waiting for manual login.");
+      return { push, pull: [], error: "AUTH_EXPIRED" };
+    }
+
+    // 2. Pull server deltas for every registered module
     const pull = [];
     for (const [module, endpoint] of Object.entries(MODULES)) {
       try {
         pull.push(await syncModule(module, endpoint));
       } catch (error) {
-        pull.push({
-          module,
-          error: error?.message ?? String(error),
-        });
+        pull.push({ module, error: error?.message ?? String(error) });
       }
     }
 
@@ -182,7 +195,7 @@ export function syncAll() {
   })().finally(() => {
     activeSync = null;
   });
-
+  
   return activeSync;
 }
 

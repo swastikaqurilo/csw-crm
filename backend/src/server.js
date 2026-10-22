@@ -30,25 +30,29 @@ const authRoutes = require("./routes/authRoutes");
 const { protect } = require("./middleware/auth");
 
 const allowedOrigins = [
-"http://localhost:5173",
-"http://192.168.88.6:5173",
-"http://localhost:4173",
-"https://4nq08695-5173.inc1.devtunnels.ms",
-"https://crm.corvexsteelwires.com",
-"https://csw-crm-4l2j-evgx9tl9c-swastikaqurilo-5128.vercel.app",
-"https://csw-crm-4l2j-git-features-swastikaqurilo-5128.vercel.app",
+  "http://localhost:5173",
+  "http://192.168.88.6:5173",
+  "http://localhost:4173",
+  "https://4nq08695-5173.inc1.devtunnels.ms",
+  "https://crm.corvexsteelwires.com",
+  "https://csw-crm-4l2j-evgx9tl9c-swastikaqurilo-5128.vercel.app",
+  "https://csw-crm-4l2j-git-features-swastikaqurilo-5128.vercel.app",
 ];
-
 
 app.use(
   cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true);
+      
+      if (allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
-
+      const vercelPreviewRegex = /^https:\/\/csw-crm-4l2j-.*\.vercel\.app$/;
+      if (vercelPreviewRegex.test(origin)) {
+        return callback(null, true);
+      }
       console.warn(`CORS blocked origin: ${origin}`);
-      return callback(null, false);
+      return callback(new Error('Not allowed by CORS')); 
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -58,9 +62,9 @@ app.use(
   })
 );
 
+app.options('/*splat', cors()); 
 
 app.use(express.json());
-
 
 app.get("/", (req, res) => {
   res.status(200).json({

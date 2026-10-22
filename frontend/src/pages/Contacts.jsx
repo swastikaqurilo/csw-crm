@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "react-toastify";
+import { loadWithOfflineFallback } from "../db/offlineData";
 import {
   Search,
   Plus,
@@ -312,34 +313,35 @@ function Contacts() {
   /* ---- guard against stale loadContacts results ---- */
   const loadTokenRef = useRef(0);
 
-  /* ------------------------------------------------------------------ */
-  /*  Data loading                                                       */
-  /* ------------------------------------------------------------------ */
-  const loadContacts = useCallback(async () => {
-    const token = ++loadTokenRef.current;
-    try {
-      setLoading(true);
+ const loadContacts = useCallback(async () => {
+  const token = ++loadTokenRef.current;
+  try {
+    setLoading(true);
 
-      const response = await getContacts({ page: 1, limit: 1000 });
+    const { data, fromCache } = await loadWithOfflineFallback(
+      () => getContacts({ page: 1, limit: 1000 }),
+      "contacts",
+      (res) => res?.data?.data ?? []
+    );
 
-      if (token !== loadTokenRef.current) return;
+    if (token !== loadTokenRef.current) return;
 
-      if (response?.data?.success) {
-        setContacts(response.data.data || []);
-      } else {
-        toast.error("Failed to load contacts.");
-      }
-    } catch (err) {
-      if (token !== loadTokenRef.current) return;
-      toast.error(
-        err?.response?.data?.message ||
-          err?.message ||
-          "Unable to connect to the contacts API."
-      )
-    } finally {
-      if (token === loadTokenRef.current) setLoading(false);
+    setContacts(data);
+
+    if (fromCache) {
+      toast.info("Showing offline data", { autoClose: 2000 });
     }
-  }, []);
+  } catch (err) {
+    if (token !== loadTokenRef.current) return;
+    toast.error(
+      err?.response?.data?.message ||
+        err?.message ||
+        "Unable to load contacts."
+    );
+  } finally {
+    if (token === loadTokenRef.current) setLoading(false);
+  }
+}, []);
 
   useEffect(() => {
     loadContacts();

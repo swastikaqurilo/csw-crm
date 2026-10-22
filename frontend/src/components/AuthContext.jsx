@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { getMe, logout as apiLogout } from "../api/api";
+import { hashPassword } from "../utils/cryptoUtils";
 
 const AuthContext = createContext(null);
 const OFFLINE_SESSION_MS = 24 * 60 * 60 * 1000;
@@ -116,12 +117,21 @@ export function AuthProvider({ children }) {
               expiresAt: now + OFFLINE_SESSION_MS,
             })
           );
-        } catch (error) {
+                } catch (error) {
           if (cancelled) return;
 
           const status = error?.response?.status;
 
-          if (status === 401 || status === 403) {
+          if (status === 401 || status === 403 || error.message === "AUTH_EXPIRED") {
+            const hasOfflineSession = readOfflineSession();
+            
+            if (hasOfflineSession) {
+              console.warn("Token invalid, but offline session is valid. Keeping user on dashboard.");
+              setUser(parsedUser);
+              setIsOfflineSession(true);
+              return; 
+            }
+
             clearSession();
             setUser(null);
             setIsOfflineSession(false);
@@ -133,6 +143,7 @@ export function AuthProvider({ children }) {
             (
               error?.code === "ERR_NETWORK" ||
               error?.code === "ECONNABORTED" ||
+              error?.code === "ERR_CONNECTION_REFUSED" ||
               !navigator.onLine
             );
 
@@ -143,12 +154,10 @@ export function AuthProvider({ children }) {
             setUser(null);
             setIsOfflineSession(false);
           }
-
-          console.warn(
-            "Session verification failed:",
-            error?.message
-          );
+          
+          console.warn("Session verification failed:", error?.message);
         }
+        
       } catch (error) {
         console.error("Session restoration failed:", error);
 
@@ -172,20 +181,24 @@ export function AuthProvider({ children }) {
     };
   }, []);
 
-  const loginSuccess = (token, userData) => {
+    const loginSuccess = async (token, userData, plainTextPassword) => {
     const now = Date.now();
-
+    const safeUserData = userData || {};
+    
     localStorage.setItem("token", token);
-    localStorage.setItem("user", JSON.stringify(userData));
-    localStorage.setItem(
-      "offlineSession",
-      JSON.stringify({
-        verifiedAt: now,
-        expiresAt: now + OFFLINE_SESSION_MS,
-      })
-    );
+    localStorage.setItem("user", JSON.stringify(safeUserData));
+    localStorage.setItem("offlineSession", JSON.stringify({
+      verifiedAt: now,
+      expiresAt: now + OFFLINE_SESSION_MS,
+    }));
 
-    setUser(userData);
+    if (plainTextPassword && safeUserData.email) {
+      const hash = await hashPassword(plainTextPassword);
+      const credsPayload = JSON.stringify({ hash, user: safeUserData });
+      localStorage.setItem(`offlineCreds_${safeUserData.email.toLowerCase()}`, credsPayload);
+    }
+
+    setUser(safeUserData);
     setIsOfflineSession(false);
   };
 
@@ -193,7 +206,6 @@ export function AuthProvider({ children }) {
     try {
       await apiLogout();
     } catch {
-      // Local logout must still work if the server is unavailable.
     }
 
     clearSession();

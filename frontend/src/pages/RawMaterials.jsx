@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Pagination from "../components/Pagination";
+import { db } from "../db/database"; 
 import {
   Warehouse, Package, AlertTriangle, Plus,
   X, RefreshCw, Save, Factory, ShoppingCart, Truck, CheckCircle2, XCircle,
@@ -218,22 +219,60 @@ function RawMaterials() {
   useEffect(() => { if (error) setSuccess(""); }, [error]);
   useEffect(() => { if (success) setError(""); }, [success]);
 
-  /* ── fetchers ── */
   const fetchStock = useCallback(async () => {
-    try { setStockLoading(true); setStock((await getRawStock()).data?.data || []); }
-    catch (err) { setError(errMsg(err, "Failed to load raw stock")); }
-    finally { setStockLoading(false); }
+    try {
+      setStockLoading(true);
+      const res = await getRawStock();
+      setStock(res.data?.data || []);
+    } catch (err) {
+      if (!navigator.onLine) {
+        const cached = await db.cachedRecords.where("module").equals("rawStock").toArray();
+        if (cached.length > 0) {
+          setStock(cached.map(row => row.data));
+        } else {
+          setError("You are offline. Raw stock data has not been downloaded yet.");
+        }
+      } else {
+        setError(errMsg(err, "Failed to load raw stock"));
+      }
+    } finally {
+      setStockLoading(false);
+    }
   }, []);
 
   const fetchPurchases = useCallback(async () => {
-    try { setPurchasesLoading(true); setPurchases((await getRawPurchases({ limit: 200 })).data?.data || []); }
-    catch (err) { setError(errMsg(err, "Failed to load purchases")); }
-    finally { setPurchasesLoading(false); }
+    try {
+      setPurchasesLoading(true);
+      const res = await getRawPurchases({ limit: 200 });
+      setPurchases(res.data?.data || []);
+    } catch (err) {
+      if (!navigator.onLine) {
+        const cached = await db.cachedRecords.where("module").equals("rawPurchases").toArray();
+        if (cached.length > 0) {
+          setPurchases(cached.map(row => row.data));
+        } else {
+          setError("You are offline. Purchase data has not been downloaded yet.");
+        }
+      } else {
+        setError(errMsg(err, "Failed to load purchases"));
+      }
+    } finally {
+      setPurchasesLoading(false);
+    }
   }, []);
 
   const fetchContacts = useCallback(async () => {
-    try { setContacts((await getContacts({ limit: 200 })).data?.data || []); }
-    catch (err) { console.error("Failed to load contacts", err); }
+    try {
+      const res = await getContacts({ limit: 200 });
+      setContacts(res.data?.data || []);
+    } catch (err) {
+      console.error("Failed to load contacts", err);
+      // Fallback for suppliers
+      if (!navigator.onLine) {
+        const cached = await db.cachedRecords.where("module").equals("contacts").toArray();
+        if (cached.length > 0) setContacts(cached.map(row => row.data));
+      }
+    }
   }, []);
 
   const refreshAll = useCallback(async () => {
@@ -311,12 +350,11 @@ function RawMaterials() {
     }
   };
 
-  /* ── STOCK ACTIONS ── */
   const openMaterial = () => setMaterial({
     form: { category: "Reel", name: "", sizeKg: "", reorderLevel: "", criticalLevel: "", notes: "" },
   });
 
-  const submitMaterial = async (e) => {
+    const submitMaterial = async (e) => {
     e.preventDefault();
     const f = material.form;
     const payload = {
@@ -327,12 +365,26 @@ function RawMaterials() {
       criticalLevel: Number(f.criticalLevel) || 0,
       notes: f.notes.trim() || undefined,
     };
-    if (f.category === "Reel") {
-      payload.sizeKg = Number(f.sizeKg);
-      if (!payload.name) payload.name = `Reel ${payload.sizeKg}kg`;
+
+    const optimisticMaterial = {
+      _id: `temp-${Date.now()}`,
+      ...payload,
+      quantity: 0,
+      reservedQty: 0,
+      __pending: true,
+    };
+
+    setStock((prev) => [optimisticMaterial, ...prev]);
+    setMaterial(null);
+    setSuccess("Material added");
+
+    try {
+      await createRawStock(payload);
+      await refreshAll();
+    } catch (err) {
+      setError(errMsg(err, "Failed to add material"));
+      await refreshAll();
     }
-    try { await withSave(() => createRawStock(payload), "Material added", () => setMaterial(null)); }
-    catch (err) { setError(errMsg(err, "Failed to add material")); }
   };
 
   const openAdjust = (item, type = "in") =>
@@ -407,30 +459,68 @@ function RawMaterials() {
     },
   });
 
-  const submitPurchase = async (e) => {
+    const submitPurchase = async (e) => {
     e.preventDefault();
     const f = purchase.form;
-    const shared = {
-      supplier: f.supplier || null,
-      supplierName: f.supplierName.trim() || null,
-      supplierPhone: f.supplierPhone.trim() || null,
-      quantity: Number(f.quantity) || 0,
-      unitPrice: Number(f.unitPrice) || 0,
-      orderedAt: f.orderedAt || undefined,
-      expectedAt: f.expectedAt || undefined,
-      dueDate: f.dueDate || undefined,
-      notes: f.notes.trim() || undefined,
-    };
     const isEdit = !!purchase.editing;
+
+    const optimisticPurchase = {
+      _id: isEdit ? purchase.editing._id : `temp-${Date.now()}`,
+      material: stock.find((s) => s._id === f.material) || { name: "Loading..." },
+      supplierName: f.supplierName,
+      quantity: Number(f.quantity),
+      unitPrice: Number(f.unitPrice),
+      totalAmount: Number(f.quantity) * Number(f.unitPrice),
+      status: isEdit ? purchase.editing.status : "Pending",
+      orderedAt: f.orderedAt || new Date().toISOString(),
+      expectedAt: f.expectedAt || null,
+      notes: f.notes,
+      __pending: true, 
+    };
+
+    if (isEdit) {
+      setPurchases((prev) => prev.map((p) => (p._id === optimisticPurchase._id ? optimisticPurchase : p)));
+    } else {
+      setPurchases((prev) => [optimisticPurchase, ...prev]);
+    }
+
+    setPurchase(null);
+    setSuccess(isEdit ? "Purchase updated" : "Purchase created (queued if offline)");
+
     try {
-      await withSave(
-        () => isEdit
-          ? updateRawPurchase(purchase.editing._id, shared)
-          : createRawPurchase({ material: f.material, ...shared }),
-        isEdit ? "Purchase updated" : "Purchase order created (pending receipt)",
-        () => setPurchase(null)
-      );
-    } catch (err) { setError(errMsg(err, "Failed to save purchase")); }
+      if (isEdit) {
+        await updateRawPurchase(purchase.editing._id, {
+          supplier: f.supplier || null,
+          supplierName: f.supplierName.trim() || null,
+          supplierPhone: f.supplierPhone.trim() || null,
+          quantity: Number(f.quantity) || 0,
+          unitPrice: Number(f.unitPrice) || 0,
+          orderedAt: f.orderedAt || undefined,
+          expectedAt: f.expectedAt || undefined,
+          dueDate: f.dueDate || undefined,
+          notes: f.notes.trim() || undefined,
+        });
+      } else {
+        await createRawPurchase({ 
+          material: f.material, 
+          supplier: f.supplier || null,
+          supplierName: f.supplierName.trim() || null,
+          supplierPhone: f.supplierPhone.trim() || null,
+          quantity: Number(f.quantity) || 0,
+          unitPrice: Number(f.unitPrice) || 0,
+          orderedAt: f.orderedAt || undefined,
+          expectedAt: f.expectedAt || undefined,
+          dueDate: f.dueDate || undefined,
+          notes: f.notes.trim() || undefined,
+        });
+      }
+      if (navigator.onLine) {
+        await refreshAll();
+      }
+    } catch (err) {
+      setError(errMsg(err, "Failed to save purchase"));
+      await refreshAll(); 
+    }
   };
 
     const handleReceive = (p) => {
@@ -644,32 +734,46 @@ function RawMaterials() {
     const StatusIcon = PURCHASE_ICON[p.status];
     const overdue = isOverdue(p.expectedAt, p.status);
 
-    return (
+        return (
       <tr
         key={p._id}
         role="button"
         tabIndex={0}
-        onClick={() => setViewing(p)}
-        onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setViewing(p); } }}
-        className="cursor-pointer transition-colors hover:bg-slate-50/70 focus:bg-slate-50 focus:outline-none"
+        onClick={() => !p.__pending && setViewing(p)} // Prevent opening modal if pending
+        onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ") && !p.__pending) { e.preventDefault(); setViewing(p); } }}
+        // 👇 Fade the row if it's pending
+        className={`cursor-pointer transition-colors hover:bg-slate-50/70 focus:bg-slate-50 focus:outline-none ${p.__pending ? "opacity-60 bg-slate-50" : ""}`}
       >
         <td className="px-4 py-3 text-xs text-slate-700">{fmtDate(p.orderedAt)}</td>
+        
         <td className="px-4 py-3">
-          <p className="text-xs font-semibold text-slate-900">{p.material?.name || "—"}</p>
+          <div className="flex items-center gap-2">
+            <p className="text-xs font-semibold text-slate-900">{p.material?.name || "—"}</p>
+            
+            {/* 👇 ADD THE PENDING SPINNER HERE */}
+            {p.__pending && (
+              <span className="flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-700">
+                <RefreshCw size={8} className="animate-spin" /> Syncing
+              </span>
+            )}
+          </div>
           {p.material?.category === "Reel" && p.material?.sizeKg && (
             <p className="mt-0.5 text-[10px] text-slate-400">{p.material.sizeKg} kg each</p>
           )}
         </td>
+
         <td className="px-4 py-3 text-right">
           <span className="text-xs font-semibold tabular-nums text-slate-900">{num(p.quantity)}</span>
-          <span className="ml-1 text-[10px] text-slate-400">{p.unit}</span>
+          <span className="ml-1 text-[10px] text-slate-400">{p.unit || p.material?.unit}</span>
         </td>
         <td className="px-4 py-3 text-xs text-slate-600">{p.supplier?.company || p.supplier?.name || p.supplierName || "—"}</td>
+        
         <td className="px-4 py-3">
-          <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${PURCHASE_CLS[p.status]}`}>
+          <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${PURCHASE_CLS[p.status] || PURCHASE_CLS.Pending}`}>
             {StatusIcon && <StatusIcon size={10} />}{p.status}
           </span>
         </td>
+
         <td className="px-4 py-3 text-xs">
           {p.status === "Received" && p.receivedAt && <span className="text-slate-500">{fmtDate(p.receivedAt)}</span>}
           {p.status === "Pending" && p.expectedAt && (
@@ -677,6 +781,7 @@ function RawMaterials() {
           )}
           {((p.status === "Pending" && !p.expectedAt) || p.status === "Cancelled") && <span className="text-slate-300">—</span>}
         </td>
+
         <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
           <div className="flex flex-col items-end gap-1">
             <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${PAYMENT_CLS[p.paymentStatus] || PAYMENT_CLS.Pending}`}>
@@ -686,20 +791,24 @@ function RawMaterials() {
             {due > 0.01 && <span className="text-[10px] font-semibold tabular-nums text-amber-600">Due {money(due)}</span>}
           </div>
         </td>
+
         <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-end gap-1">
-            {canPay && (
+              {canPay && !p.__pending && (
               <button type="button" onClick={() => openPayment(p)} title="Record payment" className="inline-flex h-7 items-center gap-1 rounded-md bg-emerald-600 px-2.5 text-[10px] font-semibold text-white transition-colors hover:bg-emerald-700">
                 <Wallet size={11} /> Pay
               </button>
             )}
+            
             {p.status === "Pending" && (
               <>
-                <button type="button" onClick={() => openEditPurchase(p)} title="Edit" disabled={saving} className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 disabled:opacity-60"><Pencil size={13} /></button>
-                <button type="button" onClick={() => handleReceive(p)} disabled={saving} className="inline-flex h-7 items-center gap-1 rounded-md bg-emerald-600 px-2.5 text-[10px] font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-60">
+                <button type="button" onClick={() => openEditPurchase(p)} title="Edit" disabled={saving || p.__pending} className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 disabled:opacity-30 disabled:cursor-not-allowed"><Pencil size={13} /></button>
+                
+                <button type="button" onClick={() => handleReceive(p)} disabled={saving || p.__pending} className="inline-flex h-7 items-center gap-1 rounded-md bg-emerald-600 px-2.5 text-[10px] font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-30 disabled:cursor-not-allowed">
                   <Truck size={11} /> Receive
                 </button>
-                <button type="button" onClick={() => handleCancelPurchase(p)} title="Cancel" disabled={saving} className="flex h-7 w-7 items-center justify-center rounded-md text-red-500 transition-colors hover:bg-red-50 disabled:opacity-60"><X size={13} /></button>
+                
+                <button type="button" onClick={() => handleCancelPurchase(p)} title="Cancel" disabled={saving || p.__pending} className="flex h-7 w-7 items-center justify-center rounded-md text-red-500 transition-colors hover:bg-red-50 disabled:opacity-30 disabled:cursor-not-allowed"><X size={13} /></button>
               </>
             )}
           </div>

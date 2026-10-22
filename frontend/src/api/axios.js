@@ -12,15 +12,17 @@ import {
   pruneCache,
 } from "../db/httpCache.js";
 
-const BASE_URL =
+const BASE_URL = 
   (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_URL) ||
-  "http://localhost:5000/api";
+  "/api"; 
 
+   
 const WRITES = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 const api = axios.create({
   baseURL: BASE_URL,
   timeout: 15000,
+  withCredentials: true, 
 });
 
 function getAuthToken() {
@@ -66,6 +68,9 @@ function isNetworkError(error) {
 
   const method = (config.method || "").toUpperCase();
 
+  const isAuthRoute = config.url?.includes('/auth/login') || config.url?.includes('/auth/register');
+
+
   if (WRITES.has(method) && !config.headers["Idempotency-Key"]) {
     config.headers["Idempotency-Key"] = newOperationId();
   }
@@ -74,6 +79,8 @@ function isNetworkError(error) {
   }
 
   if (!WRITES.has(method)) return config;
+
+  if (isAuthRoute) return config; 
 
   if (typeof navigator !== "undefined" && navigator.onLine) return config;
 
@@ -95,7 +102,8 @@ api.interceptors.response.use(
   (response) => {
     const cfg = response.config || {};
     const method = (cfg.method || "").toLowerCase();
-    if (method === "get" && !cfg.__fromOutbox) {
+    
+    if (method === "get" && !cfg.__fromOutbox && !cfg.url?.includes("/auth/me")) {
       Promise.resolve()
         .then(() => writeCachedResponse(cfg.url, cfg.params, response.data))
         .then(() => pruneCache())
@@ -103,17 +111,47 @@ api.interceptors.response.use(
     }
     return response;
   },
+
   async (error) => {
     const cfg = error.config || {};
+
+    const isAuthRoute = cfg.url?.includes('/auth/login') || cfg.url?.includes('/auth/register');
+
+    if (error.response && error.response.status === 401 && !isAuthRoute && !cfg.__fromOutbox) {
+      console.warn("[axios] 401 Unauthorized caught. Clearing token.");
+      localStorage.removeItem("token");
+      window.dispatchEvent(new CustomEvent("auth-expired"));
+      return Promise.reject(new Error("AUTH_EXPIRED"));
+    }
+
     if (cfg.__fromOutbox) return Promise.reject(error);
 
-    const method = (cfg.method || "").toUpperCase();
+    if (isAuthRoute) {
+      return Promise.reject(error); 
+    }
 
+    const method = (cfg.method || "").toUpperCase();
+    
     if (method === "GET") {
-      const cached = await readCachedResponse(cfg.url, cfg.params).catch(() => null);
-      if (cached) {
-        return { data: cached, status: 200, statusText: "OK (cached)", headers: {}, config: cfg };
+      if (!isNetworkError(error)) {
+        return Promise.reject(error);
       }
+
+      const cached = await readCachedResponse(
+        cfg.url,
+        cfg.params
+      ).catch(() => null);
+
+      if (cached) {
+        return {
+          data: cached,
+          status: 200,
+          statusText: "OK (cached)",
+          headers: {},
+          config: cfg,
+        };
+      }
+
       return Promise.reject(error);
     }
 
@@ -134,4 +172,4 @@ api.interceptors.response.use(
   }
 );
 
-export default api;
+export default api

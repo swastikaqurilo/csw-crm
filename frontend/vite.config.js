@@ -1,24 +1,3 @@
-// import tailwindcss from "@tailwindcss/vite";
-// import { defineConfig } from 'vite';
-// import react from '@vitejs/plugin-react';
-
-// export default defineConfig({
-//   plugins: [react(), tailwindcss()],
-//   server: {
-//     host: true,
-//     strictPort: true,
-//     allowedHosts: true,
-//     proxy: {
-//       '/api': {
-//         target: 'http://127.0.0.1:5000',
-        
-//         changeOrigin: true,
-//         secure: false,
-//       },
-//     },
-//   },
-// });
-
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
@@ -34,7 +13,7 @@ export default defineConfig({
     tailwindcss(),
 
     VitePWA({
-      registerType: "prompt",
+      registerType: "autoUpdate",
       includeAssets: ["favicon.ico", "apple-touch-icon-180x180.png"],
 
       manifest: {
@@ -77,10 +56,23 @@ export default defineConfig({
     }),
   ],
 
-  server: {
+    server: {
     host: true,
     strictPort: true,
     allowedHosts: true,
+    cors: false, 
+    proxy: {
+      '/api': {
+        target: 'http://0.0.0.0:5000', 
+        changeOrigin: true,
+        secure: false,
+      },
+    },
+  },
+
+   preview: {
+    port: 4173,
+    cors: false,
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:5000',

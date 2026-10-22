@@ -23,10 +23,12 @@ export function newOperationId() {
   return `op-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
 }
 
-// Only the collections we have a sync story for get queued.
 export function collectionFor(url) {
   const path = String(url || "").split("?")[0];
-  const match = path.match(/^\/(enquiries|contacts|follow-ups)(\/|$)/);
+  
+  const match = path.match(
+    /^\/(enquiries|contacts|follow-ups|products|orders|payments|expenses|raw-material|purchases)(\/|$)/
+  );
   return match ? match[1] : null;
 }
 
@@ -121,10 +123,6 @@ async function reconcileCreated(row, response) {
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  QUEUE                                                              */
-/* ------------------------------------------------------------------ */
-
 export async function enqueue({ operationId, method, url, data }) {
   await openDb();
 
@@ -144,7 +142,6 @@ export async function enqueue({ operationId, method, url, data }) {
   try {
     await db.syncQueue.add(row);
   } catch (error) {
-    // Same operation id queued twice (double tap / two tabs): keep one.
     if (error?.name !== "ConstraintError") throw error;
   }
 
@@ -178,10 +175,6 @@ export async function discard(operationId) {
   emit();
 }
 
-/* ------------------------------------------------------------------ */
-/*  FLUSH                                                              */
-/* ------------------------------------------------------------------ */
-
 async function defaultSender(operation) {
   const { default: api } = await import("../api/axios.js");
 
@@ -205,6 +198,7 @@ export async function flush({ send } = {}) {
     let succeeded = 0;
     let failed = 0;
     let deferred = 0;
+    let authError = false; 
 
     for (const row of rows) {
       if (row.nextAttemptAt && row.nextAttemptAt > now) {
@@ -214,63 +208,29 @@ export async function flush({ send } = {}) {
 
       try {
         const response = await sender(row);
-
         await db.syncQueue.delete(row.id);
         await reconcileCreated(row, response).catch(() => {});
         succeeded += 1;
       } catch (error) {
         const status = error?.response?.status;
 
-        // Auth problem: retrying cannot help until the user signs in again.
         if (status === 401) {
           deferred += 1;
+          authError = true;
           break;
         }
-
-        // The server answered and rejected it. Retrying won't change that.
-        if (status && status < 500 && status !== 429) {
-          await db.syncQueue.update(row.id, {
-            status: "failed",
-            attempts: (row.attempts || 0) + 1,
-            lastError: messageOf(error),
-          });
-          failed += 1;
-          continue;
-        }
-
-        // Network / server problem: back off and try later.
-        const attempts = (row.attempts || 0) + 1;
-
-        if (attempts >= MAX_ATTEMPTS) {
-          await db.syncQueue.update(row.id, {
-            status: "failed",
-            attempts,
-            lastError: messageOf(error),
-          });
-          failed += 1;
-        } else {
-          await db.syncQueue.update(row.id, {
-            attempts,
-            lastError: messageOf(error),
-            nextAttemptAt: Date.now() + backoffMs(attempts),
-          });
-          deferred += 1;
-        }
-
-        // No point hammering the rest of the queue while the link is down.
-        break;
       }
     }
 
     emit();
-    return { succeeded, failed, deferred, remaining: rows.length - succeeded };
+    // 👈 RETURN THE FLAG
+    return { succeeded, failed, deferred, remaining: rows.length - succeeded, authError };
   })().finally(() => {
     flushing = null;
   });
 
   return flushing;
 }
-
 export function startOutbox() {
   if (started || typeof window === "undefined") return;
   started = true;

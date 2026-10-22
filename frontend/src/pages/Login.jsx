@@ -17,6 +17,8 @@ import {
 import { login } from "../api/api";
 import { useAuth } from "../components/AuthContext";
 import cswLogo from "../assets/cswlogo.png";
+import { hashPassword } from "../utils/cryptoUtils";
+import { useSearchParams } from "react-router-dom";
 
 function Login() {
   const navigate = useNavigate();
@@ -30,6 +32,9 @@ function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [searchParams] = useSearchParams();
+  const isSyncRedirect = searchParams.get("reason") === "sync";
+  
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -43,28 +48,66 @@ function Login() {
     try {
       setLoading(true);
 
-      const response = await login({
-        email: email.trim(),
-        password,
-      });
+      if (navigator.onLine) {
+        const response = await login({
+          email: email.trim(),
+          password,
+        });
+        
+        const responseData = response?.data?.data || {};
+        const token = responseData.token;
 
-      const { token, user } = response?.data?.data || {};
+        if (!token) {
+          throw new Error("Invalid response from server. No token received.");
+        }
 
-      if (!token) {
-        throw new Error("No token received");
+        const user = responseData.user || responseData; 
+
+        await loginSuccess(token, user, password); 
+
+       } else {
+        console.log("Offline login attempt");
+        const normalizedEmail = email.trim().toLowerCase();
+        
+        const savedCredsStr = localStorage.getItem(`offlineCreds_${normalizedEmail}`);
+        
+        if (!savedCredsStr) {
+          throw new Error("You have never logged in on this device. Internet is required for first-time login.");
+        }
+
+        let savedCreds;
+        try {
+          savedCreds = JSON.parse(savedCredsStr);
+        } catch (e) {
+          throw new Error("Corrupted offline data. Please log in online to fix.");
+        }
+
+        const inputHash = await hashPassword(password);
+        
+        if (inputHash !== savedCreds.hash) {
+          throw new Error("Invalid email or password (offline mode).");
+        }
+
+        const cachedUser = savedCreds.user;
+
+        if (!cachedUser) {
+          throw new Error("No cached user data found. Please log in online once to fix this.");
+        }
+
+        const fakeToken = `offline-token-${Date.now()}`;
+        await loginSuccess(fakeToken, cachedUser, null); 
+        console.log("Offline login successful");
       }
-
-      loginSuccess(token, user);
 
       const from = location.state?.from?.pathname || "/dashboard";
       navigate(from, { replace: true });
-    } catch (err) {
-      console.error("Login error:", err);
 
+    } catch (err) {
+      console.error("Login error:", err); 
       setError(
         err?.response?.data?.message ||
-          err?.message ||
-          "Login failed. Please try again."
+        err?.message ||
+        "Login failed. Please try again."
       );
     } finally {
       setLoading(false);
@@ -166,10 +209,6 @@ function Login() {
 
           </div>
         </section>
-
-        {/* =========================================================
-            RIGHT — LOGIN
-        ========================================================= */}
         <section className="flex min-h-screen w-full flex-1 items-center justify-center bg-white px-6 py-12 sm:px-10 lg:px-14 xl:px-20">
 
           <div className="w-full max-w-[400px]">
@@ -208,6 +247,15 @@ function Login() {
               </div>
             )}
 
+            {isSyncRedirect && !error && (
+              <div className="mb-5 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3.5 text-sm text-amber-800">
+                <AlertCircle size={18} className="mt-0.5 shrink-0" />
+                <span>
+                  <strong>Session Expired.</strong> Please log in again to sync your offline changes.
+                </span>
+              </div>
+            )}
+
             {/* Error message */}
             {error && (
               <div className="mb-5 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3.5 text-sm text-red-700">
@@ -220,9 +268,6 @@ function Login() {
               </div>
             )}
 
-            {/* =====================================================
-                FORM
-            ===================================================== */}
             <form
               onSubmit={handleSubmit}
               className="space-y-5"
