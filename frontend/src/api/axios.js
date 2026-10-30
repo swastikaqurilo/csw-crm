@@ -1,30 +1,31 @@
-import axios from "axios";
-
+import axios from "axios";  
 import {
   applyOptimistic,
   enqueue,
   newOperationId,
-} from "../db/outbox.js";
-
+  reconcileOnlineWrite,
+  flush,
+} from "../offline/index.js";
 import {
   readCachedResponse,
   writeCachedResponse,
   pruneCache,
 } from "../db/httpCache.js";
 
-const BASE_URL = 
-  (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_URL) ||
-  "/api"; 
-
-   
+const BASE_URL =
+  (typeof import.meta !== "undefined" &&
+    import.meta.env?.VITE_API_URL) ||
+  "/api";
 const WRITES = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 const api = axios.create({
   baseURL: BASE_URL,
   timeout: 15000,
-  withCredentials: true, 
+  withCredentials: true,
 });
-
+function dependsOnUnsyncedRecord(url = "") {
+  return /(^|\/)pending(:|%3A)/i.test(String(url).split("?")[0]);
+}
 function getAuthToken() {
   try {
     return localStorage.getItem("token") ?? null;
@@ -32,19 +33,25 @@ function getAuthToken() {
     return null;
   }
 }
-
 function asBody(data) {
   if (data == null) return null;
+
   if (typeof data === "string") {
-    try { return JSON.parse(data); } catch { return data; }
+    try {
+      return JSON.parse(data);
+    } catch {
+      return data;
+    }
   }
+
   return data;
 }
-
 function isNetworkError(error) {
   if (error?.response) return false;
   if (axios.isCancel(error)) return false;
+
   const code = error?.code;
+
   return (
     !code ||
     code === "ERR_NETWORK" ||
@@ -53,85 +60,176 @@ function isNetworkError(error) {
     code === "ETIMEDOUT"
   );
 }
-
-  api.interceptors.request.use(async (config) => {
+function isAuthRoute(url = "") {
+  return (
+    url.includes("/auth/login") ||
+    url.includes("/auth/register")
+  );
+}
+function getOperationId(config) {
+  return (
+    config?._operationId ||
+    config?.headers?.["Idempotency-Key"] ||
+    config?.headers?.["idempotency-key"] ||
+    null
+  );
+}
+api.interceptors.request.use(async (config) => {
   if (config.__fromOutbox) {
     config.headers = config.headers || {};
+
     const token = getAuthToken();
-    if (token) config.headers.Authorization = `Bearer ${token}`;
+
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+
     return config;
   }
-
   config.headers = config.headers || {};
   const token = getAuthToken();
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-
-  const method = (config.method || "").toUpperCase();
-
-  const isAuthRoute = config.url?.includes('/auth/login') || config.url?.includes('/auth/register');
-
-
-  if (WRITES.has(method) && !config.headers["Idempotency-Key"]) {
-    config.headers["Idempotency-Key"] = newOperationId();
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
   }
-  if (WRITES.has(method)) {
-    config._operationId = config.headers["Idempotency-Key"];
+  const method = (config.method || "GET").toUpperCase();
+  if (!WRITES.has(method)) {
+    return config;
   }
+  if (isAuthRoute(config.url)) {
+    return config;
+  }
+  const operationId =
+    config.headers["Idempotency-Key"] ||
+    newOperationId();
+  config.headers["Idempotency-Key"] = operationId;
+  config._operationId = operationId;
+  const mustQueue = dependsOnUnsyncedRecord(config.url);
 
-  if (!WRITES.has(method)) return config;
-
-  if (isAuthRoute) return config; 
-
-  if (typeof navigator !== "undefined" && navigator.onLine) return config;
-
-  const operationId = config._operationId;
+  if (
+    typeof navigator !== "undefined" &&
+    navigator.onLine &&
+    !mustQueue
+  ) {
+    return config;
+  }
   const body = asBody(config.data);
   const optimistic = await applyOptimistic({
-    method, url: config.url, data: body, operationId,
+    method,
+    url: config.url,
+    data: body,
+    operationId,
   });
-  await enqueue({ operationId, method, url: config.url, data: body });
+  await enqueue({
+    operationId,
+    method,
+    url: config.url,
+    data: body,
+  });
 
-  config.adapter = () => Promise.resolve({
-    data: { success: true, data: optimistic ?? { queued: true, operationId } },
-    status: 200, statusText: "OK (queued)", headers: {}, config,
-  });
+   if (mustQueue && typeof navigator !== "undefined" && navigator.onLine) {
+    void flush().then(() => flush()).catch(() => {});
+  }
+
+  config.adapter = () =>
+    Promise.resolve({
+      data: {
+        success: true,
+        data: optimistic ?? {
+          queued: true,
+          operationId,
+        },
+        offline: true,
+      },
+      status: 200,
+      statusText: "OK (offline)",
+      headers: {},
+      config,
+    });
+
   return config;
 });
-
 api.interceptors.response.use(
-  (response) => {
+  async (response) => {
     const cfg = response.config || {};
-    const method = (cfg.method || "").toLowerCase();
-    
-    if (method === "get" && !cfg.__fromOutbox && !cfg.url?.includes("/auth/me")) {
-      Promise.resolve()
-        .then(() => writeCachedResponse(cfg.url, cfg.params, response.data))
-        .then(() => pruneCache())
-        .catch(() => {});
+    const method = (cfg.method || "GET").toUpperCase();
+    if (
+      method === "GET" &&
+      !cfg.__fromOutbox &&
+      !cfg.url?.includes("/auth/me")
+    ) {
+      try {
+        await writeCachedResponse(
+          cfg.url,
+          cfg.params,
+          response.data
+        );
+        await pruneCache();
+      } catch (error) {
+        console.warn(
+          "[axios] Failed to cache GET response:",
+          error?.message
+        );
+      }
+
+      return response;
+    }
+    if (
+      WRITES.has(method) &&
+      !cfg.__fromOutbox
+    ) {
+      try {
+        await reconcileOnlineWrite({
+          method,
+          url: cfg.url,
+          operationId: getOperationId(cfg),
+          response,
+        });
+      } catch (error) {
+        console.error(
+          "[axios] Online write succeeded, but local reconciliation failed:",
+          {
+            method,
+            url: cfg.url,
+            operationId: getOperationId(cfg),
+            message: error?.message,
+          }
+        );
+      }
     }
     return response;
   },
 
   async (error) => {
     const cfg = error.config || {};
+    const url = cfg.url || "";
+    if (
+      error.response?.status === 401 &&
+      !isNetworkError(error) &&
+      !isAuthRoute(url) &&
+      !cfg.__fromOutbox
+    ) {
+      console.warn(
+        "[axios] 401 Unauthorized caught. Clearing token."
+      );
+      try {
+        localStorage.removeItem("token");
+      } catch {
+      }
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("auth-expired")
+        );
+      }
 
-    const isAuthRoute = cfg.url?.includes('/auth/login') || cfg.url?.includes('/auth/register');
-
-    if (error.response && error.response.status === 401 && !isAuthRoute && !cfg.__fromOutbox) {
-      console.warn("[axios] 401 Unauthorized caught. Clearing token.");
-      localStorage.removeItem("token");
-      window.dispatchEvent(new CustomEvent("auth-expired"));
       return Promise.reject(new Error("AUTH_EXPIRED"));
     }
-
-    if (cfg.__fromOutbox) return Promise.reject(error);
-
-    if (isAuthRoute) {
-      return Promise.reject(error); 
+    if (cfg.__fromOutbox) {
+      return Promise.reject(error);
     }
-
-    const method = (cfg.method || "").toUpperCase();
-    
+    if (isAuthRoute(url)) {
+      return Promise.reject(error);
+    }
+    const method = (cfg.method || "GET").toUpperCase();
     if (method === "GET") {
       if (!isNetworkError(error)) {
         return Promise.reject(error);
@@ -142,7 +240,7 @@ api.interceptors.response.use(
         cfg.params
       ).catch(() => null);
 
-      if (cached) {
+      if (cached != null) {
         return {
           data: cached,
           status: 200,
@@ -155,21 +253,56 @@ api.interceptors.response.use(
       return Promise.reject(error);
     }
 
-    if (WRITES.has(method) && isNetworkError(error)) {
-      const operationId = cfg._operationId || cfg.headers?.["Idempotency-Key"] || newOperationId();
+    if (
+      WRITES.has(method) &&
+      isNetworkError(error)
+    ) {
+      const operationId =
+        getOperationId(cfg) || newOperationId();
+
       const body = asBody(cfg.data);
-      const optimistic = await applyOptimistic({
-        method, url: cfg.url, data: body, operationId,
-      });
-      await enqueue({ operationId, method, url: cfg.url, data: body });
-      return {
-        data: { success: true, data: optimistic ?? { queued: true, operationId } },
-        status: 200, statusText: "OK (queued)", headers: {}, config: cfg,
-      };
+
+      try {
+        const optimistic = await applyOptimistic({
+          method,
+          url: cfg.url,
+          data: body,
+          operationId,
+        });
+
+        await enqueue({
+          operationId,
+          method,
+          url: cfg.url,
+          data: body,
+        });
+
+        return {
+          data: {
+            success: true,
+            data: optimistic ?? {
+              queued: true,
+              operationId,
+            },
+            offline: true,
+          },
+          status: 200,
+          statusText: "OK (offline fallback)",
+          headers: {},
+          config: cfg,
+        };
+      } catch (offlineError) {
+        
+        console.error(
+          "[axios] Could not save offline operation:",
+          offlineError?.message
+        );
+
+        return Promise.reject(offlineError);
+      }
     }
 
     return Promise.reject(error);
   }
 );
-
-export default api
+export default api; 

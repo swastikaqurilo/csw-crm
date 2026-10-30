@@ -2,8 +2,8 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { registerSW } from "virtual:pwa-register";
 import { db } from "./db/database";
-import { startOutbox } from "./db/outbox.js";
-import { installAutoSync } from "./db/syncEngine.js";
+import { startOutbox } from "./offline/index.js";
+import { installAutoSync, syncAll } from "./db/syncEngine.js";
 import "./index.css";
 import App from "./App.jsx";
 

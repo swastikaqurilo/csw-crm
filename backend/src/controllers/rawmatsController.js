@@ -896,7 +896,6 @@ const receivePurchase = async (req, res) => {
         throw err;
       }
 
-      // Re-read the material inside the session so we can compare-and-swap.
       const material = await RawStock.findOne({
         _id: purchase.material._id,
         isActive: true,
@@ -913,8 +912,6 @@ const receivePurchase = async (req, res) => {
       const qty = Number(purchase.quantity);
       const after = before + qty;
 
-      // Guard the schema's max (1e8) explicitly so the caller gets a 400
-      // rather than a Mongoose validation error 500.
       if (after > MAX_QUANTITY) {
         const err = new Error(
           `Receiving this purchase would exceed the material's maximum stock of ${MAX_QUANTITY}.`
@@ -943,9 +940,6 @@ const receivePurchase = async (req, res) => {
         at: new Date(),
       };
 
-      // Compare-and-swap on quantity + reservedQty. Fails with
-      // modifiedCount = 0 if a concurrent writer touched this material
-      // between our read and this update.
       const result = await RawStock.updateOne(
         {
           _id: material._id,
@@ -1192,7 +1186,18 @@ const recordPurchasePayment = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid ID" });
     }
 
-    const { amount, method, mode, paidAt, date, notes } = req.body;
+    const {
+      amount,
+      method,
+      mode,
+      paidAt,
+      date,
+      notes,
+      transactionId,
+      chequeNumber,
+      bankName,
+    } = req.body;
+
     const paymentMethod = method || mode;
 
     const numAmount = Number(amount);
@@ -1235,7 +1240,10 @@ const recordPurchasePayment = async (req, res) => {
     purchase.payments.push({
       amount: numAmount,
       method: paymentMethod,
-      paidAt: (paidAt || date) ? new Date(paidAt || date) : new Date(),
+      paidAt: paidAt || date ? new Date(paidAt || date) : new Date(),
+      transactionId: safeString(transactionId, 100) || null,
+      chequeNumber: safeString(chequeNumber, 50) || null,
+      bankName: safeString(bankName, 150) || null,
       notes: safeString(notes, 500) || null,
       by: req.user?._id || null,
     });

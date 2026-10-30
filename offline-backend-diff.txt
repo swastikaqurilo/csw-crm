@@ -1,0 +1,144 @@
+﻿diff --git a/backend/src/controllers/rawmatsController.js b/backend/src/controllers/rawmatsController.js
+index 04dc424..2934098 100644
+--- a/backend/src/controllers/rawmatsController.js
++++ b/backend/src/controllers/rawmatsController.js
+@@ -896,7 +896,6 @@ const receivePurchase = async (req, res) => {
+         throw err;
+       }
+ 
+-      // Re-read the material inside the session so we can compare-and-swap.
+       const material = await RawStock.findOne({
+         _id: purchase.material._id,
+         isActive: true,
+@@ -913,8 +912,6 @@ const receivePurchase = async (req, res) => {
+       const qty = Number(purchase.quantity);
+       const after = before + qty;
+ 
+-      // Guard the schema's max (1e8) explicitly so the caller gets a 400
+-      // rather than a Mongoose validation error 500.
+       if (after > MAX_QUANTITY) {
+         const err = new Error(
+           `Receiving this purchase would exceed the material's maximum stock of ${MAX_QUANTITY}.`
+@@ -943,9 +940,6 @@ const receivePurchase = async (req, res) => {
+         at: new Date(),
+       };
+ 
+-      // Compare-and-swap on quantity + reservedQty. Fails with
+-      // modifiedCount = 0 if a concurrent writer touched this material
+-      // between our read and this update.
+       const result = await RawStock.updateOne(
+         {
+           _id: material._id,
+@@ -1192,7 +1186,18 @@ const recordPurchasePayment = async (req, res) => {
+       return res.status(400).json({ success: false, message: "Invalid ID" });
+     }
+ 
+-    const { amount, method, mode, paidAt, date, notes } = req.body;
++    const {
++      amount,
++      method,
++      mode,
++      paidAt,
++      date,
++      notes,
++      transactionId,
++      chequeNumber,
++      bankName,
++    } = req.body;
++
+     const paymentMethod = method || mode;
+ 
+     const numAmount = Number(amount);
+@@ -1235,7 +1240,10 @@ const recordPurchasePayment = async (req, res) => {
+     purchase.payments.push({
+       amount: numAmount,
+       method: paymentMethod,
+-      paidAt: (paidAt || date) ? new Date(paidAt || date) : new Date(),
++      paidAt: paidAt || date ? new Date(paidAt || date) : new Date(),
++      transactionId: safeString(transactionId, 100) || null,
++      chequeNumber: safeString(chequeNumber, 50) || null,
++      bankName: safeString(bankName, 150) || null,
+       notes: safeString(notes, 500) || null,
+       by: req.user?._id || null,
+     });
+diff --git a/backend/src/controllers/syncController.js b/backend/src/controllers/syncController.js
+index 226593b..86beb21 100644
+--- a/backend/src/controllers/syncController.js
++++ b/backend/src/controllers/syncController.js
+@@ -17,7 +17,8 @@ const ENQUIRY_PROJECTION = { __v: 0 };
+ const ORDER_PROJECTION = { __v: 0 };
+ const PAYMENT_PROJECTION = { __v: 0 };
+ const EXPENSE_PROJECTION = { __v: 0 };
+-const RAW_STOCK_PROJECTION = { __v: 0 };
++const RAW_STOCK_PROJECTION = { __v: 0, movementLog: 0 };
++const RAW_PURCHASE_PROJECTION = { __v: 0 };
+ 
+ function parseDate(value) {
+   if (typeof value !== "string" || !value.trim()) return null;
+@@ -255,9 +256,36 @@ async function getExpensesDelta(req, res, next) {
+ 
+ async function getRawStockDelta(req, res, next) {
+   try {
+-    const payload = await deltaFeed(RawStock, RAW_STOCK_PROJECTION, req, res, {
+-      softDeleteField: "isDeleted", 
+-    });
++    const payload = await deltaFeed(
++      RawStock,
++      RAW_STOCK_PROJECTION,
++      req,
++      res,
++      {
++        softDeleteField: "isActive",
++        softDeleteValue: false,
++      }
++    );
++
++    if (payload) return res.json(payload);
++  } catch (error) {
++    next(error);
++  }
++}
++
++async function getRawPurchasesDelta(req, res, next) {
++  try {
++    const payload = await deltaFeed(
++      RawPurchase,
++      RAW_PURCHASE_PROJECTION,
++      req,
++      res,
++      {
++        softDeleteField: "isActive",
++        softDeleteValue: false,
++      }
++    );
++
+     if (payload) return res.json(payload);
+   } catch (error) {
+     next(error);
+@@ -272,4 +300,5 @@ module.exports = {
+   getPaymentsDelta,
+   getExpensesDelta,
+   getRawStockDelta,
++  getRawPurchasesDelta,
+ };
+\ No newline at end of file
+diff --git a/backend/src/routes/syncRoutes.js b/backend/src/routes/syncRoutes.js
+index e598f07..61f252a 100644
+--- a/backend/src/routes/syncRoutes.js
++++ b/backend/src/routes/syncRoutes.js
+@@ -12,6 +12,7 @@ const {
+   getPaymentsDelta,
+   getExpensesDelta,
+   getRawStockDelta, 
++  getRawPurchasesDelta,
+ } = require("../controllers/syncController");
+ 
+ router.get("/contacts",  auth, getContactsDelta);
+@@ -21,6 +22,7 @@ router.get("/orders",    auth, getOrdersDelta);
+ router.get("/payments",  auth, getPaymentsDelta);
+ router.get("/expenses",  auth, getExpensesDelta);
+ router.get("/raw-stock", auth, getRawStockDelta); 
++router.get("/raw-purchases", auth, getRawPurchasesDelta);
+ 
+ if (process.env.NODE_ENV !== "production") {
+   router.post("/_test/write", auth, idempotency(), (req, res) => {

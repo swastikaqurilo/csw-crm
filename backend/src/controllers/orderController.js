@@ -343,9 +343,6 @@ const deductOrderStock = async (
   }
 };
 
-// Increment reservedQty on each item's stock record without touching quantity.
-// Called when a Draft order is saved with reserveStock=true, or when the user
-// explicitly reserves stock ahead of confirmation.
 const reserveOrderStock = async (order, user, session) => {
   for (const item of order.items) {
     const stockId = resolveStockId(item);
@@ -916,32 +913,11 @@ const createOrder = async (req, res) => {
     if (typeof reserveStock !== "boolean") {
       return res.status(400).json({ success: false, message: "reserveStock must be a boolean" });
     }
+  
+    const usingExistingContact = contact && isValidId(contact);
+    const usingNewCustomer = !usingExistingContact && customerName && customerPhone;
 
-    let contactDoc = null;
-    let finalContactId = null;
-
-    if (contact && isValidId(contact)) {
-      contactDoc = await Contact.findById(contact);
-      if (!contactDoc) {
-        return res.status(404).json({ success: false, message: "Contact not found" });
-      }
-      finalContactId = contactDoc._id;
-    } else if (customerName && customerPhone) {
-      try {
-        contactDoc = await Contact.create({
-          name: String(customerName).trim().slice(0, 150),
-          phone: normalizePhone(customerPhone),
-          company: "",
-          email: "",
-        });
-        finalContactId = contactDoc._id;
-      } catch (err) {
-        return res.status(400).json({
-          success: false,
-          message: err.message || "Failed to create new customer",
-        });
-      }
-    } else {
+    if (!usingExistingContact && !usingNewCustomer) {
       return res.status(400).json({
         success: false,
         message: "Either select a customer or provide a new customer's name and phone.",
@@ -992,14 +968,46 @@ const createOrder = async (req, res) => {
     const session = await mongoose.startSession();
 
     try {
-        await session.withTransaction(async () => {
+      await session.withTransaction(async () => {
         warnings.length = 0;
+
+        let contactDoc = null;
+        let finalContactId = null;
+
+        if (usingExistingContact) {
+          contactDoc = await Contact.findById(contact).session(session);
+          if (!contactDoc) {
+            throw { status: 404, message: "Contact not found" };
+          }
+          finalContactId = contactDoc._id;
+        } else {
+          const phone = normalizePhone(customerPhone);
+
+          let existing = await Contact.findOne({ phone }).session(session);
+
+          if (!existing) {
+            const created = await Contact.create(
+              [{
+                name: String(customerName).trim().slice(0, 150),
+                phone,
+                company: "",
+                email: "",
+              }],
+              { session }
+            );
+            existing = created[0];
+          }
+
+          contactDoc = existing;
+          finalContactId = existing._id;
+        }
+
+        // ── Order creation (unchanged from before) ─────────────────────
         const { items: processedItems, subTotal } = await buildItems(items, session);
         const taxableAmount = Math.max(0, subTotal - orderDiscount);
         const taxAmount = round2((taxableAmount * numericTaxPercent) / 100);
         const grandTotal = round2(taxableAmount + taxAmount);
 
-        // Draft: don't block, but surface stock shortfalls to the UI.
         if (status === "Draft") {
           const shortfalls = await getStockShortfalls(processedItems, session);
           warnings.push(...shortfalls);

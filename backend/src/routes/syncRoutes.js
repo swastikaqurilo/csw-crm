@@ -12,6 +12,7 @@ const {
   getPaymentsDelta,
   getExpensesDelta,
   getRawStockDelta, 
+  getRawPurchasesDelta,
 } = require("../controllers/syncController");
 
 router.get("/contacts",  auth, getContactsDelta);
@@ -21,6 +22,7 @@ router.get("/orders",    auth, getOrdersDelta);
 router.get("/payments",  auth, getPaymentsDelta);
 router.get("/expenses",  auth, getExpensesDelta);
 router.get("/raw-stock", auth, getRawStockDelta); 
+router.get("/raw-purchases", auth, getRawPurchasesDelta);
 
 if (process.env.NODE_ENV !== "production") {
   router.post("/_test/write", auth, idempotency(), (req, res) => {

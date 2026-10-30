@@ -17,7 +17,8 @@ const ENQUIRY_PROJECTION = { __v: 0 };
 const ORDER_PROJECTION = { __v: 0 };
 const PAYMENT_PROJECTION = { __v: 0 };
 const EXPENSE_PROJECTION = { __v: 0 };
-const RAW_STOCK_PROJECTION = { __v: 0 };
+const RAW_STOCK_PROJECTION = { __v: 0, movementLog: 0 };
+const RAW_PURCHASE_PROJECTION = { __v: 0 };
 
 function parseDate(value) {
   if (typeof value !== "string" || !value.trim()) return null;
@@ -255,9 +256,36 @@ async function getExpensesDelta(req, res, next) {
 
 async function getRawStockDelta(req, res, next) {
   try {
-    const payload = await deltaFeed(RawStock, RAW_STOCK_PROJECTION, req, res, {
-      softDeleteField: "isDeleted", 
-    });
+    const payload = await deltaFeed(
+      RawStock,
+      RAW_STOCK_PROJECTION,
+      req,
+      res,
+      {
+        softDeleteField: "isActive",
+        softDeleteValue: false,
+      }
+    );
+
+    if (payload) return res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getRawPurchasesDelta(req, res, next) {
+  try {
+    const payload = await deltaFeed(
+      RawPurchase,
+      RAW_PURCHASE_PROJECTION,
+      req,
+      res,
+      {
+        softDeleteField: "isActive",
+        softDeleteValue: false,
+      }
+    );
+
     if (payload) return res.json(payload);
   } catch (error) {
     next(error);
@@ -272,4 +300,5 @@ module.exports = {
   getPaymentsDelta,
   getExpensesDelta,
   getRawStockDelta,
+  getRawPurchasesDelta,
 };

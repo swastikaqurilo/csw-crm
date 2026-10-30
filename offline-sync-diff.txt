@@ -1,0 +1,1121 @@
+﻿diff --git a/frontend/src/db/outbox.js b/frontend/src/db/outbox.js
+index a59b1b9..6170fe5 100644
+--- a/frontend/src/db/outbox.js
++++ b/frontend/src/db/outbox.js
+@@ -1,3 +1,4 @@
++
+ import { db, openDb } from "./database.js";
+ 
+ const MAX_ATTEMPTS = 8;
+@@ -8,27 +9,51 @@ export const OUTBOX_EVENT = "csw:outbox-changed";
+ 
+ let flushing = null;
+ let started = false;
++let intervalId = null;
+ 
+ function emit() {
+-  if (typeof window === "undefined" || typeof window.dispatchEvent !== "function") {
++  if (
++    typeof window === "undefined" ||
++    typeof window.dispatchEvent !== "function"
++  ) {
+     return;
+   }
++
+   window.dispatchEvent(new CustomEvent(OUTBOX_EVENT));
+ }
+ 
++function nowIso() {
++  return new Date().toISOString();
++}
++
+ export function newOperationId() {
+-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
++  if (
++    typeof crypto !== "undefined" &&
++    typeof crypto.randomUUID === "function"
++  ) {
+     return crypto.randomUUID();
+   }
+-  return `op-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
++
++  return `op-${Date.now()}-${Math.random()
++    .toString(16)
++    .slice(2, 10)}`;
+ }
+ 
+ export function collectionFor(url) {
+   const path = String(url || "").split("?")[0];
+-  
++
++  if (/^\/raw-material\/purchases(?:\/|$)/.test(path)) {
++    return "rawPurchases";
++  }
++
++  if (/^\/raw-material(?:\/|$)/.test(path)) {
++    return "rawStock";
++  }
++
+   const match = path.match(
+-    /^\/(enquiries|contacts|follow-ups|products|orders|payments|expenses|raw-material|purchases)(\/|$)/
++    /^\/(enquiries|contacts|follow-ups|products|orders|payments|expenses)(?:\/|$)/
+   );
++
+   return match ? match[1] : null;
+ }
+ 
+@@ -41,7 +66,40 @@ function messageOf(error) {
+ }
+ 
+ function backoffMs(attempts) {
+-  return Math.min(BASE_DELAY_MS * 2 ** Math.max(attempts - 1, 0), MAX_DELAY_MS);
++  return Math.min(
++    BASE_DELAY_MS * 2 ** Math.max(attempts - 1, 0),
++    MAX_DELAY_MS
++  );
++}
++
++function purchaseIdFromActionUrl(url) {
++  const path = String(url || "").split("?")[0];
++
++  const match = path.match(
++    /^\/raw-material\/purchases\/([^/]+)\/(receive|payments)$/
++  );
++
++  return match ? match[1] : null;
++}
++
++function purchaseActionFromUrl(url) {
++  const path = String(url || "").split("?")[0];
++
++  if (/^\/raw-material\/purchases\/[^/]+\/receive$/.test(path)) {
++    return "receive";
++  }
++
++  if (/^\/raw-material\/purchases\/[^/]+\/payments$/.test(path)) {
++    return "payment";
++  }
++
++  return null;
++}
++
++function cachePathForCollection(collection) {
++  if (collection === "rawStock") return "/raw-material";
++  if (collection === "rawPurchases") return "/raw-material/purchases";
++  return `/${collection}`;
+ }
+ 
+ async function patchCachedCollections(url, apply) {
+@@ -49,81 +107,741 @@ async function patchCachedCollections(url, apply) {
+   if (!collection) return;
+ 
+   await openDb();
++
+   await db.transaction("rw", db.cachedRecords, async () => {
+-    const httpRows = await db.cachedRecords.where("module").equals("http").toArray();
+-    const httpAffected = httpRows.filter((row) =>
+-      String(row.recordId || "").startsWith(`/${collection}`)
+-    );
++    const httpRows = await db.cachedRecords
++      .where("module")
++      .equals("http")
++      .toArray();
++
++    const httpAffected = httpRows.filter((row) => {
++      const recordId = String(row.recordId || "");
++      const path = cachePathForCollection(collection);
+ 
+-    const enqRows =
++      return (
++        recordId.startsWith(path) &&
++        !(
++          collection === "rawStock" &&
++          recordId.startsWith("/raw-material/purchases")
++        )
++      );
++    });
++
++    const dedicatedRows =
+       collection === "enquiries"
+-        ? await db.cachedRecords.where("module").equals("enquiries").toArray()
++        ? await db.cachedRecords
++            .where("module")
++            .equals("enquiries")
++            .toArray()
+         : [];
+ 
+-    for (const row of [...httpAffected, ...enqRows]) {
++    for (const row of [...httpAffected, ...dedicatedRows]) {
+       const payload = row.data;
++
+       if (!payload || !Array.isArray(payload.data)) continue;
++
+       const next = apply(payload.data);
+       if (!next) continue;
++
+       await db.cachedRecords.put({
+         ...row,
+         data: { ...payload, data: next },
+-        updatedAt: new Date().toISOString(),
++        updatedAt: nowIso(),
+       });
+     }
+   });
+ }
+ 
+-export async function applyOptimistic({ method, url, data, operationId }) {
++async function patchDedicatedRecord(module, recordId, updater) {
++  await openDb();
++
++  const id = String(recordId);
++  const existing = await db.cachedRecords
++    .where("[module+recordId]")
++    .equals([module, id])
++    .first();
++
++  if (!existing) return null;
++
++  const nextData = updater(existing.data);
++  if (!nextData) return null;
++
++  await db.cachedRecords.update(existing.localId, {
++    data: nextData,
++    updatedAt: Date.now(),
++  });
++
++  return nextData;
++}
++
++async function upsertDedicatedRecord(module, record) {
++  if (!record?._id) return;
++
++  await openDb();
++
++  const recordId = String(record._id);
++  const existing = await db.cachedRecords
++    .where("[module+recordId]")
++    .equals([module, recordId])
++    .first();
++
++  const row = {
++    ...(existing || {}),
++    module,
++    recordId,
++    data: record,
++    updatedAt: Date.now(),
++  };
++
++  if (existing?.localId != null) {
++    row.localId = existing.localId;
++  }
++
++  await db.cachedRecords.put(row);
++}
++
++async function removeDedicatedRecord(module, recordId) {
++  await openDb();
++
++  const row = await db.cachedRecords
++    .where("[module+recordId]")
++    .equals([module, String(recordId)])
++    .first();
++
++  if (row) {
++    await db.cachedRecords.delete(row.localId);
++  }
++}
++
++async function getCachedPurchase(purchaseId) {
++  await openDb();
++
++  const id = String(purchaseId);
++
++  const dedicated = await db.cachedRecords
++    .where("[module+recordId]")
++    .equals(["rawPurchases", id])
++    .first();
++
++  if (dedicated?.data) return dedicated.data;
++
++  const httpRows = await db.cachedRecords
++    .where("module")
++    .equals("http")
++    .toArray();
++
++  for (const row of httpRows) {
++    if (
++      !String(row.recordId || "").startsWith(
++        "/raw-material/purchases"
++      )
++    ) {
++      continue;
++    }
++
++    const payload = row.data;
++    if (!Array.isArray(payload?.data)) continue;
++
++    const purchase = payload.data.find(
++      (item) => String(item?._id) === id
++    );
++
++    if (purchase) return purchase;
++  }
++
++  return null;
++}
++
++async function patchRawPurchaseCaches(purchaseId, updater) {
++  const id = String(purchaseId || "");
++  if (!id) return;
++
++  await openDb();
++
++  await db.transaction("rw", db.cachedRecords, async () => {
++    const dedicated = await db.cachedRecords
++      .where("[module+recordId]")
++      .equals(["rawPurchases", id])
++      .first();
++
++    if (dedicated) {
++      const next = updater(dedicated.data);
++
++      if (next) {
++        await db.cachedRecords.put({
++          ...dedicated,
++          data: next,
++          updatedAt: nowIso(),
++        });
++      }
++    }
++
++    const httpRows = await db.cachedRecords
++      .where("module")
++      .equals("http")
++      .toArray();
++
++    for (const row of httpRows) {
++      if (
++        !String(row.recordId || "").startsWith(
++          "/raw-material/purchases"
++        )
++      ) {
++        continue;
++      }
++
++      const payload = row.data;
++      if (!payload || !Array.isArray(payload.data)) continue;
++
++      const nextList = payload.data.map((purchase) =>
++        String(purchase?._id) === id
++          ? updater(purchase)
++          : purchase
++      );
++
++      await db.cachedRecords.put({
++        ...row,
++        data: { ...payload, data: nextList },
++        updatedAt: nowIso(),
++      });
++    }
++  });
++}
++
++async function applyPurchaseActionOptimistically({
++  purchaseId,
++  action,
++  operationId,
++  data,
++}) {
++  const purchase = await getCachedPurchase(purchaseId);
++
++  if (!purchase) {
++    throw new Error(
++      "Purchase is not cached. Open the purchase while online before editing it offline."
++    );
++  }
++
++  // Do not repeat an already-applied receipt.
++  if (action === "receive" && purchase.status === "Received") {
++    return purchase;
++  }
++
++  if (action === "receive" && purchase.status !== "Pending") {
++    throw new Error(
++      `Cannot receive purchase with status "${purchase.status}".`
++    );
++  }
++
++  if (action === "payment" && purchase.status === "Cancelled") {
++    throw new Error("Cannot pay for a cancelled purchase.");
++  }
++
++  if (
++    purchase.__pendingActionId &&
++    purchase.__pendingActionId !== operationId
++  ) {
++    throw new Error(
++      "Another offline action is already pending for this purchase."
++    );
++  }
++
++  let updatedPurchase;
++
++  if (action === "receive") {
++    const materialId =
++      typeof purchase.material === "object"
++        ? purchase.material?._id
++        : purchase.material;
++
++    if (!materialId) {
++      throw new Error("The cached purchase has no material ID.");
++    }
++
++    const receivedQty = Number(purchase.quantity);
++
++    if (!Number.isFinite(receivedQty) || receivedQty <= 0) {
++      throw new Error("The purchase quantity is invalid.");
++    }
++
++    let stockUpdated = false;
++
++    await patchCachedCollections("/raw-material", (list) =>
++      list.map((stock) => {
++        if (String(stock?._id) !== String(materialId)) {
++          return stock;
++        }
++
++        const beforeQty = Number(stock.quantity);
++
++        if (!Number.isFinite(beforeQty)) {
++          throw new Error("Cached raw-stock quantity is invalid.");
++        }
++
++        stockUpdated = true;
++
++        return {
++          ...stock,
++          quantity: beforeQty + receivedQty,
++          lastReceivedAt: nowIso(),
++          movementLog: [
++            ...(Array.isArray(stock.movementLog)
++              ? stock.movementLog
++              : []),
++            {
++              type: "purchase-received",
++              quantity: receivedQty,
++              unitAtTime: purchase.unit || stock.unit,
++              beforeQty,
++              afterQty: beforeQty + receivedQty,
++              reason: "Purchase received (offline)",
++              refType: "Purchase",
++              refId: String(purchase._id),
++              refLabel:
++                purchase.purchaseNumber || String(purchase._id),
++              at: nowIso(),
++              localOperationId: operationId,
++              pendingSync: true,
++            },
++          ],
++        };
++      })
++    );
++
++    const dedicatedStock = await patchDedicatedRecord(
++      "rawStock",
++      materialId,
++      (stock) => {
++        const beforeQty = Number(stock?.quantity);
++
++        if (!Number.isFinite(beforeQty)) {
++          throw new Error("Cached raw-stock quantity is invalid.");
++        }
++
++        stockUpdated = true;
++
++        return {
++          ...stock,
++          quantity: beforeQty + receivedQty,
++          lastReceivedAt: nowIso(),
++          movementLog: [
++            ...(Array.isArray(stock.movementLog)
++              ? stock.movementLog
++              : []),
++            {
++              type: "purchase-received",
++              quantity: receivedQty,
++              unitAtTime: purchase.unit || stock.unit,
++              beforeQty,
++              afterQty: beforeQty + receivedQty,
++              reason: "Purchase received (offline)",
++              refType: "Purchase",
++              refId: String(purchase._id),
++              refLabel:
++                purchase.purchaseNumber || String(purchase._id),
++              at: nowIso(),
++              localOperationId: operationId,
++              pendingSync: true,
++            },
++          ],
++        };
++      }
++    );
++
++    if (!stockUpdated || !dedicatedStock) {
++      throw new Error(
++        "The raw-stock record is not cached. Refresh raw materials while online before receiving this purchase offline."
++      );
++    }
++
++    updatedPurchase = {
++      ...purchase,
++      status: "Received",
++      receivedAt: nowIso(),
++      __pending: true,
++      __pendingReceive: true,
++      __pendingActionId: operationId,
++    };
++  } else if (action === "payment") {
++    const amount = Number(data?.amount);
++    const total = Number(purchase.totalAmount);
++
++    if (!Number.isFinite(amount) || amount <= 0) {
++      throw new Error("Payment amount must be greater than zero.");
++    }
++
++    if (!Number.isFinite(total) || total < 0) {
++      throw new Error("Cached purchase total is invalid.");
++    }
++
++    const payments = Array.isArray(purchase.payments)
++      ? purchase.payments
++      : [];
++
++    if (
++      payments.some(
++        (payment) => payment?.localOperationId === operationId
++      )
++    ) {
++      return purchase;
++    }
++
++    const paidBefore = payments.reduce(
++      (sum, payment) => sum + Number(payment.amount || 0),
++      0
++    );
++
++    if (amount > total - paidBefore + 0.01) {
++      throw new Error("Payment exceeds the remaining balance.");
++    }
++
++    const amountPaid = paidBefore + amount;
++
++    const paymentStatus =
++      amountPaid <= 0
++        ? "Pending"
++        : amountPaid + 0.01 < total
++          ? "Partial"
++          : "Paid";
++
++    updatedPurchase = {
++      ...purchase,
++      payments: [
++        ...payments,
++        {
++          _id: `pending:${operationId}`,
++          amount,
++          paidAt: nowIso(),
++          method: data?.method,
++          transactionId: data?.transactionId,
++          chequeNumber: data?.chequeNumber,
++          bankName: data?.bankName,
++          notes: data?.notes,
++          localOperationId: operationId,
++          pendingSync: true,
++        },
++      ],
++      amountPaid,
++      paymentStatus,
++      remainingAmount: Math.max(0, total - amountPaid),
++      __pending: true,
++      __pendingPayment: true,
++      __pendingActionId: operationId,
++    };
++  } else {
++    return null;
++  }
++
++  await upsertDedicatedRecord("rawPurchases", updatedPurchase);
++
++  await patchRawPurchaseCaches(
++    purchaseId,
++    () => updatedPurchase
++  );
++
++  return updatedPurchase;
++}
++
++export async function applyOptimistic({
++  method,
++  url,
++  data,
++  operationId,
++}) {
+   const verb = String(method || "").toUpperCase();
+-  const segments = String(url || "").split("?")[0].split("/").filter(Boolean);
+-  const isCollection = segments.length === 1;
++  const path = String(url || "").split("?")[0];
++  const segments = path.split("/").filter(Boolean);
++
++  if (verb === "POST") {
++    const purchaseId = purchaseIdFromActionUrl(path);
++    const action = purchaseActionFromUrl(path);
++
++    if (purchaseId && action) {
++      return applyPurchaseActionOptimistically({
++        purchaseId,
++        action,
++        operationId,
++        data,
++      });
++    }
++  }
++
++  if (
++    verb === "POST" &&
++    /^\/raw-material\/purchases\/?$/.test(path)
++  ) {
++    const optimistic = {
++      ...(data || {}),
++      _id: `pending:${operationId}`,
++      __opId: operationId,
++      __pending: true,
++      status: "Pending",
++      amountPaid: 0,
++      createdAt: nowIso(),
++    };
++
++    await patchCachedCollections(path, (list) => [
++      optimistic,
++      ...list.filter((item) => item.__opId !== operationId),
++    ]);
++
++    await upsertDedicatedRecord("rawPurchases", optimistic);
+ 
+-  if (verb === "POST" && isCollection) {
++    return optimistic;
++  }
++
++  if (verb === "POST" && /^\/raw-material\/?$/.test(path)) {
++    return null;
++  }
++
++  if (verb === "POST" && segments.length === 1) {
+     const optimistic = {
+       ...(data || {}),
+       _id: `pending:${operationId}`,
+       __opId: operationId,
+       __pending: true,
+-      createdAt: new Date().toISOString(),
++      createdAt: nowIso(),
+     };
+ 
+-    await patchCachedCollections(url, (list) => [optimistic, ...list]);
++    await patchCachedCollections(path, (list) => [
++      optimistic,
++      ...list.filter((item) => item.__opId !== operationId),
++    ]);
++
+     return optimistic;
+   }
+ 
++  // Update an existing record in cached HTTP lists.
+   if (verb === "PUT" || verb === "PATCH") {
+-    const id = segments[1];
+-    await patchCachedCollections(url, (list) =>
++    const id = segments[segments.length - 1];
++
++    await patchCachedCollections(path, (list) =>
+       list.map((item) =>
+-        String(item._id) === String(id) ? { ...item, ...(data || {}) } : item
++        String(item._id) === String(id)
++          ? { ...item, ...(data || {}), __pending: true }
++          : item
+       )
+     );
++
+     return null;
+   }
+ 
++  // Remove a record from cached HTTP lists.
+   if (verb === "DELETE") {
+-    const id = segments[1];
+-    await patchCachedCollections(url, (list) =>
++    const id = segments[segments.length - 1];
++
++    await patchCachedCollections(path, (list) =>
+       list.filter((item) => String(item._id) !== String(id))
+     );
++
+     return null;
+   }
+ 
+   return null;
+ }
+ 
+-// Once the queued create is accepted, swap the optimistic row for the real one.
+ async function reconcileCreated(row, response) {
+   const created = response?.data?.data;
+-  if (!created || !created._id) return;
++  if (!created?._id) return;
++
++  const path = String(row.url || "").split("?")[0];
++
++  const isRawPurchase =
++    /^\/raw-material\/purchases\/?$/.test(path);
++
++  const isRawMaterial =
++    /^\/raw-material\/?$/.test(path);
+ 
+   await patchCachedCollections(row.url, (list) =>
+-    list.map((item) => (item.__opId === row.operationId ? created : item))
++    list.map((item) =>
++      item.__opId === row.operationId
++        ? { ...created, __pending: false, __opId: undefined }
++        : item
++    )
+   );
++
++  if (isRawMaterial) {
++    const temporaryId = `pending:${row.operationId}`;
++
++    await db.transaction("rw", db.cachedRecords, async () => {
++      await removeDedicatedRecord("rawStock", temporaryId);
++
++      await upsertDedicatedRecord("rawStock", {
++        ...created,
++        __pending: false,
++        __opId: undefined,
++      });
++    });
++
++    return;
++  }
++
++  if (!isRawPurchase) return;
++
++  const temporaryId = `pending:${row.operationId}`;
++  const realId = String(created._id);
++
++  await openDb();
++
++  await db.transaction("rw", db.syncQueue, async () => {
++    const queued = await db.syncQueue.toArray();
++
++    for (const operation of queued) {
++      if (operation.id === row.id) continue;
++
++      const url = String(operation.url || "");
++      const escapedId = temporaryId.replace(
++        /[.*+?^${}()|[\]\\]/g,
++        "\\$&"
++      );
++
++      const nextUrl = url.replace(
++        new RegExp(`(^|/)${escapedId}(?=/|\\?|$)`),
++        (_, prefix) => `${prefix}${realId}`
++      );
++
++      if (nextUrl !== url) {
++        await db.syncQueue.update(operation.id, {
++          url: nextUrl,
++        });
++      }
++    }
++  });
++
++  await removeDedicatedRecord("rawPurchases", temporaryId);
++
++  await upsertDedicatedRecord("rawPurchases", {
++    ...created,
++    __pending: false,
++    __opId: undefined,
++  });
++}
++
++async function reconcilePurchaseAction(row, response) {
++  const purchaseId = purchaseIdFromActionUrl(row.url);
++  const action = purchaseActionFromUrl(row.url);
++
++  if (!purchaseId || !action) return;
++
++  const result = response?.data?.data;
++
++  const returnedPurchase =
++    result?.purchase ||
++    (String(result?._id || "") === String(purchaseId)
++      ? result
++      : null);
++
++  if (!returnedPurchase) {
++    throw new Error(
++      "Server response did not contain the updated purchase; keeping the operation for reconciliation."
++    );
++  }
++
++  await patchRawPurchaseCaches(purchaseId, (current) => {
++    if (!current) return current;
++
++    // Do not overwrite a newer local action.
++    if (current.__pendingActionId !== row.operationId) {
++      return current;
++    }
++
++    const next = {
++      ...returnedPurchase,
++      __pending: false,
++      __pendingReceive: false,
++      __pendingPayment: false,
++    };
++
++    delete next.__pendingActionId;
++
++    return next;
++  });
++
++  if (action === "receive") {
++    const material = returnedPurchase.material;
++    const materialId =
++      typeof material === "object" ? material?._id : material;
++
++    const authoritativeQty =
++      typeof material === "object" ? Number(material?.quantity) : NaN;
++
++    if (
++      materialId &&
++      Number.isFinite(authoritativeQty)
++    ) {
++      await patchDedicatedRecord(
++        "rawStock",
++        materialId,
++        (stock) => ({
++          ...stock,
++          quantity: authoritativeQty,
++          lastReceivedAt:
++            material.lastReceivedAt || stock.lastReceivedAt,
++          movementLog: (stock.movementLog || []).map((movement) =>
++            movement.localOperationId === row.operationId
++              ? {
++                  ...movement,
++                  pendingSync: false,
++                }
++              : movement
++          ),
++        })
++      );
++
++      await patchCachedCollections("/raw-material", (list) =>
++        list.map((stock) =>
++          String(stock?._id) === String(materialId)
++            ? {
++                ...stock,
++                quantity: authoritativeQty,
++                lastReceivedAt:
++                  material.lastReceivedAt || stock.lastReceivedAt,
++                movementLog: (stock.movementLog || []).map((movement) =>
++                  movement.localOperationId === row.operationId
++                    ? {
++                        ...movement,
++                        pendingSync: false,
++                      }
++                    : movement
++                ),
++              }
++            : stock
++        )
++      );
++    }
++  }
++}
++
++async function clearFailedPurchaseAction(row) {
++  const purchaseId = purchaseIdFromActionUrl(row.url);
++  if (!purchaseId) return;
++
++  await patchRawPurchaseCaches(purchaseId, (purchase) => {
++    if (!purchase) return purchase;
++
++    // Only clear the flag belonging to this operation.
++    if (purchase.__pendingActionId !== row.operationId) {
++      return purchase;
++    }
++
++    const next = { ...purchase };
++
++    delete next.__pendingActionId;
++    delete next.__pendingReceive;
++    delete next.__pendingPayment;
++
++    next.__pending = false;
++
++    return next;
++  });
+ }
+ 
+-export async function enqueue({ operationId, method, url, data }) {
++export async function enqueue({
++  operationId,
++  method,
++  url,
++  data,
++}) {
+   await openDb();
+ 
+   const row = {
+@@ -135,7 +853,7 @@ export async function enqueue({ operationId, method, url, data }) {
+     status: "pending",
+     attempts: 0,
+     lastError: null,
+-    createdAt: new Date().toISOString(),
++    createdAt: nowIso(),
+     nextAttemptAt: 0,
+   };
+ 
+@@ -151,12 +869,18 @@ export async function enqueue({ operationId, method, url, data }) {
+ 
+ export async function pendingOperations() {
+   await openDb();
+-  return db.syncQueue.where("status").equals("pending").sortBy("id");
++
++  return db.syncQueue
++    .where("status")
++    .equals("pending")
++    .sortBy("id");
+ }
+ 
+ export async function outboxCounts() {
+   await openDb();
++
+   const all = await db.syncQueue.toArray();
++
+   return {
+     pending: all.filter((row) => row.status === "pending").length,
+     failed: all.filter((row) => row.status === "failed").length,
+@@ -165,13 +889,25 @@ export async function outboxCounts() {
+ 
+ export async function failedOperations() {
+   await openDb();
+-  return db.syncQueue.where("status").equals("failed").sortBy("id");
++
++  return db.syncQueue
++    .where("status")
++    .equals("failed")
++    .sortBy("id");
+ }
+ 
+ export async function discard(operationId) {
+   await openDb();
+-  const row = await db.syncQueue.where("operationId").equals(operationId).first();
+-  if (row) await db.syncQueue.delete(row.id);
++
++  const row = await db.syncQueue
++    .where("operationId")
++    .equals(operationId)
++    .first();
++
++  if (row) {
++    await db.syncQueue.delete(row.id);
++  }
++
+   emit();
+ }
+ 
+@@ -182,7 +918,9 @@ async function defaultSender(operation) {
+     method: operation.method,
+     url: operation.url,
+     data: operation.data ?? undefined,
+-    headers: { "Idempotency-Key": operation.operationId },
++    headers: {
++      "Idempotency-Key": operation.operationId,
++    },
+     __fromOutbox: true,
+   });
+ }
+@@ -191,48 +929,131 @@ export async function flush({ send } = {}) {
+   if (flushing) return flushing;
+ 
+   flushing = (async () => {
++    await openDb();
++
+     const sender = send || defaultSender;
+     const rows = await pendingOperations();
+-    const now = Date.now();
+ 
+     let succeeded = 0;
+     let failed = 0;
+     let deferred = 0;
+-    let authError = false; 
++    let authError = false;
++
++    for (const originalRow of rows) {
++      const row = await db.syncQueue.get(originalRow.id);
++
++      if (!row || row.status !== "pending") continue;
+ 
+-    for (const row of rows) {
+-      if (row.nextAttemptAt && row.nextAttemptAt > now) {
++      if (row.nextAttemptAt && row.nextAttemptAt > Date.now()) {
+         deferred += 1;
+         continue;
+       }
+ 
+       try {
+         const response = await sender(row);
++
++        // Reconcile cached data before deleting the queue entry.
++        await reconcileCreated(row, response);
++
++        if (purchaseIdFromActionUrl(row.url)) {
++          await reconcilePurchaseAction(row, response);
++        }
++
+         await db.syncQueue.delete(row.id);
+-        await reconcileCreated(row, response).catch(() => {});
+         succeeded += 1;
+       } catch (error) {
+         const status = error?.response?.status;
++        const attempts = (row.attempts || 0) + 1;
++        const message = messageOf(error);
+ 
+         if (status === 401) {
++          await db.syncQueue.update(row.id, {
++            status: "pending",
++            attempts,
++            lastError: message,
++            nextAttemptAt: Date.now() + BASE_DELAY_MS,
++          });
++
+           deferred += 1;
+           authError = true;
+           break;
+         }
++
++        const permanent =
++          typeof status === "number" &&
++          status >= 400 &&
++          status < 500;
++
++        const exhausted = attempts >= MAX_ATTEMPTS;
++
++        if (permanent || exhausted) {
++          await clearFailedPurchaseAction(row);
++        }
++
++        await db.syncQueue.update(row.id, {
++          status: permanent || exhausted ? "failed" : "pending",
++          attempts,
++          lastError: message,
++          nextAttemptAt:
++            permanent || exhausted
++              ? 0
++              : Date.now() + backoffMs(attempts),
++        });
++
++        if (permanent || exhausted) {
++          failed += 1;
++        } else {
++          deferred += 1;
++        }
+       }
+     }
+ 
+     emit();
+-    // ≡ƒæê RETURN THE FLAG
+-    return { succeeded, failed, deferred, remaining: rows.length - succeeded, authError };
++
++    return {
++      succeeded,
++      failed,
++      deferred,
++      remaining: rows.length - succeeded,
++      authError,
++    };
+   })().finally(() => {
+     flushing = null;
+   });
+ 
+   return flushing;
+ }
++
++export async function reconcileOnlineWrite({
++  method,
++  url,
++  operationId,
++  response,
++}) {
++  const row = {
++    method: String(method || "").toUpperCase(),
++    url,
++    operationId,
++  };
++
++  if (purchaseIdFromActionUrl(url)) {
++    await reconcilePurchaseAction(row, response);
++    return;
++  }
++
++  if (
++    row.method === "POST" &&
++    /^\/raw-material\/purchases\/?$/.test(
++      String(url || "").split("?")[0]
++    )
++  ) {
++    await reconcileCreated(row, response);
++  }
++}
++
+ export function startOutbox() {
+   if (started || typeof window === "undefined") return;
++
+   started = true;
+ 
+   const kick = () => {
+@@ -244,10 +1065,16 @@ export function startOutbox() {
+   };
+ 
+   window.addEventListener("online", kick);
++
+   document.addEventListener("visibilitychange", () => {
+-    if (document.visibilityState === "visible") kick();
++    if (document.visibilityState === "visible") {
++      kick();
++    }
+   });
+-  window.setInterval(kick, 30_000);
++
++  if (intervalId === null) {
++    intervalId = window.setInterval(kick, 30_000);
++  }
+ 
+   kick();
+ }
+diff --git a/frontend/src/db/syncEngine.js b/frontend/src/db/syncEngine.js
+index 7c5a23a..f17f337 100644
+--- a/frontend/src/db/syncEngine.js
++++ b/frontend/src/db/syncEngine.js
+@@ -10,6 +10,7 @@ const MODULES = {
+   payments:  "/sync/payments",
+   expenses:  "/sync/expenses",
+   rawStock:  "/sync/raw-stock", 
++  rawPurchases: "/sync/raw-purchases",
+ 
+ };
+ 
+@@ -195,7 +196,7 @@ export function syncAll() {
+   })().finally(() => {
+     activeSync = null;
+   });
+-  
++
+   return activeSync;
+ }
+ 

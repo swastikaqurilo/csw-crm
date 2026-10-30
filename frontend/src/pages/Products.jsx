@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Pagination from "../components/Pagination";
 import DateFilter from "../components/DateFilter";
+import { db } from "../db/database";
+import { flush, outboxCounts, OUTBOX_EVENT } from "../offline/index.js";
 import {
   Package, Plus, X, RefreshCw, Save, AlertTriangle, CheckCircle2,
-  CalendarRange, Pencil, Trash2, Layers, Boxes, PackageX,
+  CalendarRange, Pencil, Trash2, Layers, Boxes, PackageX, CloudOff,
 } from "lucide-react";
 import {
   getProductProductions, createProductProduction, updateProductProduction,
@@ -32,7 +34,71 @@ const fmtDateShort = (v) => parseDate(v)?.toLocaleDateString("en-IN", { weekday:
 const fmtDateLong = (v) => parseDate(v)?.toLocaleDateString("en-IN", { weekday: "long", day: "2-digit", month: "long", year: "numeric" }) || "—";
 const fmtNum = (v) => Number(v || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 });
 const fmtMoney = (v) => Number(v || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const errMsg = (err, fb) => err?.response?.data?.message || err?.message || fb;
+const errMsg = (err, fb) =>
+  err?.response?.data?.message ||
+  (!err?.response && err?.message && err.message !== "Network Error" ? err.message : fb);
+
+const isQueued = (res) => {
+  const r = res?.data?.data;
+  return (
+    res?.data?.offline === true ||
+    /queued|offline/i.test(res?.statusText || "") ||
+    r?.queued === true ||
+    r?.__pending === true
+  );
+};
+
+/* ── small helpers for offline record cache ── */
+async function cacheRecord(module, record) {
+  try {
+    await db.cachedRecords.put({
+      module,
+      recordId: String(record._id),
+      data: record,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch { /* ignore */ }
+}
+async function uncacheRecord(module, id) {
+  try {
+    await db.cachedRecords.where("[module+recordId]").equals([module, String(id)]).delete();
+  } catch { /* ignore */ }
+}
+async function patchCachedRecord(module, id, patch) {
+  try {
+    const row = await db.cachedRecords.where("[module+recordId]").equals([module, String(id)]).first();
+    if (!row) return;
+    await db.cachedRecords.put({ ...row, data: { ...row.data, ...patch }, updatedAt: new Date().toISOString() });
+  } catch { /* ignore */ }
+}
+
+const SIZE_KEYS = [["2kg","qty2kg"],["5kg","qty5kg"],["8kg","qty8kg"],["10kg","qty10kg"]];
+
+async function applyOfflineStockDelta(payload, oldEntry) {
+  const rows = await db.cachedRecords.where("module").equals("productStock").toArray().catch(() => []);
+  const now = new Date().toISOString();
+  const updates = SIZE_KEYS
+    .map(([size, key]) => ({ size, delta: Number(payload[key] || 0) - Number(oldEntry?.[key] || 0) }))
+    .filter(u => u.delta !== 0);
+  if (!updates.length) return;
+
+  setStock(prev => prev.map(s => {
+    const u = updates.find(x => x.size === s.size);
+    return u
+      ? { ...s, quantity: Math.max(Number(s.quantity || 0) + u.delta, 0), lastReceivedAt: now, __pending: true }
+      : s;
+  }));
+
+  for (const { size, delta } of updates) {
+    const row = rows.find(r => r.data?.size === size);
+    if (!row) continue;
+    await db.cachedRecords.put({
+      ...row,
+      data: { ...row.data, quantity: Math.max(Number(row.data.quantity || 0) + delta, 0), lastReceivedAt: now, __pending: true },
+      updatedAt: now,
+    });
+  }
+}
 
 function getEntryMetrics(entry) {
   let totalReels = 0, totalWtNoReel = 0, totalWtWithReel = 0;
@@ -188,9 +254,6 @@ const StockStrip = ({ item, thirdLabel = "Available", size = "sm" }) => {
   );
 };
 
-/* ================================================================
- *  MODAL SHELL
- * ================================================================ */
 function Modal({ onClose, busy, width = "sm:max-w-md", z = "z-50", children }) {
   return (
     <div className={OVERLAY.replace("z-50", z)} onClick={() => !busy && onClose()}>
@@ -233,9 +296,6 @@ function ModalFooter({ onCancel, formId, busy, saveLabel = "Save", icon: Icon = 
   );
 }
 
-/* ================================================================
- *  KPI CONFIG
- * ================================================================ */
 const KPIS = [
   { id: "stockTotal", label: "Total Stock (all sizes)", icon: Package, top: "bg-gradient-to-r from-sky-400 to-blue-600", bg: "bg-gradient-to-br from-sky-50 to-blue-100 text-blue-700" },
   { id: "totalKg", label: "Total Kg Produced", icon: Boxes, top: "bg-gradient-to-r from-emerald-400 to-teal-600", bg: "bg-gradient-to-br from-emerald-50 to-teal-100 text-emerald-700" },
@@ -261,55 +321,123 @@ function Products() {
   const patchFilters = (patch) => setFilters((f) => ({ ...f, page: patch.page ?? f.page, ...patch }));
 
   const [detailId, setDetailId] = useState(null);
-  const [prodModal, setProdModal] = useState(null); 
+  const [prodModal, setProdModal] = useState(null);
   const [stockModal, setStockModal] = useState(null);
-  const [conflict, setConflict] = useState(null); 
-  
-const fetchEntries = useCallback(async () => {
+  const [conflict, setConflict] = useState(null);
+
+  const fetchEntries = useCallback(async ({ silent } = {}) => {
+    try {
+      if (!silent) setEntriesLoading(true);
+      const allEntries = [];
+      let page = 1, totalPages = 1;
+      do {
+        const response = await getProductProductions({ page, limit: 200 });
+        const body = response?.data;
+        const batch = Array.isArray(body?.data) ? body.data : [];
+        allEntries.push(...batch);
+        totalPages = Math.max(Number(body?.pages) || 1, 1);
+        page += 1;
+      } while (page <= totalPages);
+      setEntries(allEntries);
+      // persist non-pending entries to offline cache (best-effort)
+      for (const item of allEntries) {
+        if (!item.__pending) await cacheRecord("productProductions", item);
+      }
+    } catch (err) {
+      if (!navigator.onLine) {
+        const cached = await db.cachedRecords.where("module").equals("productProductions").toArray().catch(() => []);
+        if (cached.length > 0) {
+          setEntries(cached.map((row) => row.data).sort((a, b) => new Date(b.date) - new Date(a.date)));
+        } else {
+          flashMsg({ error: "You are offline. Production data has not been downloaded yet." });
+        }
+      } else {
+        flashMsg({ error: errMsg(err, "Failed to load production entries") });
+      }
+    } finally {
+      if (!silent) setEntriesLoading(false);
+    }
+  }, []);
+
+  const fetchStock = useCallback(async ({ silent } = {}) => {
   try {
-    setEntriesLoading(true);
+    if (!silent) setStockLoading(true);
 
-    const allEntries = [];
-    let page = 1;
-    let totalPages = 1;
+    const res = await getProductStock();
+    const list = Array.isArray(res?.data?.data) ? res.data.data : [];
 
-    do {
-      const response = await getProductProductions({
-        page,
-        limit: 200,
-      });
+    setStock(list);
 
-      const body = response?.data;
-      const batch = Array.isArray(body?.data) ? body.data : [];
-
-      allEntries.push(...batch);
-      totalPages = Math.max(Number(body?.pages) || 1, 1);
-      page += 1;
-    } while (page <= totalPages);
-
-    setEntries(allEntries);
+    // Persist to dedicated offline cache (best-effort)
+    for (const item of list) {
+      if (!item.__pending) {
+        await cacheRecord("productStock", item);
+      }
+    }
   } catch (err) {
-    flashMsg({
-      error: errMsg(err, "Failed to load production entries"),
-    });
+    if (!navigator.onLine) {
+      // 1. Prefer dedicated productStock records (written by outbox + this function)
+      const dedicated = await db.cachedRecords
+        .where("module")
+        .equals("productStock")
+        .toArray()
+        .catch(() => []);
+
+      if (dedicated.length > 0) {
+        setStock(
+          dedicated
+            .map((row) => row.data)
+            .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")))
+        );
+        return;
+      }
+
+      // 2. Fallback: look for the HTTP-cached list response
+      const httpRows = await db.cachedRecords
+        .where("module")
+        .equals("http")
+        .toArray()
+        .catch(() => []);
+
+      const hit = httpRows.find(
+        (r) => String(r.recordId || "").split("?")[0] === "/products/stock"
+      );
+
+      const data = hit?.data?.data;
+      if (Array.isArray(data) && data.length > 0) {
+        setStock(data);
+        return;
+      }
+
+      flashMsg({
+        error: "You are offline. Product stock has not been downloaded yet.",
+      });
+    } else {
+      flashMsg({ error: errMsg(err, "Failed to load product stock") });
+    }
   } finally {
-    setEntriesLoading(false);
+    if (!silent) setStockLoading(false);
   }
 }, []);
 
-  const fetchStock = useCallback(async () => {
-    try { setStockLoading(true); setStock((await getProductStock()).data?.data || []); }
-    catch (err) { flashMsg({ error: errMsg(err, "Failed to load product stock") }); }
-    finally { setStockLoading(false); }
-  }, []);
-
-  const loadWorkers = useCallback(async () => {
+  const loadWorkers = useCallback(async ({ silent } = {}) => {
     try {
-      setWorkersLoading(true);
+      if (!silent) setWorkersLoading(true);
       const res = await getWorkers({ status: "Active", payType: "Variable", limit: 100 });
-      setWorkers(res?.data?.data || []);
-    } catch (err) { console.error("Failed to load workers:", err); setWorkers([]); }
-    finally { setWorkersLoading(false); }
+      const data = res?.data?.data || [];
+      setWorkers(data);
+      for (const w of data) await cacheRecord("workers", w);
+    } catch (err) {
+      if (!navigator.onLine) {
+        const cached = await db.cachedRecords.where("module").equals("workers").toArray().catch(() => []);
+        if (cached.length > 0) setWorkers(cached.map((row) => row.data));
+      } else {
+        console.error("Failed to load workers:", err);
+        setWorkers([]);
+      }
+    } finally {
+      if (!silent) setWorkersLoading(false);
+    }
   }, []);
 
   const loadAttendance = useCallback(async (date) => {
@@ -321,15 +449,35 @@ const fetchEntries = useCallback(async () => {
         ? (rec.absentWorkers || []).map((w) => String(typeof w === "object" ? w._id : w))
         : [];
       setAbsentIds(new Set(ids));
-    } catch (err) { console.error("Failed to load attendance:", err); setAbsentIds(new Set()); }
-    finally { setAttendanceLoading(false); }
+    } catch (err) {
+      // offline / failure → don't block submission; server will validate
+      setAbsentIds(new Set());
+    } finally {
+      setAttendanceLoading(false);
+    }
   }, []);
 
   const refreshAll = useCallback(async () => {
+    if (navigator.onLine) {
+      try { await flush(); } catch { /* ignore */ }
+    }
     await Promise.all([fetchEntries(), fetchStock(), loadWorkers()]);
   }, [fetchEntries, fetchStock, loadWorkers]);
 
   useEffect(() => { refreshAll(); }, [refreshAll]);
+
+  /* sync drain → silent refresh */
+  useEffect(() => {
+    const onOutboxChange = async () => {
+      if (!navigator.onLine) return;
+      const { pending } = await outboxCounts();
+      if (pending > 0) return;
+      fetchEntries({ silent: true });
+      fetchStock({ silent: true });
+    };
+    window.addEventListener(OUTBOX_EVENT, onOutboxChange);
+    return () => window.removeEventListener(OUTBOX_EVENT, onOutboxChange);
+  }, [fetchEntries, fetchStock]);
 
   useEffect(() => {
     if (!flash.success) return;
@@ -405,9 +553,7 @@ const fetchEntries = useCallback(async () => {
   }, [prodModal]);
 
   /* ── production form ── */
-  const openAdd = () => {
-    setProdModal({ editing: null, form: blankForm(), workerRows: [] });
-  };
+  const openAdd = () => setProdModal({ editing: null, form: blankForm(), workerRows: [] });
 
   const openEdit = (entry) => {
     setProdModal({
@@ -459,59 +605,110 @@ const fetchEntries = useCallback(async () => {
   };
 
   const submitProduction = async (e) => {
-    e.preventDefault();
-    if (saving) return;
-    const workerError = validateWorkerProduction();
-    if (workerError) return flashMsg({ error: workerError });
+  e.preventDefault();
+  if (saving) return;
 
-    setSaving(true); flashMsg({ error: "", success: "" });
-    const { editing, form, workerRows } = prodModal;
-    const payload = {
-      date: form.date,
-      qty2kg: Number(form.qty2kg) || 0,
-      qty5kg: Number(form.qty5kg) || 0,
-      qty8kg: Number(form.qty8kg) || 0,
-      qty10kg: Number(form.qty10kg) || 0,
-      tapeUsedBox: Number(form.tapeUsedBox) || 0,
-      scrapKg: Number(form.scrapKg) || 0,
-      notes: form.notes.trim() || undefined,
-      workers: workerRows.map((row) => ({
-        worker: row.worker,
-        kg: Number(row.kg) || 0,
+  const workerError = validateWorkerProduction();
+  if (workerError) return flashMsg({ error: workerError });
+
+  const savedModal = prodModal;
+  const { editing, form, workerRows } = savedModal;
+  const isEdit = !!editing;
+
+  const payload = {
+    date: form.date,
+    qty2kg: Number(form.qty2kg) || 0,
+    qty5kg: Number(form.qty5kg) || 0,
+    qty8kg: Number(form.qty8kg) || 0,
+    qty10kg: Number(form.qty10kg) || 0,
+    tapeUsedBox: Number(form.tapeUsedBox) || 0,
+    scrapKg: Number(form.scrapKg) || 0,
+    notes: form.notes?.trim() || undefined,
+    workers: workerRows
+      .filter((r) => r.worker)
+      .map((r) => ({
+        worker: r.worker,
+        kg: Number(r.kg) || 0,
       })),
-    };
-    try {
-      if (editing) {
-        await updateProductProduction(editing._id, payload);
-        flashMsg({ success: "Production entry updated" });
-      } else {
-        await createProductProduction(payload);
-        flashMsg({ success: "Production entry added" });
-      }
-      setProdModal(null);
-      await refreshAll();
-    } catch (err) {
-      const body = err?.response?.data ?? err;
-      if (body?.code === "RESERVED_CONFLICT" && body.data) {
-        setConflict({ info: body.data, pending: { kind: "production", payload, id: editing?._id || null, isEdit: !!editing } });
-        return;
-      }
-      flashMsg({ error: body?.message || err?.message || "Failed to save entry" });
-    } finally { setSaving(false); }
   };
+
+  setSaving(true);
+  flashMsg({ error: "", success: "" });
+  setProdModal(null); // close modal immediately for better UX
+
+  try {
+    const response = isEdit
+      ? await updateProductProduction(editing._id, payload)
+      : await createProductProduction(payload);
+
+    const result = response?.data?.data;
+
+    if (isQueued(response) && result) {
+      setEntries(prev =>
+        isEdit
+          ? prev.map(x => (x._id === editing._id ? result : x))
+          : [result, ...prev]
+      );
+
+      await applyOfflineStockDelta(payload, isEdit ? editing : null);
+
+      await fetchStock({ silent: true });
+      flashMsg({ success: "Saved on this device — will sync when online." });
+      return;
+    }
+
+    flashMsg({
+      success: isEdit ? "Production entry updated" : "Production entry added",
+    });
+    await refreshAll();
+  } catch (err) {
+    const body = err?.response?.data ?? err;
+
+    if (body?.code === "RESERVED_CONFLICT" && body.data) {
+      setConflict({
+        info: body.data,
+        pending: {
+          kind: "production",
+          payload,
+          id: editing?._id || null,
+          isEdit,
+        },
+      });
+      return;
+    }
+
+    // Restore modal so user can fix the error
+    setProdModal(savedModal);
+    flashMsg({ error: errMsg(err, "Failed to save entry") });
+  } finally {
+    setSaving(false);
+  }
+};
 
   const handleDelete = async (entry) => {
-    if (saving) return;
-    if (!window.confirm(`Delete production entry for ${fmtDate(entry.date)}? This cannot be undone.`)) return;
-    setSaving(true); flashMsg({ error: "", success: "" });
-    try {
-      await deleteProductProduction(entry._id);
+  if (saving) return;
+  if (!window.confirm(`Delete production entry for ${fmtDate(entry.date)}? This cannot be undone.`)) return;
+
+  setSaving(true);
+  flashMsg({ error: "", success: "" });
+  setEntries(prev => prev.filter(x => x._id !== entry._id));
+  if (detailId === entry._id) setDetailId(null);
+
+  try {
+    const response = await deleteProductProduction(entry._id);
+    if (isQueued(response)) {
       flashMsg({ success: "Entry deleted" });
-      if (detailId === entry._id) setDetailId(null);
-      await refreshAll();
-    } catch (err) { flashMsg({ error: errMsg(err, "Failed to delete entry") }); }
-    finally { setSaving(false); }
-  };
+      return;
+    }
+    flashMsg({ success: "Entry deleted" });
+    await refreshAll();
+  } catch (err) {
+    setEntries(prev => [entry, ...prev]);
+    flashMsg({ error: errMsg(err, "Failed to delete entry") });
+  } finally {
+    setSaving(false);
+  }
+};
 
   /* ── stock actions ── */
   const openStockModal = (kind, item, form) => setStockModal({ kind, item, form });
@@ -529,92 +726,131 @@ const fetchEntries = useCallback(async () => {
   const submitReserve = async (e) => {
     e.preventDefault();
     if (saving) return;
-    setSaving(true); flashMsg({ error: "", success: "" });
+    const item = stockModal.item;
+    const patch = {
+      reservedQty: Number(stockModal.form.reservedQty) || 0,
+      reorderLevel: Number(stockModal.form.reorderLevel) || 0,
+      criticalLevel: Number(stockModal.form.criticalLevel) || 0,
+    };
+
+    const prevStock = stock;
+    setStock((prev) => prev.map((s) => s._id === item._id ? { ...s, ...patch, __pending: true } : s));
+    setSaving(true);
+    flashMsg({ error: "", success: "" });
+    setStockModal(null);
+    await patchCachedRecord("productStock", item._id, { ...patch, __pending: true });
+
     try {
-      await updateProductStockReserved(stockModal.item._id, {
-        reservedQty: Number(stockModal.form.reservedQty) || 0,
-        reorderLevel: Number(stockModal.form.reorderLevel) || 0,
-        criticalLevel: Number(stockModal.form.criticalLevel) || 0,
-      });
+      const response = await updateProductStockReserved(item._id, patch);
+      if (isQueued(response)) {
+        flashMsg({ success: "Settings saved on device — waiting to sync." });
+        return;
+      }
       flashMsg({ success: "Stock settings updated" });
-      setStockModal(null);
       await refreshAll();
-    } catch (err) { flashMsg({ error: errMsg(err, "Failed to update reserved") }); }
-    finally { setSaving(false); }
+    } catch (err) {
+      setStock(prevStock);
+      flashMsg({ error: errMsg(err, "Failed to update reserved") });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const submitAdjust = async (e) => {
-    e.preventDefault();
-    if (saving) return;
-    const { item, form } = stockModal;
-    const payload = {
-      type: form.type,
-      quantity: Number(form.quantity) || 0,
-      reason: form.reason.trim() || undefined,
-      notes: form.notes.trim() || undefined,
-    };
-    setSaving(true); flashMsg({ error: "", success: "" });
-    try {
-      await adjustProductStock(item._id, payload);
-      flashMsg({ success: form.type === "in" ? "Stock in recorded" : form.type === "out" ? "Dispatch recorded" : "Stock level updated" });
-      setStockModal(null);
-      await refreshAll();
-    } catch (err) {
-      const body = err?.response?.data ?? err;
-      if (body?.code === "RESERVED_CONFLICT" && body.data) {
-        setConflict({ info: body.data, pending: { kind: "adjust", payload, id: item._id } });
-        return;
-      }
-      flashMsg({ error: body?.message || err?.message || "Failed to adjust stock" });
-    } finally { setSaving(false); }
+  e.preventDefault();
+  if (saving) return;
+  const { item, form } = stockModal;
+  const payload = {
+    type: form.type,
+    quantity: Number(form.quantity) || 0,
+    reason: form.reason.trim() || undefined,
+    notes: form.notes.trim() || undefined,
   };
+
+  setSaving(true);
+  flashMsg({ error: "", success: "" });
+  setStockModal(null);
+
+  try {
+    const response = await adjustProductStock(item._id, payload);
+    if (isQueued(response) && response?.data?.data) {
+      const updated = response.data.data;
+      setStock(prev => prev.map(s => s._id === item._id ? updated : s));
+      flashMsg({ success: "Adjustment saved on device — waiting to sync." });
+      return;
+    }
+    flashMsg({ success: form.type === "in" ? "Stock in recorded" : form.type === "out" ? "Dispatch recorded" : "Stock level updated" });
+    await refreshAll();
+  } catch (err) {
+    const body = err?.response?.data ?? err;
+    if (body?.code === "RESERVED_CONFLICT" && body.data) {
+      setConflict({ info: body.data, pending: { kind: "adjust", payload, id: item._id } });
+      return;
+    }
+    flashMsg({ error: body?.message || err?.message || "Failed to adjust stock" });
+  } finally { setSaving(false); }
+};
 
   const submitScrap = async (e) => {
     e.preventDefault();
     if (saving) return;
     const { item, form } = stockModal;
-    setSaving(true); flashMsg({ error: "", success: "" });
+    const kg = Number(form.quantity) || 0;
+    const weight = parseFloat(item.size) || 1;
+    const reelsScrapped = kg / weight;
+    const optimisticQty = Math.max(Number(item.quantity || 0) - reelsScrapped, 0);
+
+    const prevStock = stock;
+    setStock((prev) => prev.map((s) => s._id === item._id ? { ...s, quantity: optimisticQty, __pending: true } : s));
+    setSaving(true);
+    flashMsg({ error: "", success: "" });
+    setStockModal(null);
+    await patchCachedRecord("productStock", item._id, { quantity: optimisticQty, __pending: true });
+
     try {
-      await recordProductScrap(item._id, {
-        quantity: Number(form.quantity) || 0,
+      const response = await recordProductScrap(item._id, {
+        quantity: kg,
         reason: form.reason.trim() || undefined,
         notes: form.notes.trim() || undefined,
       });
+      if (isQueued(response)) {
+        flashMsg({ success: "Scrap saved on device — waiting to sync." });
+        return;
+      }
       flashMsg({ success: "Scrap recorded" });
-      setStockModal(null);
       await refreshAll();
-    } catch (err) { flashMsg({ error: errMsg(err, "Failed to record scrap") }); }
-    finally { setSaving(false); }
+    } catch (err) {
+      setStock(prevStock);
+      flashMsg({ error: errMsg(err, "Failed to record scrap") });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const confirmReserved = async () => {
     if (!conflict) return;
-    setSaving(true); flashMsg({ error: "" });
+    setSaving(true);
+    flashMsg({ error: "" });
     const { pending } = conflict;
     try {
       if (pending.kind === "adjust") {
-        await adjustProductStock(pending.id, { ...pending.payload, allowReserved: true });
-        flashMsg({ success: "Dispatch recorded — reserved stock was used" });
-        setStockModal(null);
+        const response = await adjustProductStock(pending.id, { ...pending.payload, allowReserved: true });
+        flashMsg({ success: isQueued(response) ? "Dispatch saved — will sync." : "Dispatch recorded — reserved stock was used" });
       } else {
-        if (pending.isEdit) {
-          await updateProductProduction(pending.id, { ...pending.payload, allowReserved: true });
-          flashMsg({ success: "Production entry updated — reserved stock was used" });
-        } else {
-          await createProductProduction({ ...pending.payload, allowReserved: true });
-          flashMsg({ success: "Production entry added — reserved stock was used" });
-        }
-        setProdModal(null);
+        const response = pending.isEdit
+          ? await updateProductProduction(pending.id, { ...pending.payload, allowReserved: true })
+          : await createProductProduction({ ...pending.payload, allowReserved: true });
+        flashMsg({ success: isQueued(response) ? "Entry saved — will sync." : "Production entry saved — reserved stock was used" });
       }
       setConflict(null);
-      await refreshAll();
-    } catch (err) { flashMsg({ error: errMsg(err, "Failed to save") }); }
-    finally { setSaving(false); }
+      if (!isQueued({ data: { offline: true } })) await refreshAll();
+    } catch (err) {
+      flashMsg({ error: errMsg(err, "Failed to save") });
+    } finally {
+      setSaving(false);
+    }
   };
 
-  /* ================================================================
-   *  RENDER HELPERS
-   * ================================================================ */
   const renderEntryRow = (entry) => {
     const m = getEntryMetrics(entry);
     return (
@@ -652,8 +888,30 @@ const fetchEntries = useCallback(async () => {
         </td>
         <td className="px-4 py-3">
           <div className="flex items-center justify-end gap-1 opacity-100 lg:opacity-0 lg:transition-opacity lg:group-focus-within:opacity-100 lg:group-hover:opacity-100">
-            <button type="button" title="Edit" onClick={(e) => { e.stopPropagation(); openEdit(entry); }} className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900"><Pencil size={13} /></button>
-            <button type="button" title="Delete" onClick={(e) => { e.stopPropagation(); handleDelete(entry); }} disabled={saving} className="flex h-7 w-7 items-center justify-center rounded-md text-red-500 hover:bg-red-50 disabled:opacity-60"><Trash2 size={13} /></button>
+            <button
+  type="button"
+  title="Edit"
+  onClick={(e) => {
+    e.stopPropagation();
+    openEdit(entry);
+  }}
+  className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+>
+  <Pencil size={13} />
+</button>
+
+<button
+  type="button"
+  title="Delete"
+  onClick={(e) => {
+    e.stopPropagation();
+    handleDelete(entry);
+  }}
+  disabled={saving}
+  className="flex h-7 w-7 items-center justify-center rounded-md text-red-500 hover:bg-red-50 disabled:opacity-30"
+>
+  <Trash2 size={13} />
+</button>
           </div>
         </td>
       </tr>
@@ -673,12 +931,36 @@ const fetchEntries = useCallback(async () => {
       >
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-slate-900">{fmtDateShort(entry.date)}</p>
+            <div className="flex items-center gap-1.5">
+              <p className="text-sm font-semibold text-slate-900">{fmtDateShort(entry.date)}</p>
+            </div>
             <p className="mt-0.5 text-[11px] text-slate-400">{fmtDate(entry.date)}</p>
           </div>
           <div className="flex shrink-0 items-center gap-1">
-            <button type="button" title="Edit" onClick={(e) => { e.stopPropagation(); openEdit(entry); }} className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-600 active:bg-slate-100"><Pencil size={14} /></button>
-            <button type="button" title="Delete" onClick={(e) => { e.stopPropagation(); handleDelete(entry); }} disabled={saving} className="flex h-9 w-9 items-center justify-center rounded-lg border border-red-100 text-red-500 active:bg-red-50 disabled:opacity-60"><Trash2 size={14} /></button>
+            <button
+                type="button"
+                title="Edit"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openEdit(entry);
+                }}
+                className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-600 active:bg-slate-100"
+              >
+                <Pencil size={14} />
+              </button>
+
+              <button
+                type="button"
+                title="Delete"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDelete(entry);
+                }}
+                disabled={saving}
+                className="flex h-9 w-9 items-center justify-center rounded-lg border border-red-100 text-red-500 active:bg-red-50 disabled:opacity-30"
+              >
+                <Trash2 size={14} />
+              </button>
           </div>
         </div>
         <div className="mt-3 grid grid-cols-4 gap-1.5">
@@ -720,7 +1002,7 @@ const fetchEntries = useCallback(async () => {
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openReserve(item); } }}
         tabIndex={0}
         role="button"
-        className="group cursor-pointer hover:bg-slate-50/70 focus:outline-none focus-visible:bg-slate-50"
+        className={`group cursor-pointer hover:bg-slate-50/70 focus:outline-none focus-visible:bg-slate-50 ${item.__pending ? "bg-amber-50/40" : ""}`}
       >
         <td className="px-4 py-3">
           <p className="truncate text-xs font-semibold text-slate-900">{item.name}</p>
@@ -742,7 +1024,6 @@ const fetchEntries = useCallback(async () => {
         <td className="px-4 py-3">
           <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
             <button type="button" title="Reserve / Edit reserved" onClick={(e) => { e.stopPropagation(); openReserve(item); }} className="flex h-7 w-7 items-center justify-center rounded-md text-indigo-500 hover:bg-indigo-50"><Layers size={14} /></button>
-            {/* <button type="button" title="Record Scrap" onClick={(e) => { e.stopPropagation(); openScrap(item); }} className="flex h-7 w-7 items-center justify-center rounded-md text-rose-500 hover:bg-rose-50"><PackageX size={14} /></button> */}
           </div>
         </td>
       </tr>
@@ -763,7 +1044,7 @@ const fetchEntries = useCallback(async () => {
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openReserve(item); } }}
         tabIndex={0}
         role="button"
-        className="min-w-0 cursor-pointer rounded-xl border border-slate-200 bg-white p-3.5 transition-colors hover:border-slate-300 hover:bg-slate-50/60"
+        className={`min-w-0 cursor-pointer rounded-xl border bg-white p-3.5 transition-colors hover:border-slate-300 hover:bg-slate-50/60 ${item.__pending ? "border-amber-200 bg-amber-50/30" : "border-slate-200"}`}
       >
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
@@ -788,7 +1069,6 @@ const fetchEntries = useCallback(async () => {
 
   return (
     <div className="w-full min-w-0 space-y-4 pb-6 sm:space-y-5">
-      {/* HEADER */}
       <header className="flex flex-col gap-3 sm:gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex min-w-0 items-center gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#0f2a52] to-[#0a1e3f] text-white shadow-md ring-1 ring-[#0a1e3f]/10 sm:h-11 sm:w-11"><Package size={20} /></div>
@@ -808,7 +1088,6 @@ const fetchEntries = useCallback(async () => {
       {flash.error && <Banner type="error" message={flash.error} onClose={() => flashMsg({ error: "" })} />}
       {flash.success && <Banner type="success" message={flash.success} onClose={() => flashMsg({ success: "" })} />}
 
-      {/* KPI */}
       <div className="grid grid-cols-2 gap-2.5 sm:gap-3 xl:grid-cols-4">
         {KPIS.map((k) => (
           <KpiCard key={k.id} {...k} value={fmtNum(kpi[k.id])} />
@@ -871,7 +1150,7 @@ const fetchEntries = useCallback(async () => {
               <table className="w-full min-w-[820px] table-fixed text-left">
                 <thead>
                   <tr className="border-b border-slate-200 bg-slate-50/70">
-                    <th className="w-[120px] px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500">Date</th>
+                    <th className="w-[140px] px-4 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-500">Date</th>
                     {SIZES.map((s) => <th key={s} className="w-[70px] px-3 py-3 text-right text-[10px] font-semibold uppercase tracking-wider text-slate-500">{s.replace("kg", " kg")}</th>)}
                     <th className="w-[100px] px-3 py-3 text-right text-[10px] font-semibold uppercase tracking-wider text-slate-500">Wt (no reel)</th>
                     <th className="w-[100px] px-3 py-3 text-right text-[10px] font-semibold uppercase tracking-wider text-slate-500">Wt (reel)</th>
@@ -1057,7 +1336,17 @@ const fetchEntries = useCallback(async () => {
 
             <div className={FOOTER}>
               <button type="button" onClick={() => setDetailId(null)} className={BTN_SECONDARY}>Close</button>
-              <button type="button" onClick={() => { const e = selectedEntry; setDetailId(null); openEdit(e); }} className={BTN_PRIMARY}><Pencil size={14} /> Edit Entry</button>
+              <button
+                type="button"
+                  onClick={() => {
+                    const e = selectedEntry;
+                    setDetailId(null);
+                    openEdit(e);
+                  }}
+                  className={BTN_PRIMARY}
+                >
+                  <Pencil size={14} /> Edit Entry
+                </button>
             </div>
           </Modal>
         );
@@ -1073,7 +1362,6 @@ const fetchEntries = useCallback(async () => {
                 <input type="date" value={prodModal.form.date} onChange={(e) => setFormField({ date: e.target.value })} required className={INPUT} />
               </Field>
 
-              {/* REEL PRODUCTION */}
               <section>
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <SectionLabel icon={Boxes} label="Reel Production" tint="sky" />
@@ -1116,7 +1404,6 @@ const fetchEntries = useCallback(async () => {
                 </div>
               </section>
 
-              {/* WORKER PRODUCTION */}
               <section className="border-t border-slate-200 pt-5">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                   <div>
@@ -1152,40 +1439,29 @@ const fetchEntries = useCallback(async () => {
                           <button type="button" onClick={() => removeWorkerRow(index)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-red-200 bg-white text-red-600 transition-colors hover:bg-red-50" title="Remove worker"><Trash2 size={15} /></button>
                         </div>
                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                            <div className="sm:col-span-2">
-                              <Field label="Kg Produced" required hint="Total kg this worker produced today.">
-                                <div className="relative">
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    step="0.01"
-                                    inputMode="decimal"
-                                    value={row.kg}
-                                    onChange={(e) => updateWorkerKg(index, e.target.value)}
-                                    placeholder="0"
-                                    className={`${INPUT} pr-12`}
-                                  />
-                                  <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">kg</span>
-                                </div>
-                              </Field>
-                            </div>
-                            <div className="flex items-end">
-                              <div className="w-full rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5">
-                                <p className="text-[9px] font-bold uppercase tracking-wider text-emerald-700">Earned</p>
-                                <p className="mt-0.5 text-base font-bold tabular-nums text-emerald-800">
-                                  ₹{((Number(row.kg) || 0) * Number(workers.find((w) => w._id === row.worker)?.variablePay?.ratePerKg || 0)).toFixed(2)}
-                                </p>
-                                <p className="text-[9px] text-emerald-600">
-                                  @ ₹{Number(workers.find((w) => w._id === row.worker)?.variablePay?.ratePerKg || 0)}/kg
-                                </p>
+                          <div className="sm:col-span-2">
+                            <Field label="Kg Produced" required hint="Total kg this worker produced today.">
+                              <div className="relative">
+                                <input type="number" min="0" step="0.01" inputMode="decimal" value={row.kg} onChange={(e) => updateWorkerKg(index, e.target.value)} placeholder="0" className={`${INPUT} pr-12`} />
+                                <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">kg</span>
                               </div>
+                            </Field>
+                          </div>
+                          <div className="flex items-end">
+                            <div className="w-full rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5">
+                              <p className="text-[9px] font-bold uppercase tracking-wider text-emerald-700">Earned</p>
+                              <p className="mt-0.5 text-base font-bold tabular-nums text-emerald-800">
+                                ₹{((Number(row.kg) || 0) * Number(workers.find((w) => w._id === row.worker)?.variablePay?.ratePerKg || 0)).toFixed(2)}
+                              </p>
+                              <p className="text-[9px] text-emerald-600">
+                                @ ₹{Number(workers.find((w) => w._id === row.worker)?.variablePay?.ratePerKg || 0)}/kg
+                              </p>
                             </div>
                           </div>
+                        </div>
                         <div className="mt-3 flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2">
                           <span className="text-[10px] font-medium text-slate-500">Worker total</span>
-                          <span className="text-xs font-bold tabular-nums text-slate-800">
-                            {Number(row.kg) || 0} kg
-                          </span>
+                          <span className="text-xs font-bold tabular-nums text-slate-800">{Number(row.kg) || 0} kg</span>
                         </div>
                       </div>
                     ))}
@@ -1201,7 +1477,6 @@ const fetchEntries = useCallback(async () => {
                 </div>
               </section>
 
-              {/* SUMMARY */}
               {(preview.totalReels > 0 || Number(prodModal.form.tapeUsedBox) > 0 || Number(prodModal.form.scrapKg) > 0) && (
                 <div className="grid grid-cols-2 gap-2 rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-3 sm:grid-cols-4">
                   <MiniStat label="Reels" value={fmtNum(preview.totalReels)} />
@@ -1211,7 +1486,6 @@ const fetchEntries = useCallback(async () => {
                 </div>
               )}
 
-              {/* RAW MATERIAL PREVIEW */}
               {preview.steelNeeded > 0 && (
                 <div className="overflow-hidden rounded-xl border border-amber-200 bg-gradient-to-br from-amber-50 to-amber-50/40">
                   <div className="flex items-center gap-2 border-b border-amber-200/70 px-4 py-2.5">
@@ -1377,9 +1651,6 @@ const fetchEntries = useCallback(async () => {
   );
 }
 
-/* ================================================================
- *  SECONDARY PRIMITIVES
- * ================================================================ */
 function MiniStat({ label, value, tone }) {
   const toneCls = tone === "amber" ? "border-amber-100 bg-amber-50/60 text-amber-700 [&_p:last-child]:text-amber-800"
     : tone === "rose" ? "border-rose-100 bg-rose-50/60 text-rose-700 [&_p:last-child]:text-rose-800"

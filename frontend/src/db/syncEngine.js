@@ -1,6 +1,6 @@
 import api from "../api/axios";
 import { db, openDb } from "./database";
-import { flush } from "./outbox.js";
+import { flush } from "../offline/index.js";
 
 const MODULES = {
   contacts:  "/sync/contacts",
@@ -10,6 +10,7 @@ const MODULES = {
   payments:  "/sync/payments",
   expenses:  "/sync/expenses",
   rawStock:  "/sync/raw-stock", 
+  rawPurchases: "/sync/raw-purchases",
 
 };
 
@@ -195,7 +196,7 @@ export function syncAll() {
   })().finally(() => {
     activeSync = null;
   });
-  
+
   return activeSync;
 }
 

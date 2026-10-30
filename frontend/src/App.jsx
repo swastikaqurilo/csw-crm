@@ -3,6 +3,8 @@ import { AuthProvider } from "./components/AuthContext";
 import PrivateRoute from "./components/PrivateRoute";
 import { ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
+import { useEffect } from "react";
+import { startOutbox } from "./offline/index.js";
 
 import Layout from "./components/Layout";
 import Dashboard from "./pages/Dashboard";
@@ -25,7 +27,9 @@ import ForgotPassword from "./pages/ForgotPassword";
 
 
 function App() {
+  useEffect(() => { startOutbox(); }, []);
   return (
+    
     <BrowserRouter>
       <AuthProvider>
         <Routes>

@@ -46,8 +46,6 @@ module.exports = function idempotency({ required = false } = {}) {
       req.body?.operationId;
 
     if (!rawKey) {
-      // Idempotency is optional: routes that need replay protection pass
-      // { required: true }; everything else behaves as before.
       if (!required) {
         return next();
       }
@@ -112,8 +110,6 @@ module.exports = function idempotency({ required = false } = {}) {
         }).lean();
 
         if (!operation) {
-          // The competing request may not yet be visible, or the
-          // database may be experiencing a transient race.
           return res.status(503).json({
             success: false,
             error: "idempotency_claim_unavailable",
@@ -132,22 +128,61 @@ module.exports = function idempotency({ required = false } = {}) {
           return sendStoredResponse(res, operation);
         }
 
-        if (operation.status === "failed") {
+        const STALE_MS = 5 * 60 * 1000;
+        const startedAtMs = new Date(
+          operation.startedAt ||
+          operation.createdAt ||
+          operation.updatedAt ||
+          0
+        ).getTime();
+
+        const isStale = Date.now() - startedAtMs > STALE_MS;
+
+        if (!isStale) {
           return res.status(409).json({
             success: false,
-            error: "operation_requires_reconciliation",
+            error: "operation_in_progress",
+            message:
+              "This operation is currently being processed. Retrying shortly is safe.",
             operationId,
+            retryable: true,
           });
         }
 
-        // Never re-execute an in-progress operation just because
-        // it has become old. Recovery needs a separate safe process.
-        return res.status(409).json({
-          success: false,
-          error: "operation_in_progress",
-          operationId,
-          retryable: true,
-        });
+        let takenOver;
+        try {
+          takenOver = await SyncOperation.findOneAndUpdate(
+            {
+              _id: operation._id,
+              status: "in_progress",
+              claimToken: operation.claimToken,  
+            },
+            {
+              $set: {
+                claimToken: crypto.randomUUID(),
+                startedAt: new Date(),
+                requestHash,                       
+              },
+            },
+            { new: true }
+          );
+        } catch (takeoverError) {
+          return next(takeoverError);
+        }
+
+        if (!takenOver) {
+          return res.status(409).json({
+            success: false,
+            error: "operation_in_progress",
+            message:
+              "This operation is currently being processed. Retrying shortly is safe.",
+            operationId,
+            retryable: true,
+          });
+        }
+
+        operation = takenOver;
+        claimToken = takenOver.claimToken;
       } catch (lookupError) {
         return next(lookupError);
       }

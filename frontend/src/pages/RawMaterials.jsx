@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Pagination from "../components/Pagination";
 import { db } from "../db/database"; 
+import { flush, outboxCounts, OUTBOX_EVENT } from "../offline/index.js";
 import {
   Warehouse, Package, AlertTriangle, Plus,
   X, RefreshCw, Save, Factory, ShoppingCart, Truck, CheckCircle2, XCircle,
   Clock, Search, Layers, Boxes, CircleEqual, DatabasePlus, Wallet, Pencil,
-  UserRound, CalendarDays, FileText,
+  UserRound, CalendarDays, FileText, CloudOff,
 } from "lucide-react";
 import {
   getRawStock, createRawStock, updateRawStock, adjustRawStock,
@@ -33,7 +34,18 @@ const toInput = (v) => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 };
 const today = () => toInput(new Date());
-const errMsg = (err, fb) => err?.response?.data?.message || fb;
+const errMsg = (err, fb) =>
+  err?.response?.data?.message ||
+  (!err?.response && err?.message && err.message !== "Network Error" ? err.message : fb);
+const isQueued = (res) => {
+  const r = res?.data?.data;
+  return (
+    res?.data?.offline === true ||
+    /queued|offline/i.test(res?.statusText || "") ||
+    r?.queued === true ||
+    r?.__pending === true
+  );
+};
 
 function stockStatus(item) {
   const qty = Number(item.quantity || 0);
@@ -219,30 +231,25 @@ function RawMaterials() {
   useEffect(() => { if (error) setSuccess(""); }, [error]);
   useEffect(() => { if (success) setError(""); }, [success]);
 
-  const fetchStock = useCallback(async () => {
+  const fetchStock = useCallback(async ({ silent } = {}) => {
     try {
-      setStockLoading(true);
-      const res = await getRawStock();
-      setStock(res.data?.data || []);
-    } catch (err) {
-      if (!navigator.onLine) {
-        const cached = await db.cachedRecords.where("module").equals("rawStock").toArray();
-        if (cached.length > 0) {
-          setStock(cached.map(row => row.data));
-        } else {
-          setError("You are offline. Raw stock data has not been downloaded yet.");
-        }
-      } else {
-        setError(errMsg(err, "Failed to load raw stock"));
-      }
+      if (!silent) setStockLoading(true);
+      try {
+        const cached = await getRawMaterialFromCache();     // ← reads http + dedicated
+        if (cached.length > 0) setStock(cached);
+      } catch { /* ignore */ }
+      try {
+        const res = await getRawStock();
+        setStock(res.data?.data || []);
+      } catch { /* offline — cache stays */ }
     } finally {
-      setStockLoading(false);
+      if (!silent) setStockLoading(false);
     }
   }, []);
 
-  const fetchPurchases = useCallback(async () => {
+  const fetchPurchases = useCallback(async ({ silent } = {}) => {
     try {
-      setPurchasesLoading(true);
+      if (!silent) setPurchasesLoading(true);
       const res = await getRawPurchases({ limit: 200 });
       setPurchases(res.data?.data || []);
     } catch (err) {
@@ -257,7 +264,7 @@ function RawMaterials() {
         setError(errMsg(err, "Failed to load purchases"));
       }
     } finally {
-      setPurchasesLoading(false);
+      if (!silent) setPurchasesLoading(false);
     }
   }, []);
 
@@ -276,10 +283,25 @@ function RawMaterials() {
   }, []);
 
   const refreshAll = useCallback(async () => {
+    if (navigator.onLine) {
+      try { await flush(); } catch { /* ignore */ }
+    }
     await Promise.all([fetchStock(), fetchPurchases()]);
   }, [fetchStock, fetchPurchases]);
 
   useEffect(() => { refreshAll(); fetchContacts(); }, [refreshAll, fetchContacts]);
+
+  useEffect(() => {
+    const onOutboxChange = async () => {
+      if (!navigator.onLine) return;
+      const { pending } = await outboxCounts();
+      if (pending > 0) return;
+      fetchStock({ silent: true });
+      fetchPurchases({ silent: true });
+    };
+    window.addEventListener(OUTBOX_EVENT, onOutboxChange);
+    return () => window.removeEventListener(OUTBOX_EVENT, onOutboxChange);
+  }, [fetchStock, fetchPurchases]);
 
   /* ── derived ── */
   const stockByCategory = useMemo(() => {
@@ -354,38 +376,102 @@ function RawMaterials() {
     form: { category: "Reel", name: "", sizeKg: "", reorderLevel: "", criticalLevel: "", notes: "" },
   });
 
-    const submitMaterial = async (e) => {
-    e.preventDefault();
-    const f = material.form;
-    const payload = {
-      category: f.category,
-      name: f.name.trim(),
-      unit: UNIT_BY_CATEGORY[f.category],
-      reorderLevel: Number(f.reorderLevel) || 0,
-      criticalLevel: Number(f.criticalLevel) || 0,
-      notes: f.notes.trim() || undefined,
-    };
+  
+const submitMaterial = async (e) => {
+  e.preventDefault();
+  if (saving || !material) return;
 
-    const optimisticMaterial = {
-      _id: `temp-${Date.now()}`,
-      ...payload,
-      quantity: 0,
-      reservedQty: 0,
-      __pending: true,
-    };
+  const f = material.form;
+  const name = f.name.trim();
+  const sizeKg = Number(f.sizeKg);
 
-    setStock((prev) => [optimisticMaterial, ...prev]);
-    setMaterial(null);
-    setSuccess("Material added");
+  if (f.category === "Reel" && (!Number.isFinite(sizeKg) || sizeKg <= 0)) {
+    setError("Enter a valid reel size greater than 0.");
+    return;
+  }
 
-    try {
-      await createRawStock(payload);
-      await refreshAll();
-    } catch (err) {
-      setError(errMsg(err, "Failed to add material"));
-      await refreshAll();
-    }
+  if (f.category !== "Reel" && !name) {
+    setError("Material name is required.");
+    return;
+  }
+
+  const payload = {
+    category: f.category,
+    name:
+      f.category === "Reel"
+        ? name || `Reel ${sizeKg}kg`
+        : name,
+    ...(f.category === "Reel" ? { sizeKg } : {}),
+    unit: UNIT_BY_CATEGORY[f.category],
+    reorderLevel: Number(f.reorderLevel) || 0,
+    criticalLevel: Number(f.criticalLevel) || 0,
+    notes: f.notes.trim() || undefined,
   };
+
+  const tempId = `temp-${Date.now()}`;
+
+  const optimisticMaterial = {
+    ...payload,
+    _id: tempId,
+    quantity: 0,
+    reservedQty: 0,
+    availableQty: 0,
+    __pending: true,
+  };
+
+  setSaving(true);
+  setError("");
+  setSuccess("");
+
+  // Show the new material immediately.
+  setStock((current) => [
+    optimisticMaterial,
+    ...current.filter((item) => item._id !== tempId),
+  ]);
+
+  try {
+    const res = await createRawStock(payload);
+    const result = res.data?.data;
+
+    if (isQueued(res)) {
+      setMaterial(null);
+      setSuccess("Material saved.");
+      await refreshAll();
+      return;
+    }
+
+    await db.cachedRecords
+      .where("[module+recordId]")
+      .equals(["rawStock", tempId])
+      .delete();
+
+    setStock((current) =>
+      current.map((item) =>
+        item._id === tempId ? result : item
+      )
+    );
+
+    setMaterial(null);
+    await refreshAll();
+    setSuccess("Material saved.");
+  } catch (err) {
+    // Roll back the optimistic entry if the request genuinely failed.
+    setStock((current) =>
+      current.filter((item) => item._id !== tempId)
+    );
+
+    await db.cachedRecords
+      .where("[module+recordId]")
+      .equals(["rawStock", tempId])
+      .delete()
+      .catch(() => {});
+
+    setError(errMsg(err, "Failed to save material."));
+  } finally {
+    setSaving(false);
+  }
+};
+
 
   const openAdjust = (item, type = "in") =>
     setAdjust({ item, form: { type, quantity: "", reason: "", notes: "" } });
@@ -412,16 +498,95 @@ function RawMaterials() {
 
   const openReserve = (item) => setReserve({ item, form: { reservedQty: item.reservedQty ?? 0 } });
 
-  const submitReserve = async (e) => {
-    e.preventDefault();
-    try {
-      await withSave(
-        () => updateRawStock(reserve.item._id, { reservedQty: Number(reserve.form.reservedQty) || 0 }),
-        "Reserved quantity updated",
-        () => setReserve(null)
+ 
+  
+const submitReserve = async (e) => {
+  e.preventDefault();
+
+  if (saving || !reserve?.item) return;
+
+  const item = reserve.item;
+  const reservedQty = Number(reserve.form.reservedQty);
+
+  if (!Number.isFinite(reservedQty) || reservedQty < 0) {
+    setError("Reserved quantity must be a non-negative number.");
+    return;
+  }
+
+  const totalQty = Number(item.quantity) || 0;
+
+  if (reservedQty > totalQty) {
+    setError(
+      `Cannot reserve more than available (${totalQty} ${item.unit}).`
+    );
+    return;
+  }
+
+  const previousStock = stock;
+  const updatedStock = stock.map((row) =>
+    String(row._id) === String(item._id)
+      ? { ...row, reservedQty }
+      : row
+  );
+
+  // Update the UI immediately, before the API/outbox operation.
+  setStock(updatedStock);
+  setSaving(true);
+  setError("");
+
+  try {
+    const response = await updateRawStock(item._id, { reservedQty });
+
+    const queued = isQueued(response);
+
+    if (queued) {
+      // Persist the optimistic value in the dedicated offline cache.
+      const cachedRows = await db.cachedRecords
+        .where("module")
+        .equals("rawStock")
+        .toArray();
+
+      const cachedItem = cachedRows.find(
+        (row) => String(row.data?._id) === String(item._id)
       );
-    } catch (err) { setError(errMsg(err, "Failed to update reserved quantity")); }
-  };
+
+      if (cachedItem) {
+        await db.cachedRecords.put({
+          ...cachedItem,
+          data: { ...cachedItem.data, reservedQty },
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
+      setSuccess("Reservation updated locally; waiting to sync.");
+      setReserve(null);
+      return;
+    }
+
+    // Online: use the server's saved record when available.
+    const savedItem = response?.data?.data;
+
+    if (savedItem?._id) {
+      setStock((prev) =>
+        prev.map((row) =>
+          String(row._id) === String(savedItem._id)
+            ? savedItem
+            : row
+        )
+      );
+    }
+
+    setSuccess("Reserved quantity updated");
+    setReserve(null);
+    await refreshAll();
+  } catch (err) {
+    setStock(previousStock);
+    setError(errMsg(err, "Failed to update reserved quantity"));
+  } finally {
+    setSaving(false);
+  }
+};
+
 
   const confirmReserved = async () => {
     if (!adjust || !conflict) return;
@@ -459,86 +624,113 @@ function RawMaterials() {
     },
   });
 
-    const submitPurchase = async (e) => {
-    e.preventDefault();
-    const f = purchase.form;
-    const isEdit = !!purchase.editing;
+  const submitPurchase = async (e) => {
+  e.preventDefault();
+  const f = purchase.form;
+  const editing = purchase.editing;
+  const isEdit = !!editing;
 
-    const optimisticPurchase = {
-      _id: isEdit ? purchase.editing._id : `temp-${Date.now()}`,
-      material: stock.find((s) => s._id === f.material) || { name: "Loading..." },
-      supplierName: f.supplierName,
-      quantity: Number(f.quantity),
-      unitPrice: Number(f.unitPrice),
-      totalAmount: Number(f.quantity) * Number(f.unitPrice),
-      status: isEdit ? purchase.editing.status : "Pending",
-      orderedAt: f.orderedAt || new Date().toISOString(),
-      expectedAt: f.expectedAt || null,
-      notes: f.notes,
-      __pending: true, 
-    };
+  const quantity = Number(f.quantity) || 0;
+  const unitPrice = Number(f.unitPrice) || 0;
 
-    if (isEdit) {
-      setPurchases((prev) => prev.map((p) => (p._id === optimisticPurchase._id ? optimisticPurchase : p)));
-    } else {
-      setPurchases((prev) => [optimisticPurchase, ...prev]);
-    }
-
-    setPurchase(null);
-    setSuccess(isEdit ? "Purchase updated" : "Purchase created (queued if offline)");
-
-    try {
-      if (isEdit) {
-        await updateRawPurchase(purchase.editing._id, {
-          supplier: f.supplier || null,
-          supplierName: f.supplierName.trim() || null,
-          supplierPhone: f.supplierPhone.trim() || null,
-          quantity: Number(f.quantity) || 0,
-          unitPrice: Number(f.unitPrice) || 0,
-          orderedAt: f.orderedAt || undefined,
-          expectedAt: f.expectedAt || undefined,
-          dueDate: f.dueDate || undefined,
-          notes: f.notes.trim() || undefined,
-        });
-      } else {
-        await createRawPurchase({ 
-          material: f.material, 
-          supplier: f.supplier || null,
-          supplierName: f.supplierName.trim() || null,
-          supplierPhone: f.supplierPhone.trim() || null,
-          quantity: Number(f.quantity) || 0,
-          unitPrice: Number(f.unitPrice) || 0,
-          orderedAt: f.orderedAt || undefined,
-          expectedAt: f.expectedAt || undefined,
-          dueDate: f.dueDate || undefined,
-          notes: f.notes.trim() || undefined,
-        });
-      }
-      if (navigator.onLine) {
-        await refreshAll();
-      }
-    } catch (err) {
-      setError(errMsg(err, "Failed to save purchase"));
-      await refreshAll(); 
-    }
+  const payload = {
+    supplier: f.supplier || null,
+    supplierName: f.supplierName.trim() || null,
+    supplierPhone: f.supplierPhone.trim() || null,
+    quantity,
+    unitPrice,
+    orderedAt: f.orderedAt || undefined,
+    expectedAt: f.expectedAt || undefined,
+    dueDate: f.dueDate || undefined,
+    notes: f.notes.trim() || undefined,
   };
 
-    const handleReceive = (p) => {
-    setConfirm({
-      title: "Mark as received?",
-      message: `"${p.material?.name}" (${num(p.quantity)} ${p.unit}) will be added to stock.`,
-      confirmLabel: "Yes, Receive",
-      tone: "emerald",
-      onConfirm: async () => {
-        setConfirm(null);
-        try {
-          await withSave(() => receiveRawPurchase(p._id), "Purchase received — stock updated");
-        } catch (err) {
-          setError(errMsg(err, "Failed to receive purchase"));
-        }
-      },
-    });
-  };
+  const materialDoc = stock.find((s) => s._id === f.material);
+
+  const optimistic = isEdit
+    ? {
+        ...editing,
+        ...payload,
+        supplier:
+          String(payload.supplier || "") === String(editing.supplier?._id || editing.supplier || "")
+            ? editing.supplier
+            : payload.supplier,
+        totalAmount: quantity * unitPrice,
+        __pending: true,
+      }
+    : {
+        _id: `temp-${Date.now()}`,
+        ...payload,
+        material: materialDoc || f.material,
+        unit: materialDoc?.unit,
+        totalAmount: quantity * unitPrice,
+        amountPaid: 0,
+        paymentStatus: "Pending",
+        status: "Pending",
+        orderedAt: payload.orderedAt || new Date().toISOString(),
+        __pending: true,
+      };
+
+  setPurchases((prev) =>
+    isEdit
+      ? prev.map((p) => (p._id === optimistic._id ? optimistic : p))
+      : [optimistic, ...prev]
+  );
+  setPurchase(null);
+
+  try {
+    const response = isEdit
+      ? await updateRawPurchase(editing._id, payload)
+      : await createRawPurchase({ material: f.material, ...payload });
+
+    const result = response?.data?.data;
+
+    if (isQueued(response) && result?._id) {
+      setPurchases((prev) =>
+        prev.map((item) =>
+          item._id === optimistic._id
+            ? {
+                ...optimistic,
+                ...result,
+                material: result.material?.name ? result.material : optimistic.material,
+                __pending: true,
+              }
+            : item
+        )
+      );
+      setSuccess("Saved on this device — it will sync automatically.");
+      return;
+    }
+
+    setSuccess(isEdit ? "Purchase updated." : "Purchase created.");
+    await refreshAll();
+  } catch (err) {
+    setError(errMsg(err, "Failed to save purchase"));
+    await refreshAll(); // rolls back the optimistic row
+  }
+};
+
+   const handleReceive = (p) => {
+  setConfirm({
+    title: "Mark as received?",
+    message: `"${p.material?.name}" (${num(p.quantity)} ${p.unit || p.material?.unit}) will be added to stock.`,
+    confirmLabel: "Yes, Receive",
+    tone: "emerald",
+    onConfirm: async () => {
+      setConfirm(null);
+      try {
+        await withSave(
+          () => receiveRawPurchase(p._id),
+          navigator.onLine
+            ? "Purchase received — stock updated"
+            : "Purchase received on this device. It will sync when you're online."
+        );
+      } catch (err) {
+        setError(errMsg(err, "Failed to receive purchase"));
+      }
+    },
+  });
+};
 
     const handleCancelPurchase = (p) => {
     setConfirm({
@@ -571,29 +763,71 @@ function RawMaterials() {
   };
 
   const submitPayment = async (e) => {
-    e.preventDefault();
-    const f = payment.form;
-    const amt = Number(f.amount);
-    const remaining = Number(payment.target.totalAmount || 0) - Number(payment.target.amountPaid || 0);
-    if (!amt || amt <= 0) return setError("Payment amount must be greater than 0");
-    if (amt > remaining + 0.01) return setError(`Payment exceeds remaining balance of ₹${remaining.toFixed(2)}`);
+  e.preventDefault();
 
-    setPayment((p) => ({ ...p, saving: true }));
-    setError("");
-    try {
-      await recordRawPurchasePayment(payment.target._id, {
-        amount: amt, method: f.method, paidAt: f.paidAt || undefined,
-        transactionId: f.transactionId.trim() || undefined,
-        chequeNumber: f.chequeNumber.trim() || undefined,
-        bankName: f.bankName.trim() || undefined,
-        notes: f.notes.trim() || undefined,
-      });
-      setSuccess("Payment recorded — payable updated");
-      setPayment(null);
+  if (!payment || payment.saving) return;
+
+  const currentPayment = payment;
+  const f = currentPayment.form;
+  const target = currentPayment.target;
+
+  const amt = Number(f.amount);
+  const remaining =
+    Number(target.totalAmount || 0) -
+    Number(target.amountPaid || 0);
+
+  if (!amt || amt <= 0) {
+    setError("Payment amount must be greater than 0");
+    return;
+  }
+
+  if (amt > remaining + 0.01) {
+    setError(
+      `Payment exceeds remaining balance of ₹${remaining.toFixed(2)}`
+    );
+    return;
+  }
+
+  setPayment((prev) =>
+    prev ? { ...prev, saving: true } : prev
+  );
+  setError("");
+
+  try {
+    const response = await recordRawPurchasePayment(target._id, {
+      amount: amt,
+      method: f.method,
+      paidAt: f.paidAt || undefined,
+      transactionId: f.transactionId.trim() || undefined,
+      chequeNumber: f.chequeNumber.trim() || undefined,
+      bankName: f.bankName.trim() || undefined,
+      notes: f.notes.trim() || undefined,
+    });
+
+    const result = response?.data?.data;
+
+    const queued = isQueued(response);
+
+    if (queued) {
       await refreshAll();
-    } catch (err) { setError(errMsg(err, "Failed to record payment")); }
-    finally { setPayment((p) => (p ? { ...p, saving: false } : p)); }
-  };
+
+      setSuccess("Payment saved locally. Changes will sync when online.");
+      setPayment(null);
+      return;
+    }
+
+    // Online: refresh server-confirmed payment totals and status.
+    setPayment(null);
+    setSuccess("Payment recorded — payable updated");
+    await refreshAll();
+  } catch (err) {
+    setError(errMsg(err, "Failed to record payment"));
+  } finally {
+    setPayment((prev) =>
+      prev ? { ...prev, saving: false } : prev
+    );
+  }
+};
 
   /* ── form setter helpers ── */
   const setMat = (patch) => setMaterial((m) => ({ ...m, form: { ...m.form, ...patch } }));
@@ -602,9 +836,6 @@ function RawMaterials() {
   const setRes = (patch) => setReserve((r) => ({ ...r, form: { ...r.form, ...patch } }));
   const setPay = (patch) => setPayment((p) => ({ ...p, form: { ...p.form, ...patch } }));
 
-  /* ================================================================
-   *  STOCK TABLE
-   * ================================================================ */
   const renderStockRow = (item) => {
     const status = stockStatus(item);
     const incoming = incomingByMaterial[item._id];
@@ -725,9 +956,6 @@ function RawMaterials() {
     );
   };
 
-  /* ================================================================
-   *  PURCHASE ROW
-   * ================================================================ */
   const renderPurchaseRow = (p) => {
     const { total, paid, due } = balanceOf(p);
     const canPay = p.status === "Received" && due > 0.01;
@@ -739,24 +967,25 @@ function RawMaterials() {
         key={p._id}
         role="button"
         tabIndex={0}
-        onClick={() => !p.__pending && setViewing(p)} // Prevent opening modal if pending
-        onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ") && !p.__pending) { e.preventDefault(); setViewing(p); } }}
-        // 👇 Fade the row if it's pending
-        className={`cursor-pointer transition-colors hover:bg-slate-50/70 focus:bg-slate-50 focus:outline-none ${p.__pending ? "opacity-60 bg-slate-50" : ""}`}
+        onClick={() => setViewing(p)}
+        onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setViewing(p); } }}
+        className={`cursor-pointer transition-colors hover:bg-slate-50/70 focus:bg-slate-50 focus:outline-none ${p.__pending ? "bg-amber-50/40" : ""}`}
       >
         <td className="px-4 py-3 text-xs text-slate-700">{fmtDate(p.orderedAt)}</td>
         
         <td className="px-4 py-3">
-          <div className="flex items-center gap-2">
-            <p className="text-xs font-semibold text-slate-900">{p.material?.name || "—"}</p>
-            
-            {/* 👇 ADD THE PENDING SPINNER HERE */}
-            {p.__pending && (
-              <span className="flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-700">
-                <RefreshCw size={8} className="animate-spin" /> Syncing
-              </span>
-            )}
-          </div>
+          
+        <div className="flex items-center gap-2">
+          <p className="text-xs font-semibold text-slate-900">
+            {p.material?.name || "—"}
+          </p>
+          {p.__pending && (
+            <span title="Saved on this device, waiting to sync" className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700">
+              <CloudOff size={9} /> Not synced
+            </span>
+          )}
+        </div>
+
           {p.material?.category === "Reel" && p.material?.sizeKg && (
             <p className="mt-0.5 text-[10px] text-slate-400">{p.material.sizeKg} kg each</p>
           )}
@@ -794,7 +1023,7 @@ function RawMaterials() {
 
         <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-end gap-1">
-              {canPay && !p.__pending && (
+              {canPay &&  (
               <button type="button" onClick={() => openPayment(p)} title="Record payment" className="inline-flex h-7 items-center gap-1 rounded-md bg-emerald-600 px-2.5 text-[10px] font-semibold text-white transition-colors hover:bg-emerald-700">
                 <Wallet size={11} /> Pay
               </button>
@@ -802,13 +1031,17 @@ function RawMaterials() {
             
             {p.status === "Pending" && (
               <>
-                <button type="button" onClick={() => openEditPurchase(p)} title="Edit" disabled={saving || p.__pending} className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 disabled:opacity-30 disabled:cursor-not-allowed"><Pencil size={13} /></button>
-                
-                <button type="button" onClick={() => handleReceive(p)} disabled={saving || p.__pending} className="inline-flex h-7 items-center gap-1 rounded-md bg-emerald-600 px-2.5 text-[10px] font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-30 disabled:cursor-not-allowed">
-                  <Truck size={11} /> Receive
+                <button type="button" onClick={() => openEditPurchase(p)} title="Edit" disabled={saving} className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 disabled:opacity-30 disabled:cursor-not-allowed"><Pencil size={13} /></button>
+                <button
+                  type="button"
+                  onClick={() => handleReceive(p)}
+                  disabled={saving}
+                  className="inline-flex h-7 items-center gap-1 rounded-md bg-emerald-600 px-2.5 text-[10px] font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                    <Truck size={11} /> Receive
                 </button>
                 
-                <button type="button" onClick={() => handleCancelPurchase(p)} title="Cancel" disabled={saving || p.__pending} className="flex h-7 w-7 items-center justify-center rounded-md text-red-500 transition-colors hover:bg-red-50 disabled:opacity-30 disabled:cursor-not-allowed"><X size={13} /></button>
+                <button type="button" onClick={() => handleCancelPurchase(p)} title="Cancel" disabled={saving} className="flex h-7 w-7 items-center justify-center rounded-md text-red-500 transition-colors hover:bg-red-50 disabled:opacity-30 disabled:cursor-not-allowed"><X size={13} /></button>
               </>
             )}
           </div>
@@ -1253,6 +1486,11 @@ function RawMaterials() {
                 {(() => { const I = PURCHASE_ICON[viewing.status]; return I ? <I size={10} /> : null; })()}
                 {viewing.status}
               </span>
+              {viewing.__pending && (
+                <span title="Saved on this device, waiting to sync" className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700">
+                  <CloudOff size={9} /> Not synced
+                </span>
+              )}
             </div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <DetailItem label="Material">

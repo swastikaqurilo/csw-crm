@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Plus, Search, X, Truck, MapPin, FileText, ReceiptText, RefreshCw, Package,
   UserRound, CalendarDays, CreditCard, IndianRupee, Pencil, Trash2, Wallet,
@@ -12,6 +12,12 @@ import {
   deleteOrder, getContacts, generateInvoice, getOrderInvoice,
   getPaymentsByOrder, createPayment,
 } from "../api/api";
+import {
+  getOrdersFromCache,
+  getOrderByIdFromCache,
+  getPaymentsByOrderFromCache,
+  getContactsFromCache,
+} from "../offline/index.js";
 
 /* ================================================================
  *  CONSTANTS
@@ -87,9 +93,6 @@ const PAYMENT_STYLE = {
   Pending: "border-slate-200 bg-slate-50 text-slate-600",
 };
 
-/* ================================================================
- *  THEME
- * ================================================================ */
 const BTN = "inline-flex h-10 items-center justify-center gap-2 rounded-lg text-sm font-semibold transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50";
 const BTN_PRIMARY = `${BTN} bg-gradient-to-b from-[#0f2a52] to-[#0a1e3f] px-4 text-white shadow-[0_1px_2px_rgba(10,30,63,0.2)] hover:from-[#0a1e3f] hover:to-[#06142b] hover:shadow-[0_4px_12px_rgba(10,30,63,0.22)]`;
 const BTN_SECONDARY = `${BTN} border border-slate-200 bg-white px-4 font-medium text-slate-600 shadow-[0_1px_2px_rgba(15,23,42,0.03)] hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900`;
@@ -100,9 +103,6 @@ const OVERLAY = "fixed inset-0 z-50 flex items-end justify-center bg-slate-950/5
 const SHEET = "flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-2xl border border-slate-200 bg-white shadow-[0_20px_60px_-12px_rgba(15,23,42,0.35)] sm:rounded-2xl";
 const TH = "px-5 py-3 text-left text-[10px] font-bold uppercase tracking-[0.08em] text-slate-500";
 
-/* ================================================================
- *  PRIMITIVES
- * ================================================================ */
 const StatusPill = ({ status }) => {
   const { badge, icon: Icon } = STATUS_STYLE[status] || STATUS_STYLE.Draft;
   return (
@@ -180,7 +180,6 @@ const KpiCard = ({ label, value, description, icon: Icon, tone = "slate" }) => {
   );
 };
 
-/* Shared modal shell */
 function Modal({ onClose, busy, z = "z-[100]", width = "sm:max-w-3xl", children }) {
   return (
     <div className={`${OVERLAY} ${z}`} onClick={() => !busy && onClose()}>
@@ -211,7 +210,6 @@ function ModalFooter({ children }) {
   return <div className="shrink-0 border-t border-slate-100 bg-slate-50/60 px-4 py-3.5 sm:px-6 sm:py-4">{children}</div>;
 }
 
-/* Generic confirm */
 function ConfirmDialog({ title, message, confirmLabel, tone = "primary", onConfirm, onClose }) {
   const toneMap = {
     danger: ["border-rose-100 bg-rose-50/60", "bg-rose-100 text-rose-700 ring-rose-200/70", "bg-rose-600 hover:bg-rose-700 hover:shadow-[0_4px_12px_rgba(225,29,72,0.25)]"],
@@ -235,10 +233,7 @@ function ConfirmDialog({ title, message, confirmLabel, tone = "primary", onConfi
         <button type="button" onClick={onClose} className={`${BTN_SECONDARY} h-9 sm:w-auto`}>Cancel</button>
         <button
           type="button"
-          onClick={async () => {
-            onClose();
-            await onConfirm?.();
-          }}
+          onClick={async () => { onClose(); await onConfirm?.(); }}
           className={`${BTN} ${toneMap[2]} h-9 px-4 text-xs text-white`}
         >
           <CheckCircle2 size={14} />{confirmLabel}
@@ -259,94 +254,184 @@ function EmptyOrders({ onNew }) {
   );
 }
 
-/* ================================================================
- *  KPI CONFIG
- * ================================================================ */
+const hydrateContact = (order, contacts) => {
+  if (!order) return order;
+  const c = order.contact;
+  if (c && typeof c === "object") return order;
+  const found = c ? contacts.find((x) => String(x._id) === String(c)) : null;
+  return found ? { ...order, contact: found } : order;
+};
+
 const KPI_CONFIG = [
   { key: "total", label: "Total Orders", icon: FileText, tone: "slate", desc: "All purchase orders" },
   { key: "inProcess", label: "In Process", icon: Factory, tone: "amber", desc: "Awaiting dispatch" },
   { key: "dispatched", label: "Dispatched", icon: Truck, tone: "sky", desc: "In transit or delivered" },
   { key: "value", label: "Order Value", icon: IndianRupee, tone: "emerald", desc: "Total on this page", money: true },
 ];
+const isPendingOrder = (o) => String(o?._id || "").startsWith("pending:");
+
+const withPending = (list, extra) => {
+  const ids = new Set(list.map((o) => String(o._id)));
+  return [...extra.filter((o) => !ids.has(String(o._id))), ...list];
+};
+
+const orderMatchesFilters = (o, f) => {
+  if (f.status !== "All" && o.status !== f.status) return false;
+  if (f.payment !== "All" && o.paymentStatus !== f.payment) return false;
+  const q = f.search.trim().toLowerCase();
+  if (!q) return true;
+  return [o.orderNumber, o.contact?.company, o.contact?.name, o.contact?.phone]
+    .some((v) => String(v || "").toLowerCase().includes(q));
+};
 
 /* ================================================================
  *  MAIN
  * ================================================================ */
 function Orders() {
-  /* ── data ── */
   const [orders, setOrders] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, pages: 1, total: 0 });
 
-  /* ── filters ── */
   const [filters, setFilters] = useState({ search: "", status: "All", payment: "All" });
   const patchFilters = (p) => setFilters((f) => ({ ...f, ...p }));
 
-  /* ── flash ── */
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState("");
 
-  /* ── view order modal ── */
-  const [view, setView] = useState(null); // { order, loading, invoice, invoiceLoading, invoiceOpen }
-
-  /* ── create/edit order modal ── */
-  const [modal, setModal] = useState(null); // { editing, form, customerMode, newName, newPhone }
-
-  /* ── payments modal (viewer) ── */
-  const [payments, setPayments] = useState(null); // { order, list, loading }
-
-  /* ── add payment modal ── */
-  const [addPayment, setAddPayment] = useState(null); // { form, submitting }
-
-  /* ── reserved-conflict modal ── */
-  const [reserved, setReserved] = useState(null); // { conflict, order, newStatus }
-
-  /* ── confirm dialog ── */
+  const [view, setView] = useState(null);
+  const [modal, setModal] = useState(null);
+  const [payments, setPayments] = useState(null);
+  const [addPayment, setAddPayment] = useState(null);
+  const [reserved, setReserved] = useState(null);
   const [confirm, setConfirm] = useState(null);
+  const [mapVersion, setMapVersion] = useState(0);
+  
+  const pendingCreatesRef = useRef([]);  
+  const fetchOrdersRef = useRef(null);
+  const fetchContactsRef = useRef(null); 
+  const contactMapRef = useRef(new Map());
 
   /* ── data loaders ── */
   const fetchOrders = async (pageOverride) => {
-    try {
-      setLoading(true);
-      setError("");
-      const p = pageOverride ?? pagination.page;
-      const params = { page: p, limit: ORDERS_PER_PAGE };
-      if (filters.search.trim()) params.search = filters.search.trim();
-      if (filters.status !== "All") params.status = filters.status;
-      if (filters.payment !== "All") params.paymentStatus = filters.payment;
+    const p = pageOverride ?? pagination.page;
+    const params = { page: p, limit: ORDERS_PER_PAGE };
+    if (filters.search.trim()) params.search = filters.search.trim();
+    if (filters.status !== "All") params.status = filters.status;
+    if (filters.payment !== "All") params.paymentStatus = filters.payment;
 
+    const localPending = () =>
+      p === 1 ? pendingCreatesRef.current.filter((o) => orderMatchesFilters(o, filters)) : [];
+
+    try {
+      const cached = await getOrdersFromCache(params);
+      const list = withPending(cached.data, localPending());
+      setOrders(list);
+      setPagination({
+        ...cached.pagination,
+        total: Math.max(cached.pagination.total, list.length),
+      });
+      setLoading(false);
+    } catch {
+      const list = localPending();
+      if (list.length) { setOrders(list); setPagination({ page: 1, pages: 1, total: list.length }); }
+    }
+
+    if (!navigator.onLine) { setLoading(false); return; }
+
+    try {
       const res = await getOrders(params);
       const r = res?.data;
-      if (!r?.success) throw new Error(r?.message || "Failed to fetch orders");
-      setOrders(r.data || []);
-      setPagination({ page: p, pages: Math.max(1, r.pages || 1), total: r.total || 0 });
-    } catch (err) {
-      setError(err?.response?.data?.message || err?.message || "Failed to load orders.");
-    } finally {
-      setLoading(false);
-    }
+      if (r?.offline) return;
+
+      if (r?.records || r?.success) {
+        const networkData = r.records || r.data || [];
+
+        let pending = [];
+        try {
+          const cachedNow = await getOrdersFromCache(params);
+          pending = cachedNow.data.filter(isPendingOrder);
+          if (networkData.length === 0 && cachedNow.data.length > 0) {
+            setOrders(cachedNow.data);
+            setPagination(cachedNow.pagination);
+            setError("");
+            return;
+          }
+        } catch { /* ignore */ }
+
+        if (pending.length === 0) pendingCreatesRef.current = [];
+
+        const merged = p === 1 ? withPending(networkData, pending) : networkData;
+        setOrders(merged);
+
+        if (merged.some((o) => o.contact && typeof o.contact !== "object")) fetchContacts();
+
+        setPagination({
+          page: p,
+          pages: r.hasMore ? p + 1 : p, 
+          total: Math.max(r.total || merged.length, merged.length),
+        });
+        setError("");
+      }
+    } catch { /* offline — cache stays */ }
+    finally { setLoading(false); }
+  };
+  fetchOrdersRef.current = fetchOrders;
+
+const fetchContacts = async () => {
+  const absorb = (list) => {
+    list.forEach((c) => c?._id && contactMapRef.current.set(String(c._id), c));
+    setMapVersion((v) => v + 1);
   };
 
-  const fetchContacts = async () => {
-    try {
-      const res = await getContacts({ limit: 100 });
-      const r = res?.data;
-      if (r?.success) setContacts((r.data || []).filter((c) => c.role === "customer"));
-    } catch (err) {
-      console.error("Fetch contacts error:", err);
+  try {
+    const cached = await getContactsFromCache({ role: "customer" });
+    if (cached.length > 0) { setContacts(cached); absorb(cached); }
+  } catch { /* ignore */ }
+
+  try {
+    const res = await getContacts({ limit: 500 });
+    const r = res?.data;
+    const list = r?.records || r?.data || [];
+    if (Array.isArray(list) && list.length) {
+      absorb(list);
+      setContacts(list.filter((c) => c.role === "customer"));
     }
-  };
+  } catch { /* offline */ }
+};
+fetchContactsRef.current = fetchContacts;
 
   useEffect(() => { fetchContacts(); }, []);
   useEffect(() => {
     const t = setTimeout(() => fetchOrders(1), 300);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters.search, filters.status, filters.payment]);
 
-  /* ── KPI ── */
+  useEffect(() => {
+    const onOnline = () => setTimeout(() => {
+      fetchContactsRef.current?.();
+      fetchOrdersRef.current?.(1);
+    }, 2500);
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
+  }, []);
+
+  useEffect(() => {
+    const map = contactMapRef.current;
+    const hollow = (c) => !c || typeof c !== "object" || !(c.company || c.name || c.email);
+    const idOf = (c) => (c && typeof c === "object" ? c._id : c);
+
+    contacts.forEach((c) => map.set(String(c._id), c));
+    orders.forEach((o) => {
+      if (!hollow(o.contact) && o.contact._id) map.set(String(o.contact._id), o.contact);
+    });
+
+    const needsFix = (o) => hollow(o?.contact) && idOf(o?.contact) && map.has(String(idOf(o.contact)));
+    const fix = (o) => (needsFix(o) ? { ...o, contact: map.get(String(idOf(o.contact))) } : o);
+
+    if (orders.some(needsFix)) setOrders((cur) => cur.map(fix));
+    setView((v) => (v && needsFix(v.order) ? { ...v, order: fix(v.order) } : v));
+  }, [contacts, orders, mapVersion]);
+
   const stats = useMemo(() => ({
     total: pagination.total,
     inProcess: orders.filter((o) => IN_PROCESS.includes(o.status)).length,
@@ -355,24 +440,32 @@ function Orders() {
   }), [orders, pagination.total]);
 
   /* ── modal openers ── */
+
   const openViewOrder = async (order) => {
     if (!order?._id) return;
-    setView({ order, loading: true, invoice: null, invoiceLoading: false, invoiceOpen: false });
+
+    setView({ order: hydrateContact(order, contacts), invoice: null, invoiceLoading: false, invoiceOpen: false });
+
+    try {
+      const cached = await getOrderByIdFromCache(order._id);
+      if (cached) {
+        setView((v) => v && v.order._id === order._id ? { ...v, order: hydrateContact(cached, contacts) } : v);
+      }
+    } catch { /* ignore */ }
+
+    if (String(order._id).startsWith("pending:")) return;
+
     try {
       const [oRes, iRes] = await Promise.all([getOrderById(order._id), getOrderInvoice(order._id)]);
       setView((v) => v && v.order._id === order._id ? {
         ...v,
-        order: oRes?.data?.success ? oRes.data.data : v.order,
+        order: oRes?.data?.success ? hydrateContact(oRes.data.data, contacts) : v.order,
         invoice: iRes?.data?.success ? iRes.data.data : null,
-        loading: false,
       } : v);
-    } catch (err) {
-      if (err?.response?.status !== 404) console.error("Fetch order/invoice details error:", err);
-      setView((v) => (v ? { ...v, loading: false } : v));
-    }
+    } catch { /* offline — keep current view */ }
   };
 
-  const closeView = () => { if (!saving) setView(null); };
+  const closeView = () => setView(null);
 
   const openCreateModal = () => setModal({
     editing: null, form: emptyOrderForm(), customerMode: "existing", newName: "", newPhone: "",
@@ -400,7 +493,7 @@ function Orders() {
     });
   };
 
-  const closeModal = () => { if (!saving) setModal(null); };
+  const closeModal = () => setModal(null);
   const setForm = (patch) => setModal((m) => (m ? { ...m, form: { ...m.form, ...patch } } : m));
   const setModalField = (patch) => setModal((m) => (m ? { ...m, ...patch } : m));
 
@@ -408,7 +501,6 @@ function Orders() {
   const addItemRow = () => setForm({ items: [...modal.form.items, EMPTY_ITEM()] });
   const removeItemRow = (i) => setForm({ items: modal.form.items.length > 1 ? modal.form.items.filter((_, idx) => idx !== i) : modal.form.items });
 
-  /* ── preview ── */
   const preview = useMemo(() => {
     if (!modal) return { subTotal: 0, tax: 0, grandTotal: 0 };
     let sub = 0;
@@ -424,7 +516,6 @@ function Orders() {
     return { subTotal: sub, tax, grandTotal: taxable + tax };
   }, [modal]);
 
-  /* ── validate + payload ── */
   const validate = () => {
     const f = modal.form;
     if (modal.customerMode === "existing" && !f.contact) return "Please select a customer.";
@@ -453,85 +544,149 @@ function Orders() {
       return { size: it.size, quantity: Number(it.quantity), rate: Number(it.rate || 0), discount: Number(it.discount || 0), spoolKg: specs.spoolKg, steelKg: specs.steelKg };
     });
 
-  /* ── create / update ── */
+  /* ── create / update (non-blocking) ── */
   const handleCreate = async () => {
     const err = validate();
     if (err) return toast.error(err);
-    try {
-      setSaving(true);
-      const f = modal.form;
-      const payload = {
-        items: buildItems(),
-        discount: Number(f.discount || 0),
-        taxPercent: Number(f.taxPercent || 18),
-        expectedDeliveryDate: f.expectedDeliveryDate || undefined,
-        shippingAddress: f.shippingAddress.trim(),
-        billingAddress: f.billingAddress.trim(),
-        notes: f.notes.trim(),
-      };
-      if (f.enquiry.trim()) payload.enquiry = f.enquiry.trim();
-      if (modal.customerMode === "existing") payload.contact = f.contact;
-      else { payload.customerName = modal.newName.trim(); payload.customerPhone = modal.newPhone.trim(); }
 
+    const f = modal.form;
+    const payload = {
+      items: buildItems(),
+      discount: Number(f.discount || 0),
+      taxPercent: Number(f.taxPercent || 18),
+      expectedDeliveryDate: f.expectedDeliveryDate || undefined,
+      shippingAddress: f.shippingAddress.trim(),
+      billingAddress: f.billingAddress.trim(),
+      notes: f.notes.trim(),
+    };
+    if (f.enquiry.trim()) payload.enquiry = f.enquiry.trim();
+    if (modal.customerMode === "existing") payload.contact = f.contact;
+    else { payload.customerName = modal.newName.trim(); payload.customerPhone = modal.newPhone.trim(); }
+
+    const contactObj =
+      modal.customerMode === "existing"
+        ? contacts.find((c) => c._id === f.contact) || f.contact
+        : { _id: `pending-contact:${Date.now()}`, name: modal.newName.trim(), company: modal.newName.trim(), phone: modal.newPhone.trim(), role: "customer" };
+    
+    const totals = preview;
+
+    setModal(null);
+
+    const showLocally = (order) => {
+      pendingCreatesRef.current = [order, ...pendingCreatesRef.current.filter((o) => o._id !== order._id)];
+      setOrders((cur) => (cur.some((o) => o._id === order._id) ? cur : [order, ...cur].slice(0, ORDERS_PER_PAGE)));
+      setPagination((pg) => ({ ...pg, total: pg.total + 1 }));
+    };
+
+    try {
       const res = await createOrder(payload);
-      if (!res?.data?.success) throw new Error(res?.data?.message || "Failed to create order");
-      const created = res.data.data;
-      toast.success(`Order ${created.orderNumber} created`);
-      setModal(null);
-      await fetchOrders();
-      if (created?._id) await openViewOrder(created);
+      const created = res?.data?.data;
+      const isQueued = res?.data?.offline === true || !navigator.onLine;
+
+      if (created && !isQueued) {
+        toast.success(`Order ${created.orderNumber} created`);
+        await fetchOrders();
+        if (created._id) openViewOrder(created);
+        return;
+      }
+
+      const localOrder = {
+        ...payload,
+        _id: `pending:${Date.now()}`,
+        __pending: true,
+        orderNumber: "PO-NEW",
+        orderDate: new Date().toISOString(),
+        status: "Draft",
+        paymentStatus: "Pending",
+        amountPaid: 0,
+        items: payload.items.map((it) => ({
+          ...it,
+          amount: Math.max(0, it.quantity * it.rate - it.discount),
+        })),
+        subTotal: totals.subTotal,
+        taxAmount: totals.tax,
+        grandTotal: totals.grandTotal,
+        ...(created?._id ? created : {}),  
+        contact: typeof created?.contact === "object" && created.contact ? created.contact : contactObj,  
+      };
+
+      showLocally(localOrder);
+      toast.info("Order saved offline. It will sync when you're back online.");
+      await fetchOrders(1);
+      openViewOrder(localOrder);
     } catch (err) {
-      toast.error(err?.response?.data?.message || err?.message || "Failed to create order.");
-    } finally { setSaving(false); }
+      toast.error(err?.response?.data?.message || err?.message || "Could not create order.");
+      await fetchOrders();
+    }
   };
 
   const handleUpdate = async () => {
     if (!modal.editing?._id) return;
+    const isDraft = modal.editing.status === "Draft";
+    const f = modal.form;
+    const payload = {
+      expectedDeliveryDate: f.expectedDeliveryDate || undefined,
+      shippingAddress: f.shippingAddress.trim(),
+      billingAddress: f.billingAddress.trim(),
+      notes: f.notes.trim(),
+      discount: Number(f.discount || 0),
+      taxPercent: Number(f.taxPercent || 18),
+    };
+    if (isDraft) {
+      const err = validate();
+      if (err) { toast.error(err); return; }
+      payload.items = buildItems();
+    }
+
+    const editing = modal.editing;
+    setModal(null);
+
     try {
-      setSaving(true);
-      const f = modal.form;
-      const isDraft = modal.editing.status === "Draft";
-      const payload = {
-        expectedDeliveryDate: f.expectedDeliveryDate || undefined,
-        shippingAddress: f.shippingAddress.trim(),
-        billingAddress: f.billingAddress.trim(),
-        notes: f.notes.trim(),
-        discount: Number(f.discount || 0),
-        taxPercent: Number(f.taxPercent || 18),
-      };
-      if (isDraft) {
-        const err = validate();
-        if (err) { toast.error(err); return; }
-        payload.items = buildItems();
+      const res = await updateOrder(editing._id, payload);
+      const updated = res?.data?.data;
+      const isQueued = res?.data?.offline === true;
+      if (updated && !isQueued) {
+        toast.success(`Order ${updated.orderNumber || editing.orderNumber} updated`);
+        await fetchOrders();
+        if (updated._id) openViewOrder(updated);
+      } else {
+        await fetchOrders();
+        if (updated?._id) openViewOrder(updated);
       }
-      const res = await updateOrder(modal.editing._id, payload);
-      if (!res?.data?.success) throw new Error(res?.data?.message || "Failed to update order");
-      const updated = res.data.data;
-      toast.success(`Order ${updated.orderNumber} updated`);
-      setModal(null);
-      await fetchOrders();
-      if (updated?._id) await openViewOrder(updated);
     } catch (err) {
-      toast.error(err?.response?.data?.message || err?.message || "Failed to update order.");
-    } finally { setSaving(false); }
+      toast.error(err?.response?.data?.message || "Could not update order.");
+      await fetchOrders();
+    }
   };
 
-  /* ── status change ── */
+  /* ── status change (optimistic) ── */
   const performStatusChange = async (order, newStatus, extra = {}) => {
+    const prevStatus = order.status;
+
+    setOrders((cur) => cur.map((o) => (o._id === order._id ? { ...o, status: newStatus } : o)));
+    setView((v) => v && v.order._id === order._id ? { ...v, order: { ...v.order, status: newStatus } } : v);
+
     try {
       const res = await updateOrderStatus(order._id, { status: newStatus, ...extra });
-      if (!res?.data?.success) throw new Error(res?.data?.message || "Failed to update order status");
+      if (!res?.data?.success) throw new Error("Failed to update order status");
       const updated = res.data.data;
-      setOrders((cur) => cur.map((o) => (o._id === order._id ? { ...o, ...updated, status: newStatus } : o)));
-      setView((v) => v && v.order._id === order._id ? { ...v, order: { ...v.order, ...updated, status: newStatus } } : v);
-      toast.success(`Order ${order.orderNumber} marked as ${newStatus}`);
+      if (updated?._id) {
+        setOrders((cur) => cur.map((o) => (o._id === order._id ? { ...o, ...updated } : o)));
+        setView((v) => v && v.order._id === order._id ? { ...v, order: { ...v.order, ...updated } } : v);
+      }
+      if (!res.data?.offline) {
+        toast.success(`Order ${order.orderNumber} marked as ${newStatus}`);
+      }
     } catch (err) {
+      setOrders((cur) => cur.map((o) => (o._id === order._id ? { ...o, status: prevStatus } : o)));
+      setView((v) => v && v.order._id === order._id ? { ...v, order: { ...v.order, status: prevStatus } } : v);
+
       const body = err?.response?.data ?? err;
       if (body?.code === "RESERVED_CONFLICT" && body?.data) {
         setReserved({ conflict: body.data, order, newStatus });
         return;
       }
-      toast.error(body?.message || err?.message || "Failed to update order status.");
+      toast.error(body?.message || "Could not update status.");
     }
   };
 
@@ -549,14 +704,10 @@ function Orders() {
   const handleReservedConfirm = async () => {
     if (!reserved) return;
     const { order, newStatus } = reserved;
-    try {
-      setSaving(true);
-      await performStatusChange(order, newStatus, { allowReserved: true });
-      setReserved(null);
-    } finally { setSaving(false); }
+    setReserved(null);
+    await performStatusChange(order, newStatus, { allowReserved: true });
   };
 
-  /* ── delete ── */
   const handleDelete = (order) => {
     if (!order?._id) return;
     if (!["Draft", "Cancelled"].includes(order.status)) return toast.warn("Only Draft or Cancelled orders can be deleted.");
@@ -566,49 +717,60 @@ function Orders() {
       confirmLabel: "Yes, Delete",
       confirmTone: "danger",
       onConfirm: async () => {
-        setConfirm(null);
+        setOrders((cur) => cur.filter((o) => o._id !== order._id));
+        setView(null);
         try {
-          setDeleting(true);
           const res = await deleteOrder(order._id);
-          if (!res?.data?.success) throw new Error(res?.data?.message || "Failed to delete order");
-          toast.success(`Order ${order.orderNumber} deleted`);
-          setView(null);
+          if (!res?.data?.success) throw new Error("Failed to delete order");
+          if (!res.data?.offline) toast.success(`Order ${order.orderNumber} deleted`);
           await fetchOrders();
         } catch (err) {
-          toast.error(err?.response?.data?.message || "Failed to delete order");
-        } finally { setDeleting(false); }
+          toast.error(err?.response?.data?.message || "Could not delete order.");
+          await fetchOrders();
+        }
       },
     });
   };
 
-  /* ── invoice ── */
   const handleGenerateInvoice = async (order) => {
     if (!order?._id) return;
+
+    if (String(order._id).startsWith("pending:")) {
+      toast.info("Invoice will be available once this order syncs.");
+      return;
+    }
+
+    setView((v) => (v ? { ...v, invoiceLoading: true } : v));
     try {
-      setView((v) => (v ? { ...v, invoiceLoading: true } : v));
-      setError("");
       const res = await generateInvoice(order._id);
-      if (!res?.data?.success) throw new Error(res?.data?.message || "Failed to generate invoice");
-      setView((v) => (v ? { ...v, invoice: res.data.data, invoiceLoading: false, invoiceOpen: true } : v));
-    } catch (err) {
-      setError(err?.response?.data?.message || err?.message || "Failed to generate invoice.");
+      if (res?.data?.success && !res.data?.offline) {
+        setView((v) => (v ? { ...v, invoice: res.data.data, invoiceLoading: false, invoiceOpen: true } : v));
+      } else {
+        setView((v) => (v ? { ...v, invoiceLoading: false } : v));
+        toast.info("Invoice will be ready once you're back online.");
+      }
+    } catch {
       setView((v) => (v ? { ...v, invoiceLoading: false } : v));
+      toast.info("Invoice will be ready once you're back online.");
     }
   };
 
-  /* ── payments ── */
   const openPayments = async (order) => {
     if (!order?._id) return;
+    setPayments({ order, list: [], loading: false });
+
     try {
-      setPayments({ order, list: [], loading: true });
+      const cached = await getPaymentsByOrderFromCache(order._id);
+      setPayments((p) => p ? { order: { ...p.order, ...(cached.order || {}) }, list: cached.data, loading: false } : p);
+    } catch { /* ignore */ }
+
+    if (String(order._id).startsWith("pending:")) return;
+
+    try {
       const res = await getPaymentsByOrder(order._id);
       const data = res.data;
-      setPayments({ order: { ...order, ...(data.order || {}) }, list: data.data || [], loading: false });
-    } catch (err) {
-      console.error("Failed to fetch payments:", err);
-      toast.error(err?.response?.data?.message || "Failed to load payment details");
-      setPayments(null);
-    }
+      setPayments((p) => p ? { order: { ...p.order, ...(data.order || {}) }, list: data.data || [], loading: false } : p);
+    } catch { /* offline — cache stays */ }
   };
 
   const handleAddPayment = async (e) => {
@@ -618,34 +780,45 @@ function Orders() {
     if (!amount || amount <= 0) return toast.warn("Please enter a valid payment amount.");
     const remaining = Number(payments.order.grandTotal || 0) - Number(payments.order.amountPaid || 0);
     if (amount > remaining) return toast.warn(`Payment cannot exceed the remaining amount of ₹${remaining.toLocaleString("en-IN")}.`);
+
+    const f = addPayment.form;
+    const targetOrderId = payments.order._id;
+
+    setAddPayment(null);
+
     try {
-      setAddPayment((p) => ({ ...p, submitting: true }));
-      const f = addPayment.form;
-      await createPayment({
-        order: payments.order._id,
+      const res = await createPayment({
+        order: targetOrderId,
         contact: payments.order.contact?._id || payments.order.contact,
         amount, paymentMode: f.paymentMode, paymentDate: f.paymentDate,
         paidFrom: f.paidFrom, transactionId: f.transactionId,
         chequeNumber: f.chequeNumber, bankName: f.bankName, notes: f.notes,
       });
-      const res = await getPaymentsByOrder(payments.order._id);
-      const data = res.data;
-      setPayments((p) => ({ ...p, order: { ...p.order, ...(data.order || {}) }, list: data.data || [] }));
-      setAddPayment(null);
-      toast.success(`Payment of ₹${amount.toLocaleString("en-IN")} recorded`);
-      fetchOrders();
+
+      try {
+        const cached = await getPaymentsByOrderFromCache(targetOrderId);
+        setPayments((p) => p ? { order: { ...p.order, ...(cached.order || {}) }, list: cached.data } : p);
+      } catch { /* ignore */ }
+
+      try {
+        const fresh = await getPaymentsByOrder(targetOrderId);
+        setPayments((p) => p ? { order: { ...p.order, ...(fresh.data.order || {}) }, list: fresh.data.data || [] } : p);
+      } catch { /* offline */ }
+
+      if (!res?.data?.offline) {
+        toast.success(`Payment of ₹${amount.toLocaleString("en-IN")} recorded`);
+      }
+
+      await fetchOrders();
     } catch (err) {
-      console.error("Failed to create payment:", err);
-      toast.error(err?.response?.data?.message || "Failed to add payment.");
-    } finally { setAddPayment((p) => (p ? { ...p, submitting: false } : p)); }
+      toast.error(err?.response?.data?.message || "Could not record payment.");
+    }
   };
 
-  /* ── pagination ── */
   const firstShown = pagination.total === 0 ? 0 : (pagination.page - 1) * ORDERS_PER_PAGE + 1;
   const lastShown = Math.min(pagination.page * ORDERS_PER_PAGE, pagination.total);
   const goPage = (p) => { if (p >= 1 && p <= pagination.pages) fetchOrders(p); };
 
-  /* ── primary action button ── */
   const renderPrimaryAction = (order) => {
     if (!order) return null;
     const map = {
@@ -665,9 +838,8 @@ function Orders() {
     );
   };
 
-  /* ================================================================
-   *  RENDER
-   * ================================================================ */
+  const showSkeleton = loading && orders.length === 0;
+
   return (
     <div className="min-h-full min-w-0 space-y-4 pb-8 sm:space-y-5">
       {/* HEADER */}
@@ -680,8 +852,8 @@ function Orders() {
           <p className="mt-2 text-sm leading-6 text-slate-500">Manage customer purchase orders, production and fulfilment.</p>
         </div>
         <div className="flex items-center gap-2">
-          <button type="button" onClick={() => fetchOrders()} disabled={loading} className={`${BTN_SECONDARY} h-10`}>
-            <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
+          <button type="button" onClick={() => fetchOrders()} className={`${BTN_SECONDARY} h-10`}>
+            <RefreshCw size={15} />
             <span className="hidden sm:inline">Refresh</span>
           </button>
           <button type="button" onClick={openCreateModal} className={`${BTN_PRIMARY} h-10 flex-1 sm:flex-none`}>
@@ -690,7 +862,6 @@ function Orders() {
         </div>
       </section>
 
-      {/* ERROR */}
       {error && (
         <div className="flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50/80 px-4 py-3 text-sm text-rose-700 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
           <AlertCircle size={17} className="mt-0.5 shrink-0" />
@@ -739,13 +910,13 @@ function Orders() {
             <p className="mt-1 text-xs text-slate-500">Purchase orders and current fulfilment status.</p>
           </div>
           <div className="inline-flex items-center gap-1.5 self-start rounded-md border border-slate-200/70 bg-slate-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500 sm:self-auto">
-            {loading ? "Updating…" : `${orders.length} shown`}
+            {orders.length} shown
           </div>
         </div>
 
         {/* Mobile cards */}
         <div className="md:hidden">
-          {loading ? (
+          {showSkeleton ? (
             <div className="divide-y divide-slate-100">
               {Array.from({ length: 4 }).map((_, i) => (
                 <div key={i} className="space-y-2.5 px-4 py-4">
@@ -810,7 +981,7 @@ function Orders() {
               </tr>
             </thead>
             <tbody>
-              {loading ? Array.from({ length: ORDERS_PER_PAGE }).map((_, i) => (
+              {showSkeleton ? Array.from({ length: ORDERS_PER_PAGE }).map((_, i) => (
                 <tr key={i} className="border-b border-slate-100">
                   <td className="px-5 py-4"><Skeleton width="w-24" /><Skeleton width="w-16" /></td>
                   <td className="px-4 py-4"><Skeleton width="w-28" /><Skeleton width="w-20" /></td>
@@ -860,22 +1031,20 @@ function Orders() {
             Showing <span className="font-semibold text-slate-600">{firstShown}</span> to <span className="font-semibold text-slate-600">{lastShown}</span> of <span className="font-semibold text-slate-600">{pagination.total}</span> purchase orders
           </p>
           <div className="flex items-center justify-center gap-1.5">
-            <button type="button" disabled={pagination.page <= 1 || loading} onClick={() => goPage(pagination.page - 1)} className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-500 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40 sm:h-8 sm:px-2.5">
+            <button type="button" disabled={pagination.page <= 1} onClick={() => goPage(pagination.page - 1)} className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-500 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40 sm:h-8 sm:px-2.5">
               <ChevronLeft size={14} /> Previous
             </button>
             <div className="flex h-9 min-w-9 items-center justify-center rounded-lg bg-[#0a1e3f] px-2 text-xs font-semibold tabular-nums text-white shadow-[0_1px_2px_rgba(10,30,63,0.2)] sm:h-8 sm:min-w-8">{pagination.page}</div>
-            <button type="button" disabled={pagination.page >= pagination.pages || loading} onClick={() => goPage(pagination.page + 1)} className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-500 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40 sm:h-8 sm:px-2.5">
+            <button type="button" disabled={pagination.page >= pagination.pages} onClick={() => goPage(pagination.page + 1)} className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-500 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40 sm:h-8 sm:px-2.5">
               Next <ChevronRight size={14} />
             </button>
           </div>
         </div>
       </section>
 
-      {/* ============================================================
-          ORDER DETAILS MODAL
-      ============================================================ */}
+      {/* ORDER DETAILS MODAL */}
       {view && (
-        <Modal onClose={closeView} busy={saving} width="sm:max-w-3xl">
+        <Modal onClose={closeView} width="sm:max-w-3xl">
           <ModalHeader
             leadingIcon={<Package size={18} className="text-white" />}
             title="Order Details"
@@ -888,17 +1057,10 @@ function Orders() {
               </div>
             }
             onClose={closeView}
-            busy={saving}
           />
 
           <div className="relative min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 sm:py-6">
-            {view.loading && (
-              <div className="absolute right-3 top-3 z-10 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] font-medium text-slate-500 shadow-sm sm:right-5 sm:top-5">
-                <RefreshCw size={13} className="animate-spin" /> Loading details...
-              </div>
-            )}
             <div className="space-y-6">
-              {/* Purchaser */}
               <div>
                 <SectionHeading icon={UserRound} title="Purchaser Information" />
                 <div className="rounded-xl border border-slate-100 bg-gradient-to-b from-slate-50/80 to-white p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
@@ -917,7 +1079,6 @@ function Orders() {
                 </div>
               </div>
 
-              {/* Items */}
               <div>
                 <SectionHeading icon={Package} title="Consignment Specification" />
                 <div className="space-y-3">
@@ -953,7 +1114,6 @@ function Orders() {
                 </div>
               </div>
 
-              {/* Financial */}
               <div>
                 <SectionHeading icon={CreditCard} title="Financial / Ledger" wrapper="bg-emerald-50 text-emerald-600" />
                 <div className="rounded-xl border border-slate-100 bg-gradient-to-b from-slate-50/80 to-white p-4">
@@ -971,7 +1131,6 @@ function Orders() {
                 </div>
               </div>
 
-              {/* Logistics */}
               <div>
                 <SectionHeading icon={MapPin} title="Logistics &amp; Site Address" wrapper="bg-sky-50 text-sky-600" />
                 <div className="rounded-xl border border-slate-100 bg-gradient-to-b from-slate-50/80 to-white p-4">
@@ -1000,7 +1159,6 @@ function Orders() {
                 </div>
               )}
 
-              {/* Status */}
               <div>
                 <SectionHeading icon={Clock3} title="Order Status" />
                 <select
@@ -1012,7 +1170,6 @@ function Orders() {
                 </select>
               </div>
 
-              {/* Timeline */}
               <div>
                 <SectionHeading icon={Clock3} title="Audit &amp; Dispatch Timeline" />
                 <div className="relative space-y-5 pl-6">
@@ -1036,18 +1193,18 @@ function Orders() {
 
               <button type="button"
                 onClick={() => { if (view.invoice) setView((v) => ({ ...v, invoiceOpen: true })); else handleGenerateInvoice(view.order); }}
-                disabled={view.invoiceLoading || ["Draft", "Cancelled"].includes(view.order.status)}
+                disabled={["Draft", "Cancelled"].includes(view.order.status)}
                 className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50 sm:h-9">
-                {view.invoiceLoading ? <RefreshCw size={13} className="animate-spin" /> : <ReceiptText size={13} />}
-                {view.invoiceLoading ? "Loading..." : view.invoice ? "View Invoice" : "Generate Invoice"}
+                <ReceiptText size={13} />
+                {view.invoice ? "View Invoice" : "Generate Invoice"}
               </button>
 
               {renderPrimaryAction(view.order)}
 
               {["Draft", "Cancelled"].includes(view.order.status) && (
-                <button type="button" onClick={() => handleDelete(view.order)} disabled={deleting}
+                <button type="button" onClick={() => handleDelete(view.order)}
                   className={`${BTN_DANGER} col-span-2 h-10 text-xs sm:col-span-4 sm:h-9`}>
-                  <Trash2 size={13} />{deleting ? "Deleting..." : "Delete Order"}
+                  <Trash2 size={13} /> Delete Order
                 </button>
               )}
 
@@ -1062,9 +1219,7 @@ function Orders() {
         </Modal>
       )}
 
-      {/* ============================================================
-          CREATE / EDIT ORDER MODAL
-      ============================================================ */}
+      {/* CREATE / EDIT ORDER MODAL */}
       {modal && (() => {
         const isEdit = Boolean(modal.editing);
         const itemsLocked = isEdit && modal.editing.status !== "Draft";
@@ -1076,20 +1231,17 @@ function Orders() {
         const ta = "w-full resize-none rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm leading-5 text-slate-800 shadow-[0_1px_2px_rgba(15,23,42,0.03)] outline-none transition placeholder:text-slate-400 hover:border-slate-300 focus:border-[#0a1e3f] focus:ring-4 focus:ring-[#0a1e3f]/10";
 
         return (
-          <Modal onClose={closeModal} busy={saving} z="z-[110]" width="sm:max-w-5xl">
+          <Modal onClose={closeModal} z="z-[110]" width="sm:max-w-5xl">
             <ModalHeader
               leadingIcon={isEdit ? <Pencil size={18} className="text-white" /> : <Layers size={18} className="text-white" />}
               title={isEdit ? `Edit ${modal.editing.orderNumber}` : "New purchase order"}
               subtitle={isEdit ? `${contactName(modal.editing.contact)} · ${modal.editing.status}` : "Select customer, add reels, then save as draft"}
               onClose={closeModal}
-              busy={saving}
             />
 
             <div className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden">
-              {/* LEFT */}
               <div className="min-w-0 flex-1 p-4 sm:p-6 lg:overflow-y-auto">
                 <div className="space-y-6">
-                  {/* Customer */}
                   <section>
                     <div className="mb-3 flex items-center gap-2"><UserRound size={15} className="text-[#0a1e3f]" /><h4 className="text-sm font-semibold text-slate-900">Customer</h4></div>
                     <div className="grid grid-cols-1 gap-4 rounded-xl border border-slate-200 bg-slate-50/50 p-3.5 sm:p-4 md:grid-cols-2">
@@ -1166,7 +1318,6 @@ function Orders() {
                     </div>
                   </section>
 
-                  {/* Reels */}
                   <section>
                     <div className="mb-3 flex items-center justify-between gap-3">
                       <div className="flex items-center gap-2"><Layers size={15} className="text-[#0a1e3f]" /><h4 className="text-sm font-semibold text-slate-900">Reels</h4></div>
@@ -1232,7 +1383,6 @@ function Orders() {
                     </div>
                   </section>
 
-                  {/* Addresses */}
                   <section>
                     <div className="mb-3 flex items-center gap-2"><MapPin size={15} className="text-[#0a1e3f]" /><h4 className="text-sm font-semibold text-slate-900">Addresses</h4></div>
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -1249,7 +1399,6 @@ function Orders() {
                     </div>
                   </section>
 
-                  {/* Notes */}
                   <section>
                     <div className="mb-3 flex items-center gap-2"><FileText size={15} className="text-[#0a1e3f]" /><h4 className="text-sm font-semibold text-slate-900">Notes</h4></div>
                     <textarea className={ta} value={modal.form.notes} onChange={(e) => setForm({ notes: e.target.value })} placeholder="PO reference, packing instructions, etc." rows="2" />
@@ -1257,7 +1406,6 @@ function Orders() {
                 </div>
               </div>
 
-              {/* RIGHT – summary */}
               <aside className="w-full shrink-0 border-t border-slate-200 bg-gradient-to-b from-slate-50 to-slate-50/60 lg:w-[300px] lg:overflow-y-auto lg:border-l lg:border-t-0">
                 <div className="flex h-full flex-col p-4 sm:p-6">
                   <div className="mb-4 flex items-center gap-2"><Receipt size={15} className="text-[#0a1e3f]" /><h4 className="text-sm font-semibold text-slate-900">Order summary</h4></div>
@@ -1299,10 +1447,10 @@ function Orders() {
               <div className="flex items-center justify-between gap-3">
                 <p className="hidden text-xs text-slate-500 sm:block">{isEdit ? "Changes save immediately." : "Saves as draft. Confirm later to deduct stock."}</p>
                 <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
-                  <button type="button" onClick={closeModal} disabled={saving} className={`${BTN_SECONDARY} h-10 flex-1 sm:flex-none`}>Cancel</button>
-                  <button type="button" onClick={isEdit ? handleUpdate : handleCreate} disabled={saving} className={`${BTN_PRIMARY} h-10 flex-1 sm:flex-none`}>
-                    {saving ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle2 size={15} />}
-                    {saving ? "Saving..." : isEdit ? "Save changes" : "Create order"}
+                  <button type="button" onClick={closeModal} className={`${BTN_SECONDARY} h-10 flex-1 sm:flex-none`}>Cancel</button>
+                  <button type="button" onClick={isEdit ? handleUpdate : handleCreate} className={`${BTN_PRIMARY} h-10 flex-1 sm:flex-none`}>
+                    <CheckCircle2 size={15} />
+                    {isEdit ? "Save changes" : "Create order"}
                   </button>
                 </div>
               </div>
@@ -1311,12 +1459,8 @@ function Orders() {
         );
       })()}
 
-      {/* Invoice modal */}
       {view?.invoiceOpen && view.invoice && <InvoiceModal invoice={view.invoice} onClose={() => setView((v) => (v ? { ...v, invoiceOpen: false } : v))} />}
 
-      {/* ============================================================
-          PAYMENTS MODAL
-      ============================================================ */}
       {payments && (
         <Modal onClose={() => setPayments(null)} z="z-[120]" width="sm:max-w-2xl">
           <ModalHeader
@@ -1337,9 +1481,7 @@ function Orders() {
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
-            {payments.loading ? (
-              <div className="flex items-center justify-center gap-2 py-12 text-sm text-slate-500"><RefreshCw size={16} className="animate-spin" /> Loading payments...</div>
-            ) : payments.list.length === 0 ? (
+            {payments.list.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-center">
                 <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-400 ring-1 ring-slate-200/70"><Wallet size={20} /></div>
                 <p className="mt-4 text-sm font-semibold text-slate-800">No payments recorded</p>
@@ -1372,7 +1514,7 @@ function Orders() {
           <ModalFooter>
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <button type="button" onClick={() => setPayments(null)} className={`${BTN_SECONDARY} h-10 w-full sm:w-auto`}>Close</button>
-              <button type="button" onClick={() => setAddPayment({ form: emptyPaymentForm(), submitting: false })} className={`${BTN_PRIMARY} h-10 w-full sm:w-auto`}>
+              <button type="button" onClick={() => setAddPayment({ form: emptyPaymentForm() })} className={`${BTN_PRIMARY} h-10 w-full sm:w-auto`}>
                 <Plus size={15} /> Add Payment
               </button>
             </div>
@@ -1380,12 +1522,9 @@ function Orders() {
         </Modal>
       )}
 
-      {/* ============================================================
-          ADD PAYMENT MODAL
-      ============================================================ */}
       {addPayment && payments && (
-        <Modal onClose={() => setAddPayment(null)} busy={addPayment.submitting} z="z-[125]" width="sm:max-w-2xl">
-          <ModalHeader title="Add Payment" subtitle="Record a payment for this order" onClose={() => setAddPayment(null)} busy={addPayment.submitting} />
+        <Modal onClose={() => setAddPayment(null)} z="z-[125]" width="sm:max-w-2xl">
+          <ModalHeader title="Add Payment" subtitle="Record a payment for this order" onClose={() => setAddPayment(null)} />
           <form onSubmit={handleAddPayment} className="flex min-h-0 flex-1 flex-col">
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
               <div className="mb-5 rounded-xl border border-slate-200 bg-gradient-to-b from-slate-50 to-white p-4">
@@ -1464,9 +1603,9 @@ function Orders() {
             <ModalFooter>
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end sm:gap-3">
                 <button type="button" onClick={() => setAddPayment(null)} className={`${BTN_SECONDARY} h-10 w-full sm:w-auto`}>Cancel</button>
-                <button type="submit" disabled={addPayment.submitting}
-                  className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-sky-600 px-5 text-sm font-semibold text-white shadow-[0_1px_2px_rgba(2,132,199,0.2)] transition-all hover:bg-sky-700 active:scale-[0.98] disabled:opacity-60 sm:w-auto">
-                  {addPayment.submitting ? <><span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />Saving...</> : <><Plus size={17} />Add Payment</>}
+                <button type="submit"
+                  className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-sky-600 px-5 text-sm font-semibold text-white shadow-[0_1px_2px_rgba(2,132,199,0.2)] transition-all hover:bg-sky-700 active:scale-[0.98] sm:w-auto">
+                  <Plus size={17} />Add Payment
                 </button>
               </div>
             </ModalFooter>
@@ -1474,17 +1613,13 @@ function Orders() {
         </Modal>
       )}
 
-      {/* ============================================================
-          RESERVED STOCK CONFLICT
-      ============================================================ */}
       {reserved && (
-        <Modal onClose={() => setReserved(null)} busy={saving} z="z-[150]" width="sm:max-w-md">
+        <Modal onClose={() => setReserved(null)} z="z-[150]" width="sm:max-w-md">
           <ModalHeader
             tone="warn"
             title="Reserved stock will be used"
             subtitle={`Confirming ${reserved.order.orderNumber} exceeds the available (free) stock.`}
             onClose={() => setReserved(null)}
-            busy={saving}
           />
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-5 sm:px-5">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">{reserved.conflict.name}</p>
@@ -1502,24 +1637,23 @@ function Orders() {
           </div>
           <ModalFooter>
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <button type="button" onClick={() => setReserved(null)} disabled={saving} className={`${BTN_SECONDARY} h-9 sm:w-auto`}>No, Cancel</button>
-              <button type="button" onClick={handleReservedConfirm} disabled={saving}
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 text-xs font-semibold text-white transition-all hover:bg-amber-700 active:scale-[0.98] disabled:opacity-60 sm:w-auto">
-                {saving ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}Yes, Use Reserved
+              <button type="button" onClick={() => setReserved(null)} className={`${BTN_SECONDARY} h-9 sm:w-auto`}>No, Cancel</button>
+              <button type="button" onClick={handleReservedConfirm}
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 text-xs font-semibold text-white transition-all hover:bg-amber-700 active:scale-[0.98] sm:w-auto">
+                <CheckCircle2 size={14} />Yes, Use Reserved
               </button>
             </div>
           </ModalFooter>
         </Modal>
       )}
 
-      {/* Generic confirm */}
       {confirm && <ConfirmDialog {...confirm} onClose={() => setConfirm(null)} />}
     </div>
   );
 }
 
 /* ================================================================
- *  INVOICE MODAL — A4-style printable GST tax invoice
+ *  INVOICE MODAL (unchanged from your original)
  * ================================================================ */
 function InvoiceModal({ invoice, onClose }) {
   if (!invoice) return null;
@@ -1541,7 +1675,6 @@ function InvoiceModal({ invoice, onClose }) {
   const taxAmount = isIGST ? invoice.igstAmount : Number(invoice.cgstAmount || 0) + Number(invoice.sgstAmount || 0);
   const primaryHsn = items[0]?.hsnSac || "—";
 
-  // Meta cells config
   const metaCells = [
     ["Invoice No.", invoice.invoiceNumber || "—"], ["e-Way Bill No.", invoice.eWayBillNumber || "—"],
     ["Dated", dt(invoice.invoiceDate)], ["Mode/Terms of Payment", invoice.paymentTerms || "As per Order"],
@@ -1572,10 +1705,8 @@ function InvoiceModal({ invoice, onClose }) {
 
       <div className="mx-auto max-w-[794px] overflow-x-auto print:max-w-none print:overflow-visible">
         <div id="invoice-print" className="invoice-paper mx-auto w-full min-w-[794px] max-w-[794px] bg-white text-[10px] text-black shadow-2xl print:min-w-0 print:max-w-none print:shadow-none" style={{ fontFamily: "Arial, Helvetica, sans-serif" }}>
-          {/* Title */}
           <div className="border border-black border-b-0 px-2 py-1.5 text-center"><h1 className="text-[16px] font-bold tracking-wide">Tax Invoice</h1></div>
 
-          {/* Seller + meta */}
           <div className="grid grid-cols-12 border border-black">
             <div className="col-span-6 border-r border-black p-2">
               <div className="flex items-start justify-between gap-2">
@@ -1600,7 +1731,6 @@ function InvoiceModal({ invoice, onClose }) {
             </div>
           </div>
 
-          {/* Consignee + buyer */}
           <div className="grid grid-cols-2 border border-black border-t-0">
             {[["Consignee (Ship to)", consignee], ["Buyer (Bill to)", buyer]].map(([title, party], i) => (
               <div key={title} className={`p-2 ${i === 0 ? "border-r border-black" : ""}`}>
@@ -1613,12 +1743,10 @@ function InvoiceModal({ invoice, onClose }) {
             ))}
           </div>
 
-          {/* Terms */}
           <div className="border border-black border-t-0 px-2 py-1">
             <p className="text-[9px]"><span className="font-semibold">Terms of Delivery</span><span className="ml-2">{invoice.termsOfDelivery || "—"}</span></p>
           </div>
 
-          {/* Items table */}
           <table className="w-full border-collapse border border-black border-t-0">
             <thead>
               <tr className="border-b border-black">
@@ -1680,14 +1808,12 @@ function InvoiceModal({ invoice, onClose }) {
             </tbody>
           </table>
 
-          {/* Amount in words */}
           <div className="border border-black border-t-0 px-2 py-1.5">
             <p className="text-[9px]"><span className="font-semibold">Amount Chargeable (in words)</span></p>
             <p className="mt-0.5 text-[10px] font-semibold">{invoice.amountInWords || "Amount in words not available"}</p>
             <p className="mt-0.5 text-right text-[8px] italic text-slate-500">E. & O.E</p>
           </div>
 
-          {/* Tax summary */}
           <table className="w-full border-collapse border border-black border-t-0">
             <thead>
               <tr className="border-b border-black">
@@ -1772,7 +1898,6 @@ function InvoiceModal({ invoice, onClose }) {
             <p className="text-[9px]"><span className="font-semibold">Tax Amount (in words) :</span> <span className="font-semibold">{invoice.taxAmountInWords || "Tax amount in words not available"}</span></p>
           </div>
 
-          {/* Declaration + signature */}
           <div className="grid grid-cols-2 border border-black border-t-0">
             <div className="min-h-[100px] border-r border-black p-2">
               <p className="text-[9px] font-bold underline">Declaration</p>
