@@ -36,8 +36,8 @@ export function newOperationId() {
 
 export function collectionFor(url) {
   const path = String(url || "").split("?")[0];
+  if (/^\/raw-material\/stock(?:\/|$)/.test(path)) return "rawStock";
   if (/^\/raw-material\/purchases(?:\/|$)/.test(path)) return "rawPurchases";
-  if (/^\/raw-material(?:\/|$)/.test(path)) return "rawStock";
   if (/^\/products\/stock(?:\/|$)/.test(path)) return "productStock";
   if (/^\/products(?:\/|$)/.test(path)) return "productProductions";
   const match = path.match(
@@ -47,7 +47,7 @@ export function collectionFor(url) {
 }
 
 export function cachePathForCollection(collection) {
-  if (collection === "rawStock") return "/raw-material";
+  if (collection === "rawStock") return "/raw-material/stock";
   if (collection === "rawPurchases") return "/raw-material/purchases";
   if (collection === "productStock") return "/products/stock";
   if (collection === "productProductions") return "/products";

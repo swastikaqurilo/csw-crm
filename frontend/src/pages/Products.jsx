@@ -74,32 +74,6 @@ async function patchCachedRecord(module, id, patch) {
 
 const SIZE_KEYS = [["2kg","qty2kg"],["5kg","qty5kg"],["8kg","qty8kg"],["10kg","qty10kg"]];
 
-async function applyOfflineStockDelta(payload, oldEntry) {
-  const rows = await db.cachedRecords.where("module").equals("productStock").toArray().catch(() => []);
-  const now = new Date().toISOString();
-  const updates = SIZE_KEYS
-    .map(([size, key]) => ({ size, delta: Number(payload[key] || 0) - Number(oldEntry?.[key] || 0) }))
-    .filter(u => u.delta !== 0);
-  if (!updates.length) return;
-
-  setStock(prev => prev.map(s => {
-    const u = updates.find(x => x.size === s.size);
-    return u
-      ? { ...s, quantity: Math.max(Number(s.quantity || 0) + u.delta, 0), lastReceivedAt: now, __pending: true }
-      : s;
-  }));
-
-  for (const { size, delta } of updates) {
-    const row = rows.find(r => r.data?.size === size);
-    if (!row) continue;
-    await db.cachedRecords.put({
-      ...row,
-      data: { ...row.data, quantity: Math.max(Number(row.data.quantity || 0) + delta, 0), lastReceivedAt: now, __pending: true },
-      updatedAt: now,
-    });
-  }
-}
-
 function getEntryMetrics(entry) {
   let totalReels = 0, totalWtNoReel = 0, totalWtWithReel = 0;
   const rows = SIZE_META.map(({ key, size, weight }) => {
@@ -420,6 +394,51 @@ function Products() {
   }
 }, []);
 
+const applyOfflineStockDelta = useCallback(async (payload, oldEntry) => {
+  const now = new Date().toISOString();
+  const pairs = [
+    ["2kg", "qty2kg"],
+    ["5kg", "qty5kg"],
+    ["8kg", "qty8kg"],
+    ["10kg", "qty10kg"],
+  ];
+
+  const updates = pairs
+    .map(([size, key]) => ({
+      size,
+      delta: Number(payload?.[key] || 0) - Number(oldEntry?.[key] || 0),
+    }))
+    .filter((u) => u.delta !== 0);
+
+  if (!updates.length) return;
+
+  setStock((prev) => {
+    const map = new Map(
+      (prev || []).map((row) => [String(row?.size || "").trim(), { ...row }])
+    );
+
+    for (const { size, delta } of updates) {
+      const key = String(size).trim();
+      const cur = map.get(key) || {
+        _id: `local-stock-${key}`,
+        size: key,
+        name: `${key} Reel`,
+        unit: "Reel",
+        quantity: 0,
+        reservedQty: 0,
+        scrapQty: 0,
+        isActive: true,
+      };
+      cur.quantity = Math.max(Number(cur.quantity || 0) + delta, 0);
+      cur.lastReceivedAt = now;
+      cur.__pending = true;
+      map.set(key, cur);
+    }
+
+    return Array.from(map.values());
+  });
+}, []);
+
   const loadWorkers = useCallback(async ({ silent } = {}) => {
     try {
       if (!silent) setWorkersLoading(true);
@@ -634,7 +653,7 @@ function Products() {
 
   setSaving(true);
   flashMsg({ error: "", success: "" });
-  setProdModal(null); // close modal immediately for better UX
+  setProdModal(null);
 
   try {
     const response = isEdit
@@ -642,25 +661,37 @@ function Products() {
       : await createProductProduction(payload);
 
     const result = response?.data?.data;
+    const queued = isQueued(response);
 
-    if (isQueued(response) && result) {
-      setEntries(prev =>
+    if (result) {
+      setEntries((prev) =>
         isEdit
-          ? prev.map(x => (x._id === editing._id ? result : x))
-          : [result, ...prev]
+          ? prev.map((x) =>
+              String(x._id) === String(editing._id) ? result : x
+            )
+          : [
+              result,
+              ...prev.filter((x) => String(x._id) !== String(result._id)),
+            ]
       );
+    }
 
-      await applyOfflineStockDelta(payload, isEdit ? editing : null);
+    // Always bump local stock (online + offline)
+    await applyOfflineStockDelta(payload, isEdit ? editing : null);
 
-      await fetchStock({ silent: true });
-      flashMsg({ success: "Saved on this device — will sync when online." });
+    if (queued) {
+      flashMsg({
+        success: "Saved on this device — will sync when online.",
+      });
       return;
     }
 
     flashMsg({
-      success: isEdit ? "Production entry updated" : "Production entry added",
+      success: isEdit
+        ? "Production entry updated"
+        : "Production entry added",
     });
-    await refreshAll();
+    // Do NOT call fetchStock/refreshAll here — it was resetting stock to 5
   } catch (err) {
     const body = err?.response?.data ?? err;
 
@@ -677,7 +708,6 @@ function Products() {
       return;
     }
 
-    // Restore modal so user can fix the error
     setProdModal(savedModal);
     flashMsg({ error: errMsg(err, "Failed to save entry") });
   } finally {
@@ -685,31 +715,53 @@ function Products() {
   }
 };
 
-  const handleDelete = async (entry) => {
+const handleDelete = async (entry) => {
   if (saving) return;
-  if (!window.confirm(`Delete production entry for ${fmtDate(entry.date)}? This cannot be undone.`)) return;
+  if (
+    !window.confirm(
+      `Delete production entry for ${fmtDate(entry.date)}? This cannot be undone.`
+    )
+  ) {
+    return;
+  }
 
   setSaving(true);
   flashMsg({ error: "", success: "" });
-  setEntries(prev => prev.filter(x => x._id !== entry._id));
-  if (detailId === entry._id) setDetailId(null);
+
+  const id = String(entry._id);
+
+  setEntries((prev) => prev.filter((x) => String(x._id) !== id));
+  if (String(detailId) === id) setDetailId(null);
 
   try {
     const response = await deleteProductProduction(entry._id);
-    if (isQueued(response)) {
-      flashMsg({ success: "Entry deleted" });
+    const queued = isQueued(response);
+
+    if (queued) {
+      // Only React state — offline stock.js already updates Dexie
+      await applyOfflineStockDelta(
+        { qty2kg: 0, qty5kg: 0, qty8kg: 0, qty10kg: 0 },
+        entry
+      );
+      flashMsg({
+        success: "Entry deleted on this device — will sync when online.",
+      });
       return;
     }
+
     flashMsg({ success: "Entry deleted" });
     await refreshAll();
   } catch (err) {
-    setEntries(prev => [entry, ...prev]);
+    console.error("[handleDelete]", err);
+    setEntries((prev) => {
+      if (prev.some((x) => String(x._id) === id)) return prev;
+      return [entry, ...prev];
+    });
     flashMsg({ error: errMsg(err, "Failed to delete entry") });
   } finally {
     setSaving(false);
   }
 };
-
   /* ── stock actions ── */
   const openStockModal = (kind, item, form) => setStockModal({ kind, item, form });
   const closeStockModal = () => { if (!saving) setStockModal(null); };

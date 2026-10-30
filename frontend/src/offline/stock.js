@@ -84,7 +84,7 @@ async function patchRawStockFromProduction(production, sign, operationId) {
   await openDb();
 
   await db.transaction("rw", db.cachedRecords, async () => {
-    const rawRow = await getHttpRowByBasePath("/raw-material");
+    const rawRow = await getHttpRowByBasePath("/raw-material/stock");
     if (!rawRow || !Array.isArray(rawRow.data?.data)) return;
 
     const next = rawRow.data.data.map((stock) => {
@@ -95,7 +95,7 @@ async function patchRawStockFromProduction(production, sign, operationId) {
         return applyStockMovement(stock, delta.tapeBox, operationId);
       }
       if (stock.category === "Reel") {
-        const sizeKey = `${Number(stock.sizeKg)}kg`;
+        const sizeKey = String(item.size); 
         const consumed = delta.reels[sizeKey] || 0;
         if (consumed !== 0) {
           return applyStockMovement(stock, consumed, operationId);
@@ -147,19 +147,63 @@ async function patchProductStockFromProduction(production, sign, operationId) {
   await openDb();
 
   await db.transaction("rw", db.cachedRecords, async () => {
-    const stockRow = await getHttpRowByBasePath("/products/stock");
-    if (!stockRow || !Array.isArray(stockRow.data?.data)) return;
+    let stockRow = await getHttpRowByBasePath("/products/stock");
 
-    const next = stockRow.data.data.map((item) => {
-      const sizeKey = `${parseFloat(item.size)}kg`; 
-      const delta = reels[sizeKey] || 0;
-      
-      if (delta === 0) return item;
+    if (!stockRow || !Array.isArray(stockRow.data?.data)) {
+      const emptyList = ["2kg", "5kg", "8kg", "10kg"].map((size) => ({
+        _id: `local-stock-${size}`,
+        size,
+        name: `${size} Reel`,
+        unit: "Reel",
+        quantity: 0,
+        reservedQty: 0,
+        scrapQty: 0,
+        isActive: true,
+        movementLog: [],
+      }));
+      stockRow = {
+        module: "http",
+        recordId: "/products/stock",
+        data: { success: true, data: emptyList },
+        updatedAt: nowIso(),
+      };
+    }
+
+    const bySize = new Map(
+      (stockRow.data.data || []).map((item) => [String(item.size), { ...item }])
+    );
+
+    const SIZES = ["2kg", "5kg", "8kg", "10kg"];
+    const next = [];
+
+    for (const size of SIZES) {
+      const delta = Number(reels[size] || 0);
+      let item = bySize.get(size);
+
+      if (!item) {
+        if (delta === 0) continue;
+        item = {
+          _id: `local-stock-${size}`,
+          size,
+          name: `${size} Reel`,
+          unit: "Reel",
+          quantity: 0,
+          reservedQty: 0,
+          scrapQty: 0,
+          isActive: true,
+          movementLog: [],
+        };
+      }
+
+      if (delta === 0) {
+        next.push(item);
+        continue;
+      }
 
       const before = Number(item.quantity || 0);
-      const after  = Math.max(0, before + delta);
+      const after = Math.max(0, before + delta);
 
-      return {
+      next.push({
         ...item,
         quantity: after,
         lastReceivedAt: nowIso(),
@@ -176,8 +220,12 @@ async function patchProductStockFromProduction(production, sign, operationId) {
             at: nowIso(),
           },
         ],
-      };
-    });
+      });
+    }
+
+    for (const item of stockRow.data.data || []) {
+      if (!SIZES.includes(String(item.size))) next.push(item);
+    }
 
     await db.cachedRecords.put({
       ...stockRow,
@@ -185,20 +233,8 @@ async function patchProductStockFromProduction(production, sign, operationId) {
       updatedAt: nowIso(),
     });
 
-    const keys = next.map((s) => ["productStock", String(s._id)]);
-    const dedicatedRows = await db.cachedRecords
-      .where("[module+recordId]")
-      .anyOf(keys)
-      .toArray();
-    if (dedicatedRows.length > 0) {
-      const byId = new Map(next.map((s) => [String(s._id), s]));
-      await db.cachedRecords.bulkPut(
-        dedicatedRows.map((row) => ({
-          ...row,
-          data: byId.get(String(row.recordId)) || row.data,
-          updatedAt: nowIso(),
-        }))
-      );
+    for (const item of next) {
+      await upsertDedicatedRecord("productStock", item);
     }
   });
 }
@@ -355,6 +391,7 @@ export async function reconcileProductionCreate({ url, operationId, response }) 
 
   if (!wasOptimistic) {
     await patchRawStockFromProduction(created, +1, operationId);
+    await patchProductStockFromProduction(created, +1, operationId); 
   }
 }
 
@@ -397,6 +434,7 @@ export async function reconcileProductionEdit({ url, method, response }) {
     };
     if (Object.values(diff).some((v) => v !== 0)) {
       await patchRawStockFromProduction(diff, +1, operationId);
+      await patchProductStockFromProduction(created, +1, operationId); 
     }
   }
 }
@@ -417,6 +455,7 @@ export async function reconcileProductionDelete({ url, method, operationId }) {
 
   if (!wasOptimistic && existing) {
     await patchRawStockFromProduction(existing, -1, operationId);
+    await patchProductStockFromProduction(created, +1, operationId); 
   }
 }
 
@@ -448,7 +487,7 @@ export async function reconcileRawMaterialCreate({ url, operationId, response })
   const created = response?.data?.data;
   if (!created?._id) return;
 
-  await patchCachedCollections("/raw-material", (list) =>
+  await patchCachedCollections("/raw-material/stock", (list) =>
     list.map((it) =>
       it.__opId === operationId
         ? { ...created, __pending: false, __opId: undefined }
