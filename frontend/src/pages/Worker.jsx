@@ -7,6 +7,10 @@ import {
 import {
   getWorkers, createWorker, updateWorker, deleteWorker, getSalaries,
 } from "../api/api";
+import {
+  getWorkersFromCache,
+  getSalariesFromCache,
+} from "../offline/reads.js";
 
 const PAGE_SIZE = 10;
 const PHONE_RE = /^[0-9+\-\s()]*$/;
@@ -241,19 +245,44 @@ function Workers() {
     try {
       setLoading(true);
       setLoadError("");
+
+      if (!navigator.onLine) {
+        const cached = await getWorkersFromCache({ page: 1, limit: 2000 });
+        setWorkers(cached.data || []);
+        return;
+      }
+
       const all = [];
-      let p = 1, totalPages = 1;
+      let p = 1;
+      let totalPages = 1;
+
       do {
         const { data } = await getWorkers({ page: p, limit: 100 });
-        if (!data?.success) throw new Error(data?.message || "Failed to load workers");
+
+        if (!data?.success) {
+          throw new Error(data?.message || "Failed to load workers");
+        }
+
         all.push(...(data.data || []));
         totalPages = data.pagination?.totalPages || 1;
         p += 1;
       } while (p <= totalPages && p <= 20);
+
       setWorkers(all);
     } catch (err) {
-      setLoadError(errMsg(err, err?.message || "Couldn't load workers."));
-    } finally { setLoading(false); }
+      try {
+        const cached = await getWorkersFromCache({ page: 1, limit: 2000 });
+        setWorkers(cached.data || []);
+
+        if (!cached.data?.length) {
+          setLoadError(errMsg(err, err?.message || "Couldn't load workers."));
+        }
+      } catch {
+        setLoadError(errMsg(err, err?.message || "Couldn't load workers."));
+      }
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => { loadWorkers(); }, [loadWorkers]);
@@ -336,72 +365,219 @@ function Workers() {
 
   const submitForm = async (ev) => {
     ev.preventDefault();
+
     const { editing, data: f } = formState;
     const errors = validate(f);
+
     setFormState((s) => ({ ...s, errors }));
     if (Object.keys(errors).length) return;
 
     const isFixed = f.payType === "Fixed";
-    const rate = (v) => (v !== "" && v !== null && v !== undefined ? Number(v) : null);
+    const rate = (v) =>
+      v !== "" && v !== null && v !== undefined ? Number(v) : null;
+
     const payload = {
-      name: f.name.trim(), phone: f.phone.trim(), role: f.role.trim(), department: f.department.trim(),
-      joiningDate: f.joiningDate, status: f.status, payType: f.payType,
+      name: f.name.trim(),
+      phone: f.phone.trim(),
+      role: f.role.trim(),
+      department: f.department.trim(),
+      joiningDate: f.joiningDate,
+      status: f.status,
+      payType: f.payType,
       ...(isFixed
-        ? { fixedPay: { amount: Number(f.fixedPay.amount), cycle: f.fixedPay.cycle || "Monthly" } }
-        : { variablePay: { ratePerKg: rate(f.variablePay.ratePerKg) } }),
+        ? {
+            fixedPay: {
+              amount: Number(f.fixedPay.amount),
+              cycle: f.fixedPay.cycle || "Monthly",
+            },
+          }
+        : {
+            variablePay: {
+              ratePerKg: rate(f.variablePay.ratePerKg),
+            },
+          }),
     };
 
     try {
       setSaving(true);
-      if (editing) await updateWorker(editing._id, payload);
-      else await createWorker(payload);
+
+      const response = editing
+        ? await updateWorker(editing._id, payload)
+        : await createWorker(payload);
+
+      if (response?.data?.offline) {
+        const updatedWorker = response.data.data;
+
+        if (editing) {
+          setWorkers((prev) =>
+            prev.map((w) =>
+              String(w._id) === String(editing._id)
+                ? updatedWorker
+                : w
+            )
+          );
+        } else if (updatedWorker) {
+          setWorkers((prev) => [
+            updatedWorker,
+            ...prev.filter((w) => w._id !== updatedWorker._id),
+          ]);
+        }
+      } else {
+        await loadWorkers();
+      }
+
       toast("success", editing ? "Worker updated." : "Worker added.");
       setFormState(null);
-      loadWorkers();
     } catch (err) {
       toast("error", errMsg(err, "Couldn't save the worker. Try again."));
-    } finally { setSaving(false); }
+    } finally {
+      setSaving(false);
+    }
   };
 
   const setStatus = async (w, next) => {
     try {
       setSaving(true);
-      await updateWorker(w._id, { status: next });
+
+      const response = await updateWorker(w._id, { status: next });
+
+      if (response?.data?.offline) {
+        const updatedWorker = response.data.data;
+
+        setWorkers((prev) =>
+          prev.map((item) =>
+            String(item._id) === String(w._id)
+              ? updatedWorker
+              : item
+          )
+        );
+
+        setViewState((prev) =>
+          prev && String(prev.worker._id) === String(w._id)
+            ? { ...prev, worker: updatedWorker }
+            : prev
+        );
+      } else {
+        await loadWorkers();
+      }
+
       toast("success", `${w.name} is now ${next.toLowerCase()}.`);
-      await loadWorkers();
       return true;
     } catch (err) {
       toast("error", errMsg(err, "Couldn't update the status."));
       return false;
-    } finally { setSaving(false); }
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const askDelete = (w) => setConfirm({
-    title: `Delete ${w.name}?`,
-    body: "Deleting removes the worker for good. Their past salary records and production entries will then show an unknown worker. Marking them inactive keeps that history and leaves them out of new salaries.",
-    label: "Delete permanently", tone: "danger",
-    alt: w.status !== "Inactive"
-      ? { label: "Mark inactive instead", onClick: async () => { if (await setStatus(w, "Inactive")) setConfirm(null); } }
-      : undefined,
-    onConfirm: async () => {
-      try {
-        setSaving(true);
-        await deleteWorker(w._id);
-        toast("success", "Worker deleted.");
-        setConfirm(null);
-        loadWorkers();
-      } catch (err) { toast("error", errMsg(err, "Couldn't delete the worker.")); }
-      finally { setSaving(false); }
-    },
-  });
+  
+const askDelete = (w) => setConfirm({
+  title: `Deactivate ${w.name}?`,
+  body: "This will mark the worker as inactive. Their past salary records and production history will be preserved.",
+  label: "Deactivate worker",
+  tone: "danger",
+  alt: w.status !== "Inactive"
+    ? {
+        label: "Keep active",
+        onClick: () => setConfirm(null),
+      }
+    : undefined,
+  onConfirm: async () => {
+    try {
+      setSaving(true);
+
+      const response = await deleteWorker(w._id);
+      const updatedWorker = response?.data?.data;
+
+      if (response?.data?.offline) {
+        const inactiveWorker = {
+          ...w,
+          ...(updatedWorker || {}),
+          status: "Inactive",
+        };
+
+        setWorkers((prev) =>
+          prev.map((item) =>
+            String(item._id) === String(w._id)
+              ? inactiveWorker
+              : item
+          )
+        );
+
+        setViewState((prev) =>
+          prev && String(prev.worker._id) === String(w._id)
+            ? { ...prev, worker: inactiveWorker }
+            : prev
+        );
+      } else {
+        await loadWorkers();
+      }
+
+      toast("success", "Worker marked inactive.");
+      setConfirm(null);
+    } catch (err) {
+      toast("error", errMsg(err, "Couldn't deactivate the worker."));
+    } finally {
+      setSaving(false);
+    }
+  },
+});
 
   const openView = useCallback(async (w) => {
     setViewState({ worker: w, salaries: [], loading: true });
+
     try {
-      const res = await getSalaries({ worker: w._id, limit: 5, page: 1 });
-      setViewState((v) => (v && v.worker._id === w._id ? { ...v, salaries: res?.data?.salaries || [], loading: false } : v));
+      if (!navigator.onLine) {
+        const cached = await getSalariesFromCache({
+          worker: w._id,
+          limit: 5,
+          page: 1,
+        });
+
+        setViewState((v) =>
+          v && v.worker._id === w._id
+            ? { ...v, salaries: cached?.salaries || [], loading: false }
+            : v
+        );
+        return;
+      }
+
+      const res = await getSalaries({
+        worker: w._id,
+        limit: 5,
+        page: 1,
+      });
+
+      setViewState((v) =>
+        v && v.worker._id === w._id
+          ? {
+              ...v,
+              salaries: res?.data?.salaries || [],
+              loading: false,
+            }
+          : v
+      );
     } catch {
-      setViewState((v) => (v && v.worker._id === w._id ? { ...v, loading: false } : v));
+      try {
+        const cached = await getSalariesFromCache({
+          worker: w._id,
+          limit: 5,
+          page: 1,
+        });
+
+        setViewState((v) =>
+          v && v.worker._id === w._id
+            ? { ...v, salaries: cached?.salaries || [], loading: false }
+            : v
+        );
+      } catch {
+        setViewState((v) =>
+          v && v.worker._id === w._id
+            ? { ...v, loading: false }
+            : v
+        );
+      }
     }
   }, []);
   const closeView = () => { if (!saving) setViewState(null); };

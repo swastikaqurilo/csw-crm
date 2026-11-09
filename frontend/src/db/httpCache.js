@@ -20,7 +20,6 @@ function stable(value) {
     .join(",")}}`;
 }
 
-// Same URL + same query params (in any order) must map to the same row.
 export function cacheKeyFor(url, params) {
   return `${url}?${stable(params ?? {})}`;
 }

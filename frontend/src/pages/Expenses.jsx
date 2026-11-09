@@ -263,15 +263,41 @@ export default function Expenses() {
             : null,
       };
 
+      let response;
+
       if (editingExpense) {
-        await api.put(`/expense/${editingExpense._id}`, payload);
+        response = await api.put(`/expense/${editingExpense._id}`, payload);
       } else {
-        await api.post("/expense", payload);
+        response = await api.post("/expense", payload);
+      }
+
+      if (response?.data?.offline) {
+        const optimisticExpense = response.data.data;
+
+        if (optimisticExpense?._id) {
+          setExpenses((prev) => {
+            if (editingExpense) {
+              return prev.map((item) =>
+                String(item._id) === String(editingExpense._id)
+                  ? optimisticExpense
+                  : item
+              );
+            }
+
+            return [
+              optimisticExpense,
+              ...prev.filter(
+                (item) => String(item._id) !== String(optimisticExpense._id)
+              ),
+            ];
+          });
+        }
+      } else {
+        await fetchExpenses();
       }
 
       setShowModal(false);
       resetForm();
-      await fetchExpenses();
     } catch (err) {
       console.error("Save expense error:", err);
       alert(err?.response?.data?.message || "Failed to save expense.");
@@ -300,18 +326,42 @@ export default function Expenses() {
     try {
       setPaymentSaving(true);
 
-      await api.patch(`/expense/${paymentExpense._id}/pay`, {
+      const payload = {
         paymentMethod,
         transactionId:
           paymentMethod === "UPI" ? paymentTransactionId.trim() : null,
-      });
+      };
+
+      const response = await api.patch(
+        `/expense/${paymentExpense._id}/pay`,
+        payload
+      );
+
+      if (response?.data?.offline) {
+        const optimisticExpense = response.data.data;
+
+        setExpenses((prev) =>
+          prev.map((item) =>
+            String(item._id) === String(paymentExpense._id)
+              ? optimisticExpense?._id
+                ? optimisticExpense
+                : {
+                    ...item,
+                    paymentStatus: "Paid",
+                    paymentMethod,
+                    transactionId: payload.transactionId,
+                  }
+              : item
+          )
+        );
+      } else {
+        await fetchExpenses();
+      }
 
       setShowPaymentModal(false);
       setPaymentExpense(null);
       setPaymentMethod("Cash");
       setPaymentTransactionId("");
-
-      await fetchExpenses();
     } catch (err) {
       console.error("Mark expense paid error:", err);
       alert(
@@ -327,12 +377,25 @@ export default function Expenses() {
       alert("Paid expenses cannot be deleted.");
       return;
     }
-    const confirmed = window.confirm("Are you sure you want to delete this expense?");
+
+    const confirmed = window.confirm(
+      "Are you sure you want to delete this expense?"
+    );
+
     if (!confirmed) return;
 
     try {
-      await api.delete(`/expense/${expense._id}`);
-      await fetchExpenses();
+      const response = await api.delete(`/expense/${expense._id}`);
+
+      if (response?.data?.offline) {
+        setExpenses((prev) =>
+          prev.filter(
+            (item) => String(item._id) !== String(expense._id)
+          )
+        );
+      } else {
+        await fetchExpenses();
+      }
     } catch (err) {
       console.error("Delete expense error:", err);
       alert(err?.response?.data?.message || "Failed to delete expense.");

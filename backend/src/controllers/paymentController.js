@@ -91,10 +91,6 @@ const populatePayment = (query) =>
     })
     .populate('contact', 'name company phone email');
 
-/* ------------------------------------------------------------------ */
-/*  OVERDUE RECONCILIATION — lazily marks orders overdue on read      */
-/* ------------------------------------------------------------------ */
-
 const reconcileOverdueOrders = async () => {
   const now = new Date();
   try {
@@ -108,15 +104,10 @@ const reconcileOverdueOrders = async () => {
       { $set: { paymentStatus: 'Overdue' } }
     );
   } catch (err) {
-    // Non-fatal: log and continue. Read paths shouldn't hard-fail if this
-    // background-ish update hits a transient error.
     console.error('[reconcileOverdueOrders]', err);
   }
 };
 
-/* ------------------------------------------------------------------ */
-/*  APPLY TO ORDER — compare-and-swap guarded both directions         */
-/* ------------------------------------------------------------------ */
 
 const applyToOrder = async ({ orderId, amount, direction, session }) => {
   const delta = direction === 'apply' ? amount : -amount;
@@ -127,7 +118,6 @@ const applyToOrder = async ({ orderId, amount, direction, session }) => {
   };
 
   if (direction === 'apply') {
-    // Resulting amountPaid must not exceed grandTotal.
     filter.$expr = {
       $lte: [
         { $add: [{ $ifNull: ['$amountPaid', 0] }, amount] },
@@ -135,8 +125,6 @@ const applyToOrder = async ({ orderId, amount, direction, session }) => {
       ],
     };
   } else {
-    // Reverse: amountPaid must be at least `amount` so the order never
-    // goes negative. Guards against concurrent double-reversals.
     filter.$expr = {
       $gte: [
         { $ifNull: ['$amountPaid', 0] },
@@ -184,10 +172,6 @@ const applyToOrder = async ({ orderId, amount, direction, session }) => {
   });
 };
 
-/* ------------------------------------------------------------------ */
-/*  HELPERS                                                            */
-/* ------------------------------------------------------------------ */
-
 const generatePaymentNumber = async (session) => {
   const year = new Date().getFullYear();
   const seq = await getNextSequence(`payment-${year}`, session);
@@ -212,13 +196,8 @@ const pendingTotalForOrder = async (orderId, session = null) => {
   return result[0]?.total || 0;
 };
 
-/* ------------------------------------------------------------------ */
-/*  READ                                                               */
-/* ------------------------------------------------------------------ */
-
 const getAllPayments = async (req, res) => {
   try {
-    // Lazy overdue reconciliation
     await reconcileOverdueOrders();
 
     const {
@@ -426,13 +405,8 @@ const getPaymentsByOrder = async (req, res) => {
   }
 };
 
-/* ------------------------------------------------------------------ */
-/*  SUMMARY — currency-aware                                           */
-/* ------------------------------------------------------------------ */
-
 const getPaymentSummary = async (req, res) => {
   try {
-    // Lazy overdue reconciliation
     await reconcileOverdueOrders();
 
     const startOfToday = new Date();
@@ -495,7 +469,6 @@ const getPaymentSummary = async (req, res) => {
         ]),
       ]);
 
-    // Build per-currency buckets
     const currencies = new Set();
     overallByCurrency.forEach((r) => currencies.add(r._id));
     todayByCurrency.forEach((r) => currencies.add(r._id));
@@ -532,8 +505,6 @@ const getPaymentSummary = async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
-        // Legacy top-level fields (only meaningful when a single currency
-        // dominates the dataset). New clients should use `currencies`.
         totalCollected:
           perCurrency.INR?.totalCollected ||
           Object.values(perCurrency)[0]?.totalCollected ||
@@ -558,10 +529,6 @@ const getPaymentSummary = async (req, res) => {
     handleError(res, error, 'Server error while fetching payment summary');
   }
 };
-
-/* ------------------------------------------------------------------ */
-/*  CREATE                                                             */
-/* ------------------------------------------------------------------ */
 
 const createPayment = async (req, res) => {
   const session = await mongoose.startSession();
@@ -652,7 +619,6 @@ const createPayment = async (req, res) => {
     const finalCurrency = cleanCurrency ? cleanCurrency.toUpperCase() : 'INR';
     const cleanIdempotencyKey = safeString(idempotencyKey, 200);
 
-    // Fast-path idempotent replay (outside transaction, cheap read)
     if (cleanIdempotencyKey) {
       const existing = await Payment.findOne({
         idempotencyKey: cleanIdempotencyKey,
@@ -673,7 +639,6 @@ const createPayment = async (req, res) => {
     let idempotentReplayId = null;
 
     await session.withTransaction(async () => {
-      // In-transaction idempotency re-check to close the race
       if (cleanIdempotencyKey) {
         const existingInTx = await Payment.findOne({
           idempotencyKey: cleanIdempotencyKey,
@@ -685,7 +650,6 @@ const createPayment = async (req, res) => {
         }
       }
 
-      // Order read moves INSIDE the transaction
       const order = await Order.findOne({
         _id: orderId,
         isActive: true,
@@ -712,7 +676,6 @@ const createPayment = async (req, res) => {
         throw err;
       }
 
-      // Pending payments must fit within remaining balance too
       if (status === 'Pending') {
         const existingPending = await pendingTotalForOrder(order._id, session);
         const remaining =
@@ -838,10 +801,6 @@ const createPayment = async (req, res) => {
     await session.endSession();
   }
 };
-
-/* ------------------------------------------------------------------ */
-/*  UPDATE                                                             */
-/* ------------------------------------------------------------------ */
 
 const updatePayment = async (req, res) => {
   const session = await mongoose.startSession();
@@ -1029,7 +988,6 @@ const updatePayment = async (req, res) => {
 
       if (wasApplied !== isCompletedNow) {
         if (isCompletedNow) {
-          // Pending → Completed: verify order still accepts the amount
           const order = await Order.findById(payment.order).session(session);
 
           if (!order || !order.isActive) {
@@ -1061,7 +1019,6 @@ const updatePayment = async (req, res) => {
             throw err;
           }
         } else {
-          // Completed → not Completed: reverse (now guarded against negative)
           const reversed = await applyToOrder({
             orderId: payment.order,
             amount: payment.amount,
@@ -1081,10 +1038,6 @@ const updatePayment = async (req, res) => {
 
         payment.appliedToOrder = isCompletedNow;
       }
-
-      // Pending → Pending amount changed? Not currently supported (amount is
-      // immutable on update). If you later allow amount edits, add a guard
-      // here against the sum of other pending payments exceeding remaining.
 
       await payment.save({ session, validateModifiedOnly: true });
       updatedPayment = payment;
@@ -1113,10 +1066,6 @@ const updatePayment = async (req, res) => {
   }
 };
 
-/* ------------------------------------------------------------------ */
-/*  DELETE                                                             */
-/* ------------------------------------------------------------------ */
-
 const deletePayment = async (req, res) => {
   const session = await mongoose.startSession();
 
@@ -1141,7 +1090,6 @@ const deletePayment = async (req, res) => {
 
       const wasApplied = payment.appliedToOrder;
 
-      // Compare-and-swap: only transition if state hasn't changed since read
       const cas = await Payment.updateOne(
         {
           _id: payment._id,
@@ -1166,7 +1114,6 @@ const deletePayment = async (req, res) => {
         throw err;
       }
 
-      // Reverse from the order if it had been applied
       if (wasApplied) {
         const reversed = await applyToOrder({
           orderId: payment.order,

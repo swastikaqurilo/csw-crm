@@ -1,7 +1,5 @@
 import { db, openDb } from "../db/database.js";
 
-/* ───────────────────────── utils ───────────────────────── */
-
 export function nowIso() {
   return new Date().toISOString();
 }
@@ -17,8 +15,10 @@ export function safeDecode(value) {
 export function listKeyOf(payload) {
   if (Array.isArray(payload?.records)) return "records";
   if (Array.isArray(payload?.data)) return "data";
+  if (Array.isArray(payload?.salaries)) return "salaries";
   return null;
 }
+
 export function listOf(payload) {
   const k = listKeyOf(payload);
   return k ? payload[k] : null;
@@ -34,16 +34,40 @@ export function newOperationId() {
   return `op-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
 }
 
+
 export function collectionFor(url) {
-  const path = String(url || "").split("?")[0];
-  if (/^\/raw-material\/stock(?:\/|$)/.test(path)) return "rawStock";
-  if (/^\/raw-material\/purchases(?:\/|$)/.test(path)) return "rawPurchases";
-  if (/^\/products\/stock(?:\/|$)/.test(path)) return "productStock";
-  if (/^\/products(?:\/|$)/.test(path)) return "productProductions";
-  const match = path.match(
-    /^\/(enquiries|contacts|follow-ups|orders|payments|expenses)(?:\/|$)/
-  );
-  return match ? match[1] : null;
+  const path =
+    String(url || "").split("?")[0].replace(/\/+$/, "") || "/";
+
+  const normalizedPath = path.replace(/^\/api(?=\/)/, "");
+
+  if (/^\/raw-material\/stock(?:\/|$)/.test(normalizedPath)) {
+    return "rawStock";
+  }
+
+  if (/^\/raw-material\/purchases(?:\/|$)/.test(normalizedPath)) {
+    return "rawPurchases";
+  }
+
+  if (/^\/products\/stock(?:\/|$)/.test(normalizedPath)) {
+    return "productStock";
+  }
+
+  if (/^\/products(?:\/|$)/.test(normalizedPath)) {
+    return "productProductions";
+  }
+
+  const match = normalizedPath.match(
+  /^\/(enquiries|contacts|follow-ups|orders|payment|payments|expense|expenses|workers|salaries)(?:\/|$)/
+);
+
+if (!match) return null;
+
+return ["payment", "expense"].includes(match[1])
+  ? match[1] === "payment"
+    ? "payments"
+    : "expenses"
+  : match[1];
 }
 
 export function cachePathForCollection(collection) {
@@ -51,8 +75,12 @@ export function cachePathForCollection(collection) {
   if (collection === "rawPurchases") return "/raw-material/purchases";
   if (collection === "productStock") return "/products/stock";
   if (collection === "productProductions") return "/products";
+  if (collection === "payments") return "/payment";
+  if (collection === "expenses") return "/expense";
+
   return `/${collection}`;
 }
+
 
 const SUB_PATH_EXCLUDES = {
   rawStock: "/raw-material/purchases",

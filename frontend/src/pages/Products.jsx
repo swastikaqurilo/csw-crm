@@ -448,8 +448,21 @@ const applyOfflineStockDelta = useCallback(async (payload, oldEntry) => {
       for (const w of data) await cacheRecord("workers", w);
     } catch (err) {
       if (!navigator.onLine) {
-        const cached = await db.cachedRecords.where("module").equals("workers").toArray().catch(() => []);
-        if (cached.length > 0) setWorkers(cached.map((row) => row.data));
+        const cached = await db.cachedRecords
+          .where("module")
+          .equals("workers")
+          .toArray()
+          .catch(() => []);
+
+        const variableWorkers = cached
+          .map((row) => row.data)
+          .filter(
+            (worker) =>
+              worker?.status === "Active" &&
+              worker?.payType === "Variable"
+          );
+
+        setWorkers(variableWorkers);
       } else {
         console.error("Failed to load workers:", err);
         setWorkers([]);
@@ -692,8 +705,10 @@ const applyOfflineStockDelta = useCallback(async (payload, oldEntry) => {
         : "Production entry added",
     });
     // Do NOT call fetchStock/refreshAll here — it was resetting stock to 5
-  } catch (err) {
-    const body = err?.response?.data ?? err;
+   } catch (err) {
+  console.error("TODAY PRODUCTION ERROR:", err);
+  console.error("PRODUCTION ERROR STACK:", err?.stack);
+  const body = err?.response?.data ?? err;
 
     if (body?.code === "RESERVED_CONFLICT" && body.data) {
       setConflict({

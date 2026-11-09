@@ -1212,28 +1212,37 @@ export default function Accounting() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await getAccountingDashboard({ asOf });
-      const payload = res.data;
-      if (!payload?.success) {
-        throw new Error(payload?.message || "Failed to load accounting data");
-      }
-      setData(payload);
-    } catch (err) {
-      console.error(err);
-      setError(
-        err.response?.data?.message ||
-          err.message ||
-          "Could not load accounting dashboard"
+  
+const load = useCallback(async () => {
+  setLoading(true);
+  setError(null);
+
+  try {
+    const res = await getAccountingDashboard({ asOf });
+    const payload = res.data;
+
+    if (!payload?.success) {
+      throw new Error(
+        payload?.message || "Failed to load accounting data"
       );
-      setData(null);
-    } finally {
-      setLoading(false);
     }
-  }, [asOf]);
+
+    setData(payload);
+    setError(null);
+  } catch (err) {
+    console.error("Accounting dashboard error:", err);
+
+    setError(
+      err.response?.data?.message ||
+        err.message ||
+        "Could not load accounting dashboard"
+    );
+
+  } finally {
+    setLoading(false);
+  }
+}, [asOf]);
+
 
   useEffect(() => {
     load();

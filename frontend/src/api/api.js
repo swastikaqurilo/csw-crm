@@ -119,4 +119,4 @@
 
     export const forgotPassword = (email) => api.post("/auth/forgot-password", { email });
 
-export const resetPassword = ({ email, otp, password }) => api.post("/auth/reset-password", { email, otp, password });
+    export const resetPassword = ({ email, otp, password }) => api.post("/auth/reset-password", { email, otp, password });

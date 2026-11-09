@@ -172,10 +172,12 @@ api.interceptors.response.use(
       }
 
       return response;
+
     }
     if (
       WRITES.has(method) &&
-      !cfg.__fromOutbox
+      !cfg.__fromOutbox &&
+      !response.data?.offline
     ) {
       try {
         await reconcileOnlineWrite({

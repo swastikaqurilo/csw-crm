@@ -217,10 +217,12 @@ function Payments() {
       });
       setPayments(res?.data?.data || []);
       setPage(1);
-    } catch (err) {
-      setError(err?.response?.data?.message || "Failed to load payments. Please check the backend connection.");
-      setPayments([]);
-    } finally {
+     } catch (err) {
+        setError(
+          err?.response?.data?.message ||
+            "Failed to load payments. Please check the backend connection."
+        );
+      } finally {
       setLoading(false);
     }
   }, [filters]);
@@ -412,11 +414,14 @@ function Payments() {
   };
 
   const submit = async (e) => {
+    console.log("PAYMENT SUBMIT STARTED");
     e.preventDefault();
+
     const err = validate();
     if (err) return window.alert(err);
 
     const f = modal.form;
+
     const shared = {
       paymentMode: f.paymentMode,
       transactionId: f.transactionId.trim() || undefined,
@@ -430,18 +435,86 @@ function Payments() {
 
     try {
       setSaving(true);
+
       if (modal.editing) {
         await updatePayment(modal.editing._id, shared);
         window.alert("Payment updated successfully.");
-      } else {
-        await createPayment({ order: f.order, amount: Number(f.amount), currency: "INR", ...shared });
-        window.alert("Payment recorded successfully.");
+        setModal(null);
+        await Promise.all([fetchPayments(), fetchSummary(), fetchOrders()]);
+        return;
       }
+
+      const res = await createPayment({
+        order: f.order,
+        amount: Number(f.amount),
+        currency: "INR",
+        ...shared,
+      });
+
+      console.log("PAYMENT CREATE RESPONSE:", res);
+      console.log("PAYMENT DATA:", res?.data?.data);
+
+      const newPayment = res?.data?.data;
+
+      if (newPayment && !newPayment.queued) {
+        setPayments((prev) => [
+          newPayment,
+          ...prev.filter(
+            (p) =>
+              p._id !== newPayment._id &&
+              p.__opId !== newPayment.__opId
+          ),
+        ]);
+
+        const orderId =
+          typeof newPayment.order === "object"
+            ? newPayment.order?._id
+            : newPayment.order;
+
+        if (orderId) {
+          setOrders((prev) =>
+            prev.map((order) => {
+              if (String(order._id) !== String(orderId)) {
+                return order;
+              }
+
+              const amount = Number(newPayment.amount) || 0;
+              const currentPaid = Number(order.amountPaid) || 0;
+
+              const amountPaid =
+                newPayment.status === "Completed"
+                  ? currentPaid + amount
+                  : currentPaid;
+
+              const total = Number(order.grandTotal) || 0;
+
+              return {
+                ...order,
+                amountPaid,
+                paymentStatus:
+                  newPayment.status === "Completed"
+                    ? amountPaid >= total
+                      ? "Paid"
+                      : amountPaid > 0
+                        ? "Partial"
+                        : "Pending"
+                    : order.paymentStatus,
+              };
+            })
+          );
+        }
+      }
+
       setModal(null);
-      await Promise.all([fetchPayments(), fetchSummary(), fetchOrders()]);
+      window.alert("Payment recorded successfully.");
+
+      await Promise.all([fetchSummary(), fetchOrders()]);
     } catch (err) {
       console.error("Payment save error:", err);
-      window.alert(err?.response?.data?.message || "Failed to save payment. Please try again.");
+      window.alert(
+        err?.response?.data?.message ||
+        "Failed to save payment. Please try again."
+      );
     } finally {
       setSaving(false);
     }
@@ -868,7 +941,12 @@ function Payments() {
 
             <div className="flex justify-end gap-2.5 border-t border-slate-100 bg-slate-50/50 px-6 py-4">
               <button type="button" className={BTN_SECONDARY} onClick={closeModal} disabled={saving}>Cancel</button>
-              <button type="submit" className={BTN_PRIMARY} disabled={saving}>
+              <button
+                type="submit"
+                className={BTN_PRIMARY}
+                disabled={saving}
+                onClick={() => console.log("RECORD PAYMENT BUTTON CLICKED")}
+              >
                 {saving ? "Saving..." : modal.editing ? "Save Changes" : "Record Payment"}
               </button>
             </div>
@@ -876,7 +954,6 @@ function Payments() {
         </Modal>
       )}
 
-      {/* ============ VIEW MODAL ============ */}
       {view && (
         <Modal onClose={() => setView(null)} width="max-w-3xl">
           <div className="relative flex shrink-0 items-start justify-between border-b border-slate-100 bg-gradient-to-b from-slate-50/70 to-white px-6 py-5">

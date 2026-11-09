@@ -185,10 +185,76 @@ export async function getPaymentsFromCache() {
 /* ─────────────── expenses ─────────────── */
 
 export async function getExpensesFromCache() {
-  const list = await collectModule("expenses", "/expenses");
+  const list = await collectModule("expenses", "/expense");
   return list.sort(byDateDesc("date"));
 }
 
 export function getExpenseByIdFromCache(id) {
-  return getCachedByModuleAndId("expenses", "/expenses", id);
+  return getCachedByModuleAndId("expenses", "/expense", id);
+}
+
+/* ─────────────── workers ─────────────── */
+
+export async function getWorkersFromCache({
+  page = 1,
+  limit = 100,
+} = {}) {
+  const list = await collectModule("workers", "/workers");
+
+  list.sort((a, b) =>
+    String(a.name || "").localeCompare(String(b.name || ""))
+  );
+
+  const total = list.length;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+
+  return {
+    data: list.slice((safePage - 1) * limit, safePage * limit),
+    pagination: {
+      page: safePage,
+      totalPages,
+      total,
+    },
+  };
+}
+
+export function getWorkerByIdFromCache(id) {
+  return getCachedByModuleAndId("workers", "/workers", id);
+}
+
+/* ─────────────── salaries ─────────────── */
+
+export async function getSalariesFromCache({
+  worker,
+  page = 1,
+  limit = 5,
+} = {}) {
+  let list = await collectModule("salaries", "/salaries");
+
+  if (worker) {
+    list = list.filter(
+      (salary) =>
+        String(salary.worker?._id || salary.worker) === String(worker)
+    );
+  }
+
+  list.sort(byDateDesc("createdAt"));
+
+  const total = list.length;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+
+  return {
+    salaries: list.slice((safePage - 1) * limit, safePage * limit),
+    pagination: {
+      page: safePage,
+      totalPages,
+      total,
+    },
+  };
+}
+
+export function getSalaryByIdFromCache(id) {
+  return getCachedByModuleAndId("salaries", "/salaries", id);
 }

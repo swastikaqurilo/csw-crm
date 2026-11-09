@@ -93,8 +93,6 @@ const createSalary = async (req, res) => {
     }
 
     const netSalary = calculateNetSalary(basic, allowance, deduction);
-
-    // Exact duplicate
     const exact = await Salary.findOne({
       worker,
       periodStart: start,
@@ -109,8 +107,6 @@ const createSalary = async (req, res) => {
       });
     }
 
-    // Overlap check — half-open interval: [start, end] vs [otherStart, otherEnd]
-    // Overlap iff other.periodStart < end AND other.periodEnd > start
     const overlapping = await Salary.findOne({
       worker,
       isDeleted: false,
@@ -161,10 +157,6 @@ const createSalary = async (req, res) => {
     });
   }
 };
-
-/* ------------------------------------------------------------------ */
-/*  LIST                                                               */
-/* ------------------------------------------------------------------ */
 
 const getSalaries = async (req, res) => {
   try {
@@ -323,10 +315,6 @@ const getSalaries = async (req, res) => {
   }
 };
 
-/* ------------------------------------------------------------------ */
-/*  GET ONE                                                            */
-/* ------------------------------------------------------------------ */
-
 const getSalary = async (req, res) => {
   try {
     const { id } = req.params;
@@ -367,10 +355,6 @@ const getSalary = async (req, res) => {
     });
   }
 };
-
-/* ------------------------------------------------------------------ */
-/*  UPDATE                                                             */
-/* ------------------------------------------------------------------ */
 
 const updateSalary = async (req, res) => {
   try {
@@ -524,10 +508,6 @@ const updateSalary = async (req, res) => {
   }
 };
 
-/* ------------------------------------------------------------------ */
-/*  RECORD PAYMENT                                                     */
-/* ------------------------------------------------------------------ */
-
 const recordSalaryPayment = async (req, res) => {
   const session = await mongoose.startSession();
 
@@ -679,10 +659,6 @@ const recordSalaryPayment = async (req, res) => {
     await session.endSession();
   }
 };
-
-/* ------------------------------------------------------------------ */
-/*  RECORD ADVANCE                                                     */
-/* ------------------------------------------------------------------ */
 
 const recordSalaryAdvance = async (req, res) => {
   const session = await mongoose.startSession();
@@ -843,10 +819,6 @@ const recordSalaryAdvance = async (req, res) => {
     await session.endSession();
   }
 };
-
-/* ------------------------------------------------------------------ */
-/*  DELETE ADVANCE                                                     */
-/* ------------------------------------------------------------------ */
 
 const deleteSalaryAdvance = async (req, res) => {
   const session = await mongoose.startSession();

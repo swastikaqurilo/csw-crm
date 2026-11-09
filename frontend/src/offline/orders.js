@@ -240,18 +240,45 @@ export async function applyDelete({ id }) {
 }
 
 export async function applyPaymentCreate({ data, operationId }) {
-  const orderId = data?.order;
+  const orderId = data?.order?._id || data?.order;
   if (!orderId) return null;
 
   const order = await getCachedOrder(orderId);
-  if (!order)
-    throw new Error("Order not cached — open it once online first.");
 
-  const amount = Number(data.amount) || 0;
+  if (!order) {
+    throw new Error("Order not cached — open it once online first.");
+  }
+
+  const amount = Number(data.amount);
+  const status = data.status || "Completed";
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("Payment amount must be greater than zero.");
+  }
+
+  if (!["Pending", "Completed", "Cancelled"].includes(status)) {
+    throw new Error("Invalid payment status.");
+  }
+
   const total = Number(order.grandTotal) || 0;
-  const amountPaid = Number(order.amountPaid || 0) + amount;
+  const currentPaid = Number(order.amountPaid) || 0;
+
+  // Only Completed payments affect the order balance.
+  const amountPaid =
+    status === "Completed" ? currentPaid + amount : currentPaid;
+
+  if (status === "Completed" && amountPaid > total + 0.01) {
+    throw new Error("Payment exceeds the remaining order balance.");
+  }
+
   const paymentStatus =
-    amountPaid >= total ? "Paid" : amountPaid > 0 ? "Partial" : "Pending";
+    status === "Completed"
+      ? amountPaid >= total
+        ? "Paid"
+        : amountPaid > 0
+          ? "Partial"
+          : "Pending"
+      : order.paymentStatus;
 
   const updatedOrder = {
     ...order,
@@ -264,7 +291,11 @@ export async function applyPaymentCreate({ data, operationId }) {
   const optimisticPayment = {
     ...data,
     _id: `pending:${operationId}`,
-    order: orderId,
+    order: {
+      ...order,
+      _id: orderId,
+    },
+    status,
     __opId: operationId,
     __pending: true,
     createdAt: nowIso(),
@@ -277,6 +308,7 @@ export async function applyPaymentCreate({ data, operationId }) {
     optimisticPayment,
     ...list.filter((p) => p.__opId !== operationId),
   ]);
+
   await upsertDedicatedRecord("payments", optimisticPayment);
 
   return optimisticPayment;
@@ -422,10 +454,17 @@ export async function reconcileDelete({ url }) {
   await removeDedicatedRecord("orders", id);
 }
 
-export async function reconcilePaymentCreate({ url, method, operationId, response }) {
+export async function reconcilePaymentCreate({
+  url,
+  method,
+  operationId,
+  response,
+}) {
   const path = String(url || "").split("?")[0];
+
   if (String(method || "").toUpperCase() !== "POST") return;
-  if (!/^\/payments?\/?$/.test(path)) return;
+
+  if (!/^\/(?:api\/)?payments?\/?$/.test(path)) return;
 
   const created = response?.data?.data;
   if (!created?._id) return;
@@ -433,12 +472,17 @@ export async function reconcilePaymentCreate({ url, method, operationId, respons
   await patchCachedCollections("/payments", (list) =>
     list.map((p) =>
       p.__opId === operationId
-        ? { ...created, __pending: false, __opId: undefined }
+        ? {
+            ...created,
+            __pending: false,
+            __opId: undefined,
+          }
         : p
     )
   );
 
   await removeDedicatedRecord("payments", `pending:${operationId}`);
+
   await upsertDedicatedRecord("payments", {
     ...created,
     __pending: false,
@@ -446,11 +490,27 @@ export async function reconcilePaymentCreate({ url, method, operationId, respons
   });
 
   const orderId = created.order?._id || created.order;
+
   if (orderId) {
+    const returnedOrder =
+      typeof created.order === "object" ? created.order : null;
+
     await patchOrderCaches(orderId, (current) =>
-      current ? { ...current, __pending: false } : current
+      current
+        ? {
+            ...current,
+            ...(returnedOrder || {}),
+            _id: orderId,
+            __pending: false,
+            __opId: undefined,
+          }
+        : current
     );
+
     const updated = await getCachedOrder(orderId);
-    if (updated) await upsertDedicatedRecord("orders", updated);
+
+    if (updated) {
+      await upsertDedicatedRecord("orders", updated);
+    }
   }
 }

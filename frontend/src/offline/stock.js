@@ -94,9 +94,10 @@ async function patchRawStockFromProduction(production, sign, operationId) {
       if (stock.category === "Tape" && delta.tapeBox !== 0) {
         return applyStockMovement(stock, delta.tapeBox, operationId);
       }
-      if (stock.category === "Reel") {
-        const sizeKey = String(item.size); 
+     if (stock.category === "Reel") {
+        const sizeKey = `${Number(stock.sizeKg)}kg`;
         const consumed = delta.reels[sizeKey] || 0;
+
         if (consumed !== 0) {
           return applyStockMovement(stock, consumed, operationId);
         }
@@ -395,7 +396,12 @@ export async function reconcileProductionCreate({ url, operationId, response }) 
   }
 }
 
-export async function reconcileProductionEdit({ url, method, response }) {
+export async function reconcileProductionEdit({
+  url,
+  method,
+  operationId,
+  response,
+}) {
   const path = String(url || "").split("?")[0];
   const m = path.match(/^\/products\/([^/]+)\/?$/);
   if (!m || !["PUT", "PATCH"].includes(String(method || "").toUpperCase())) return;
@@ -434,7 +440,7 @@ export async function reconcileProductionEdit({ url, method, response }) {
     };
     if (Object.values(diff).some((v) => v !== 0)) {
       await patchRawStockFromProduction(diff, +1, operationId);
-      await patchProductStockFromProduction(created, +1, operationId); 
+      await patchProductStockFromProduction(diff, +1, operationId);
     }
   }
 }
@@ -455,7 +461,7 @@ export async function reconcileProductionDelete({ url, method, operationId }) {
 
   if (!wasOptimistic && existing) {
     await patchRawStockFromProduction(existing, -1, operationId);
-    await patchProductStockFromProduction(created, +1, operationId); 
+    await patchProductStockFromProduction(existing, -1, operationId);
   }
 }
 
