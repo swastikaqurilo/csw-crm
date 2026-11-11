@@ -143,9 +143,6 @@ function MarkModal({ date, workers, initialRecords, saving, onClose, onSave }) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all"); // all | present | absent
 
-  const setAbsent = (id, absent) =>
-    setRecords((prev) => ({ ...prev, [id]: { ...prev[id], absent } }));
-
   const setTime = (id, field, value) =>
     setRecords((prev) => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
 
@@ -159,10 +156,48 @@ function MarkModal({ date, workers, initialRecords, saving, onClose, onSave }) {
     });
   };
 
+  const setAbsent = (id, absent) => {
+  console.log("[Attendance] Changing worker:", id, "Absent:", absent);
+
+  setRecords((prev) => {
+    const current = prev[id] || {
+      absent: false,
+      loginTime: DEFAULT_LOGIN,
+      logoutTime: DEFAULT_LOGOUT,
+    };
+
+    const next = {
+      ...prev,
+      [id]: {
+        ...current,
+        absent,
+      },
+    };
+
+    console.log("[Attendance] Updated records:", next);
+    return next;
+  });
+};
+
   const markAll = (absent) => {
+    console.log("[Attendance] Mark all:", absent);
+
     setRecords((prev) => {
-      const next = { ...prev };
-      for (const id of Object.keys(next)) next[id] = { ...next[id], absent };
+      const next = {};
+
+      for (const w of workers) {
+        const id = String(w._id);
+
+        next[id] = {
+          ...(prev[id] || {
+            loginTime: DEFAULT_LOGIN,
+            logoutTime: DEFAULT_LOGOUT,
+          }),
+          absent,
+        };
+      }
+
+      console.log("[Attendance] Updated records:", next);
       return next;
     });
   };
@@ -696,32 +731,59 @@ function Attendance() {
     setActiveDate(null);
     setActiveRecord(null);
   };
-
-  /* ---------- save ---------- */
+  
   const handleSave = async (payload) => {
+    const isToday = toISO(payload.date) === todayISO();
+    const previousTodayRecord = todayRecord;
+
+    const absentIds = new Set(
+      (payload.absentWorkerIds || []).map(String)
+    );
+
+    const optimisticRecord = {
+      _id: payload.date,
+      date: payload.date,
+      allPresent: payload.allPresent,
+      absentWorkers: workers.filter((w) =>
+        absentIds.has(String(w._id))
+      ),
+      records: (payload.records || []).map((r) => ({
+        ...r,
+        worker: workers.find(
+          (w) => String(w._id) === String(r.worker)
+        ) || r.worker,
+      })),
+      presentCount: workers.length - absentIds.size,
+      totalWorkers: workers.length,
+      updatedAt: new Date().toISOString(),
+    };
+
     try {
       setSaving(true);
+
+      if (isToday) {
+        setTodayRecord(optimisticRecord);
+      }
+
       await saveAttendance(payload);
-      closeModal();
-      await Promise.all([loadToday(), loadHistory(1)]);
+
+      setMode(null);
+      setActiveDate(null);
+      setActiveRecord(null);
+
+      await loadHistory(1);
+
       flash("success", "Attendance saved.");
     } catch (err) {
-      flash("error", errMsg(err, "Couldn't save attendance."));
-    } finally { setSaving(false); }
-  };
+      if (isToday) {
+        setTodayRecord(previousTodayRecord);
+      }
 
-  /* ---------- delete ---------- */
-//   const handleDelete = async () => {
-//     try {
-//       setDeleting(true);
-//       await deleteAttendance(activeDate);
-//       closeModal();
-//       await Promise.all([loadToday(), loadHistory(1)]);
-//       flash("success", "Attendance deleted.");
-//     } catch (err) {
-//       flash("error", errMsg(err, "Couldn't delete attendance."));
-//     } finally { setDeleting(false); }
-//   };
+      flash("error", errMsg(err, "Couldn't save attendance."));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const initialRecords = useMemo(() => {
     const source = activeDate === todayISO() ? (activeRecord ?? todayRecord) : activeRecord;
@@ -753,8 +815,18 @@ function Attendance() {
   }, [activeRecord, todayRecord, workers, activeDate]);
 
   const todayExists = Boolean(todayRecord);
-  const todaysAbsent = todayRecord?.allPresent ? 0 : (todayRecord?.absentWorkers?.length || 0);
-  const todaysPresent = todayExists ? Math.max(0, workers.length - todaysAbsent) : 0;
+
+  const todaysAbsent = todayExists
+    ? Array.isArray(todayRecord.records)
+      ? todayRecord.records.filter(
+          (record) => record.status === "Absent"
+        ).length
+      : (todayRecord.absentWorkers?.length || 0)
+    : 0;
+
+  const todaysPresent = todayExists
+    ? Math.max(0, workers.length - todaysAbsent)
+    : 0;
 
   return (
     <div className="w-full space-y-5 pb-10">

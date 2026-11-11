@@ -11,6 +11,10 @@ import {
   writeCachedResponse,
   pruneCache,
 } from "../db/httpCache.js";
+import {
+  getAttendanceFromCache,
+  getAttendanceHistoryPageFromCache,
+} from "../offline/reads.js";
 
 const BASE_URL =
   (typeof import.meta !== "undefined" &&
@@ -233,14 +237,60 @@ api.interceptors.response.use(
     }
     const method = (cfg.method || "GET").toUpperCase();
     if (method === "GET") {
-      if (!isNetworkError(error)) {
-        return Promise.reject(error);
-      }
+    if (!isNetworkError(error)) {
+      return Promise.reject(error);
+    }
 
-      const cached = await readCachedResponse(
-        cfg.url,
-        cfg.params
+    // Attendance must read the latest dedicated local record first.
+    if (
+      String(cfg.url || "").split("?")[0] === "/workers/attendance" &&
+      cfg.params?.date
+    ) {
+      const attendance = await getAttendanceFromCache(
+        cfg.params.date
       ).catch(() => null);
+
+      if (attendance) {
+        return {
+          data: {
+            success: true,
+            data: attendance,
+          },
+          status: 200,
+          statusText: "OK (local attendance)",
+          headers: {},
+          config: cfg,
+        };
+      }
+    }
+    // Attendance history: read the latest locally saved records.
+if (
+  String(cfg.url || "").split("?")[0] ===
+  "/workers/attendance/history"
+) {
+  const history = await getAttendanceHistoryPageFromCache({
+    page: Number(cfg.params?.page) || 1,
+    limit: Number(cfg.params?.limit) || 8,
+  }).catch((err) => {
+    console.error("[axios] Local attendance history read failed:", err);
+    return null;
+  });
+
+  if (history) {
+    return {
+      data: history,
+      status: 200,
+      statusText: "OK (local attendance history)",
+      headers: {},
+      config: cfg,
+    };
+  }
+}
+
+    const cached = await readCachedResponse(
+      cfg.url,
+      cfg.params
+    ).catch(() => null);
 
       if (cached != null) {
         return {
