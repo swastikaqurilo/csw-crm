@@ -94,10 +94,17 @@ function getEntryMetrics(entry) {
 
 function getWorkerEarnings(workerEntry) {
   const kg = Number(workerEntry?.kg ?? workerEntry?.grossKg ?? 0);
-  const ratePerKg = Number(workerEntry?.worker?.variablePay?.ratePerKg || 0);
-  const totalEarnings = Number(workerEntry?.totalEarnings ?? kg * ratePerKg);
+  const ratePerKg = Number(
+    workerEntry?.worker?.variablePay?.ratePerKg || 0
+  );
+
+  const savedEarnings = Number(workerEntry?.totalEarnings || 0);
+
+  const totalEarnings =
+    savedEarnings > 0 ? savedEarnings : kg * ratePerKg;
+
   return { kg, ratePerKg, totalEarnings };
-}
+} 
 
 function stockStatus(item) {
   const qty = Number(item.quantity || 0);
@@ -1353,8 +1360,24 @@ const handleDelete = async (entry) => {
                     </div>
                     <div className="divide-y divide-slate-100">
                       {selectedEntry.workers.map((workerEntry, i) => {
-                        const w = workerEntry.worker;
-                        const { kg, ratePerKg, totalEarnings: earned } = getWorkerEarnings(workerEntry);
+                        const workerId =
+                          typeof workerEntry.worker === "object"
+                            ? workerEntry.worker?._id
+                            : workerEntry.worker;
+
+                        const cachedWorker = workers.find(
+                          (worker) => String(worker._id) === String(workerId)
+                        );
+
+                        const w =
+                          typeof workerEntry.worker === "object"
+                            ? { ...cachedWorker, ...workerEntry.worker }
+                            : cachedWorker;
+
+                        const { kg, ratePerKg, totalEarnings: earned } = getWorkerEarnings({
+                          ...workerEntry,
+                          worker: w,
+                        });
                         return (
                           <div key={workerEntry._id || i} className="grid grid-cols-[1.6fr_1fr_1fr_1fr] items-center px-4 py-2.5">
                             <div className="min-w-0 flex items-center gap-2">

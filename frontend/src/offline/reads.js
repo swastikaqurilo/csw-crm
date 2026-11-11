@@ -6,6 +6,11 @@ import {
   listOf, 
 } from "./cache.js";
 
+import {
+  getAttendanceByDate,
+  getAttendanceHistoryFromCache as readAttendanceHistory,
+} from "./attendance.js";
+
 /* ─────────────── shared merge helper ─────────────── */
 
 const isHollowContact = (c) => !c || typeof c !== "object" || !(c.company || c.name || c.email);
@@ -133,7 +138,7 @@ export async function getProductStockFromCache() {
 /* ─────────────── raw materials ─────────────── */
 
 export async function getRawMaterialFromCache() {
-  return collectModule("rawStock", "/raw-material");
+  return collectModule("rawStock", "/raw-material/stock");
 }
 
 export function getRawMaterialByIdFromCache(id) {
@@ -257,4 +262,117 @@ export async function getSalariesFromCache({
 
 export function getSalaryByIdFromCache(id) {
   return getCachedByModuleAndId("salaries", "/salaries", id);
+}
+
+
+
+export async function getAttendanceFromCache(date) {
+  return getAttendanceByDate(date);
+}
+
+export async function getAttendanceHistoryPageFromCache({
+  page = 1,
+  limit = 8,
+} = {}) {
+  const records = await readAttendanceHistory();
+
+  const workersResult = await getWorkersFromCache({
+    page: 1,
+    limit: 1000,
+  });
+
+  const workers = workersResult?.data || [];
+
+  const enriched = records.map((record) => {
+    const eligibleWorkers = workers.filter((worker) => {
+      if (!worker.joiningDate) return true;
+
+      return (
+        String(worker.joiningDate).slice(0, 10) <= record.date
+      );
+    });
+
+    const absentCount = Array.isArray(record.absentWorkers)
+      ? record.absentWorkers.length
+      : 0;
+
+    const totalWorkers = eligibleWorkers.length;
+
+    return {
+      ...record,
+      totalWorkers,
+      presentCount: record.allPresent
+        ? totalWorkers
+        : Math.max(0, totalWorkers - absentCount),
+    };
+  });
+
+  const total = enriched.length;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  const start = (safePage - 1) * limit;
+
+  return {
+    success: true,
+    data: enriched.slice(start, start + limit),
+    pagination: {
+      page: safePage,
+      limit,
+      total,
+      totalPages,
+    },
+  };
+}
+
+export async function getAttendanceHistoryFromCache({
+  page = 1,
+  limit = 8,
+} = {}) {
+  const records = await getAttendanceHistoryFromCache();
+
+  const workersResult = await getWorkersFromCache({
+    page: 1,
+    limit: 1000,
+  });
+
+  const workers = workersResult?.data || [];
+
+  const enriched = records.map((record) => {
+    const eligibleWorkers = workers.filter((worker) => {
+      if (!worker.joiningDate) return true;
+
+      const joiningDate = String(worker.joiningDate).slice(0, 10);
+      return joiningDate <= record.date;
+    });
+
+    const absentCount = Array.isArray(record.absentWorkers)
+      ? record.absentWorkers.length
+      : 0;
+
+    const totalWorkers = eligibleWorkers.length;
+
+    return {
+      ...record,
+      totalWorkers,
+      presentCount: record.allPresent
+        ? totalWorkers
+        : Math.max(0, totalWorkers - absentCount),
+    };
+  });
+
+  const total = enriched.length;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  const start = (safePage - 1) * limit;
+
+  return {
+    success: true,
+    data: enriched.slice(start, start + limit),
+    pagination: {
+      page: safePage,
+      limit,
+      total,
+      totalPages,
+    },
+  };
 }

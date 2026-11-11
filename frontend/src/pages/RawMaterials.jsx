@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Pagination from "../components/Pagination";
 import { db } from "../db/database"; 
-import { flush, outboxCounts, OUTBOX_EVENT } from "../offline/index.js";
+import {
+  flush,
+  outboxCounts,
+  OUTBOX_EVENT,
+  getRawMaterialFromCache,
+} from "../offline/index.js";
 import {
   Warehouse, Package, AlertTriangle, Plus,
   X, RefreshCw, Save, Factory, ShoppingCart, Truck, CheckCircle2, XCircle,

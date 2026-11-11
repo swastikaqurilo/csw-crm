@@ -5,6 +5,7 @@ import * as purchases from "./purchases.js";
 import * as stock from "./stock.js";
 import * as workers from "./workers.js";
 import * as salary from "./salary.js";
+import * as attendance from "./attendance.js";
 
 const NOOP = () => null;
 
@@ -121,11 +122,10 @@ const APPLY = [
     h: expenses.applyDelete,
     k: ["id"],
   },
-    /* Attendance - temporary: online saving only */
   {
     v: ["POST"],
     p: /^\/workers\/attendance\/?$/,
-    h: NOOP,
+    h: attendance.applySave,
   },
 
     /* Workers */
@@ -153,6 +153,12 @@ const APPLY = [
   { v: ["PUT", "PATCH"], p: /^\/salaries\/([^/]+)\/?$/, h: salary.applyUpdate, k: ["id"] },
   { v: ["DELETE"], p: /^\/salaries\/([^/]+)\/?$/, h: salary.applyDelete, k: ["id"] },
   { v: ["POST"], p: /^\/salaries\/?$/, h: salary.applyCreate },
+
+  {
+    v: ["POST"],
+    p: /^\/salaries\/generate\/?$/,
+    h: salary.applyGenerate,
+  },
 ];
 
 const RECONCILE = [
@@ -279,6 +285,18 @@ const RECONCILE = [
   { v: ["PUT", "PATCH"], p: /^\/salaries\/([^/]+)\/?$/, h: salary.reconcileUpdate, k: ["id"] },
   { v: ["DELETE"], p: /^\/salaries\/([^/]+)\/?$/, h: salary.reconcileDelete, k: ["id"] },
   { v: ["POST"], p: /^\/salaries\/?$/, h: salary.reconcileCreate },
+
+  {
+    v: ["POST"],
+    p: /^\/salaries\/generate\/?$/,
+    h: salary.reconcileGenerate,
+  },
+
+  {
+    v: ["POST"],
+    p: /^\/workers\/attendance\/?$/,
+    h: attendance.reconcileSave,
+  },
 ];
 
 const ON_FAILURE = [
@@ -287,7 +305,11 @@ const ON_FAILURE = [
     p: /^\/raw-material\/purchases\/([^/]+)\/(receive|cancel|payments)/,
     h: purchases.clearFailedAction,
   },
-  
+  {
+    v: ["POST"],
+    p: /^\/workers\/attendance\/?$/,
+    h: attendance.onSaveFailure,
+  },
 ];
 
 function runTable(table, payload) {
@@ -370,10 +392,6 @@ export async function applyOptimistic(payload) {
   const verb = String(payload.method || "").toUpperCase();
   const path = String(payload.url || "").split("?")[0];
 
-  if (verb === "POST" && path === "/workers/attendance") {
-    return null;
-  }
-
   const result = await runTable(APPLY, payload);
 
   if (result !== undefined) return result;
@@ -397,6 +415,7 @@ export async function onFailure(row) {
   return runTable(ON_FAILURE, {
     method: row.method,
     url: row.url,
+    data: row.data,
     operationId: row.operationId,
   });
 }

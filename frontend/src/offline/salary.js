@@ -6,6 +6,11 @@ import {
   httpRowsForBasePath,
   listKeyOf,
 } from "./cache.js";
+import {
+  getWorkersFromCache,
+  getProductionsFromCache,
+  getSalariesFromCache,
+} from "./reads.js";
 
 import { getCachedWorker } from "./workers.js";
 
@@ -78,22 +83,32 @@ async function getSalary(id) {
 }
 
 function getDateOnly(value) {
-  const date = String(value ?? "").slice(0, 10);
+  const raw = String(value ?? "");
 
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const parsed = new Date(`${raw}T00:00:00.000Z`);
+
+    if (
+      Number.isNaN(parsed.getTime()) ||
+      parsed.toISOString().slice(0, 10) !== raw
+    ) {
+      throw new Error("Invalid salary period date.");
+    }
+
+    return raw;
+  }
+
+  const parsed = new Date(raw);
+
+  if (Number.isNaN(parsed.getTime())) {
     throw new Error("Invalid salary period date.");
   }
 
-  const parsed = new Date(`${date}T00:00:00.000Z`);
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
 
-  if (
-    Number.isNaN(parsed.getTime()) ||
-    parsed.toISOString().slice(0, 10) !== date
-  ) {
-    throw new Error("Invalid salary period date.");
-  }
-
-  return date;
+  return `${year}-${month}-${day}`;
 }
 
 export async function getMissingAttendanceDates(
@@ -157,11 +172,6 @@ export async function getMissingAttendanceDates(
     (date) => !cachedDates.has(date)
   );
 }
-
-
-/* -------------------------------------------------------
-   Cache updates
-------------------------------------------------------- */
 
 async function patchSalaryCaches(id, updater) {
   const { db, openDb } = await import("../db/database.js");
@@ -312,10 +322,6 @@ async function removeSalaryFromCaches(id) {
   await removeDedicatedRecord("salaries", strId);
 }
 
-/* -------------------------------------------------------
-   Create salary
-------------------------------------------------------- */
-
 export async function applyCreate({ data, operationId }) {
   const workerId = getId(data?.worker);
   const worker = await getCachedWorker(workerId);
@@ -357,10 +363,6 @@ export async function applyCreate({ data, operationId }) {
   return salary;
 }
 
-/* -------------------------------------------------------
-   Update salary
-------------------------------------------------------- */
-
 export async function applyUpdate({ id, data, operationId }) {
   const current = await getSalary(id);
 
@@ -393,10 +395,6 @@ export async function applyUpdate({ id, data, operationId }) {
   return updated;
 }
 
-/* -------------------------------------------------------
-   Delete salary
-------------------------------------------------------- */
-
 export async function applyDelete({ id }) {
   const current = await getSalary(id);
 
@@ -417,10 +415,6 @@ export async function applyDelete({ id }) {
 
   return { _id: id, deleted: true };
 }
-
-/* -------------------------------------------------------
-   Record payment
-------------------------------------------------------- */
 
 export async function applyPaymentCreate({
   id,
@@ -458,7 +452,7 @@ export async function applyPaymentCreate({
     ...current,
     payments: [...(current.payments || []), payment],
     paidAmount: money(current.paidAmount + amount),
-    lastPaymentDate: payment.date,
+    lastPaymentDate: payment.paymentDate,
     __pending: true,
     __opId: operationId,
     updatedAt: nowIso(),
@@ -469,10 +463,6 @@ export async function applyPaymentCreate({
 
   return updated;
 }
-
-/* -------------------------------------------------------
-   Record advance
-------------------------------------------------------- */
 
 export async function applyAdvanceCreate({
   id,
@@ -521,10 +511,6 @@ export async function applyAdvanceCreate({
   return updated;
 }
 
-/* -------------------------------------------------------
-   Delete advance
-------------------------------------------------------- */
-
 export async function applyAdvanceDelete({
   id,
   advanceId,
@@ -568,10 +554,6 @@ export async function applyAdvanceDelete({
 
   return updated;
 }
-
-/* -------------------------------------------------------
-   Reconciliation helpers
-------------------------------------------------------- */
 
 async function reconcileSalary({ id, response }) {
   const serverSalary = getSalaryFromResponse(response);
@@ -669,4 +651,357 @@ export async function reconcileAdvanceDelete({ id, response }) {
 export async function reconcileDelete({ id }) {
   await removeSalaryFromCaches(id);
   return { _id: id, deleted: true };
+}
+
+
+export async function applyGenerate({ data, operationId }) {
+  const start = getDateOnly(data?.periodStart);
+  const end = getDateOnly(data?.periodEnd);
+
+  if (start > end) {
+    throw new Error("Period start date cannot be after its end date.");
+  }
+
+  const workersResult = await getWorkersFromCache({ limit: 1000 });
+  const workers = workersResult?.data || [];
+
+  const productions = await getProductionsFromCache();
+
+  const salariesResult = await getSalariesFromCache({
+    page: 1,
+    limit: 10000,
+  });
+
+  const existingSalaries = salariesResult?.salaries || [];
+
+  if (!workers.length) {
+    throw new Error(
+      "Workers are not available in the local cache. Open Workers while online first."
+    );
+  }
+
+  const activeWorkers = workers.filter((worker) => {
+    if (worker.status !== "Active") return false;
+
+    const joiningDate = String(worker.joiningDate || "").slice(0, 10);
+
+    return !joiningDate || joiningDate <= end;
+  });
+
+  const results = [];
+
+  for (const worker of activeWorkers) {
+    if (worker.payType !== "Variable") {
+      results.push({
+        worker: worker._id,
+        name: worker.name,
+        status: "skipped",
+        reason: "Fixed salary calculation is not yet supported by this offline generation handler.",
+      });
+      continue;
+    }
+
+    const workerId = String(worker._id);
+    const workerPhone = String(worker.phone || "").replace(/\D/g, "");
+
+    const workerProductions = productions.filter((production) => {
+      const date = String(production.date || "").slice(0, 10);
+
+      return (
+        production.isActive !== false &&
+        date >= start &&
+        date <= end &&
+        Array.isArray(production.workers) &&
+        production.workers.some(
+          (entry) => String(entry.worker?._id || entry.worker) === workerId
+        )
+      );
+    });
+
+    let totalKg = 0;
+
+    for (const production of workerProductions) {
+      const entry = production.workers.find(
+        (item) => String(item.worker?._id || item.worker) === workerId
+      );
+
+      totalKg += Number(entry?.kg || 0);
+    }
+
+    totalKg = Math.round(totalKg * 1000) / 1000;
+
+    const ratePerKg = money(worker.variablePay?.ratePerKg);
+    const basicSalary = money(totalKg * ratePerKg);
+
+    // Find every existing salary for this worker and period.
+    const existingMatches = existingSalaries.filter((salary) => {
+      const salaryWorkerId = getId(salary.worker);
+
+      const referencedWorker =
+        typeof salary.worker === "object"
+          ? salary.worker
+          : workers.find(
+              (item) => String(item._id) === salaryWorkerId
+            );
+
+      const salaryPhone = String(
+        referencedWorker?.phone || salary.workerPhone || ""
+      ).replace(/\D/g, "");
+
+      const sameWorker =
+        salaryWorkerId === workerId ||
+        (
+          salaryPhone &&
+          workerPhone &&
+          salaryPhone === workerPhone
+        );
+
+      let salaryStart;
+      let salaryEnd;
+
+      try {
+        salaryStart = getDateOnly(salary.periodStart);
+        salaryEnd = getDateOnly(salary.periodEnd);
+      } catch {
+        return false;
+      }
+
+      return (
+        sameWorker &&
+        salaryStart === start &&
+        salaryEnd === end &&
+        salary.isDeleted !== true
+      );
+    });
+
+    // Prefer records with payment history, then the record with
+    // the highest existing salary amount.
+    existingMatches.sort((a, b) => {
+      const aCommitted =
+        money(a.paidAmount) + money(a.advanceAmount);
+      const bCommitted =
+        money(b.paidAmount) + money(b.advanceAmount);
+
+      if (aCommitted !== bCommitted) {
+        return bCommitted - aCommitted;
+      }
+
+      return money(b.netSalary) - money(a.netSalary);
+    });
+
+    const existing = existingMatches[0] || null;
+
+    // Remove duplicate records only when they have no financial history.
+    const duplicates = existingMatches.slice(1);
+
+    const protectedDuplicates = duplicates.filter((salary) => {
+      return (
+        money(salary.paidAmount) > 0 ||
+        money(salary.advanceAmount) > 0 ||
+        (Array.isArray(salary.payments) && salary.payments.length > 0) ||
+        (Array.isArray(salary.advances) && salary.advances.length > 0)
+      );
+    });
+
+    if (protectedDuplicates.length > 0) {
+      results.push({
+        worker: worker._id,
+        name: worker.name,
+        status: "skipped",
+        reason:
+          "Multiple salary records exist for this worker and period, and at least one has payment or advance history. Review the records before generating.",
+        salary: existing,
+      });
+      continue;
+    }
+
+    for (const duplicate of duplicates) {
+      await removeSalaryFromCaches(duplicate._id);
+    }
+
+    if (
+      existing &&
+      money(existing.paidAmount) > 0
+    ) {
+      results.push({
+        worker: worker._id,
+        name: worker.name,
+        status: "skipped",
+        reason: "Salary already has payments.",
+        salary: existing,
+      });
+      continue;
+    }
+
+    const allowances = money(existing?.allowances);
+    const deductions = money(existing?.deductions);
+    const netSalary = money(basicSalary + allowances - deductions);
+
+    const committed = money(
+      money(existing?.paidAmount) + money(existing?.advanceAmount)
+    );
+
+    if (netSalary < committed) {
+      results.push({
+        worker: worker._id,
+        name: worker.name,
+        status: "skipped",
+        reason:
+          "Recalculated salary is below the amount already paid or advanced.",
+        salary: existing,
+      });
+      continue;
+    }
+
+    const salary = normalizeSalary({
+      ...(existing || {}),
+      _id: existing?._id || `pending:${operationId}:${workerId}`,
+      worker,
+      payType: "Variable",
+      periodStart: start,
+      periodEnd: end,
+      basicSalary,
+      allowances,
+      deductions,
+      netSalary,
+      paidAmount: money(existing?.paidAmount),
+      advanceAmount: money(existing?.advanceAmount),
+      payments: existing?.payments || [],
+      advances: existing?.advances || [],
+      production: {
+        totalKg,
+        ratePerKg,
+        totalEarnings: basicSalary,
+      },
+      paymentStatus: calculateStatus({
+        netSalary,
+        paidAmount: existing?.paidAmount,
+        advanceAmount: existing?.advanceAmount,
+      }),
+      isDeleted: false,
+      __pending: true,
+      __opId: operationId,
+      updatedAt: nowIso(),
+      createdAt: existing?.createdAt || nowIso(),
+    });
+
+    await upsertDedicatedRecord("salaries", salary);
+
+    if (existing) {
+      await patchSalaryCaches(salary._id, () => salary);
+    } else {
+      await addSalaryToCaches(salary);
+    }
+
+    results.push({
+      worker: worker._id,
+      name: worker.name,
+      status: existing ? "updated" : "created",
+      salary,
+    });
+  }
+
+  return {
+    success: true,
+    message: "Offline salary generation completed.",
+    salaries: results,
+  };
+}
+
+export async function reconcileGenerate({ operationId, response }) {
+  const results = response?.data?.salaries || [];
+
+  const serverSalaries = results
+    .map((item) => item?.salary)
+    .filter((item) => item?._id);
+
+  if (!serverSalaries.length) return null;
+
+  const { db, openDb } = await import("../db/database.js");
+
+  await openDb();
+
+  const httpRows = await httpRowsForBasePath(BASE_PATH);
+
+  const reconciledSalaries = serverSalaries.map((salary) => ({
+    ...salary,
+    __pending: false,
+    __opId: undefined,
+  }));
+
+  await db.transaction("rw", db.cachedRecords, async () => {
+    // Save each server salary and remove its temporary offline record.
+    for (const salary of reconciledSalaries) {
+      const workerId = String(
+        salary.worker?._id || salary.worker || ""
+      );
+
+      const temporaryId = `pending:${operationId}:${workerId}`;
+
+      const temporary = await db.cachedRecords
+        .where("[module+recordId]")
+        .equals(["salaries", temporaryId])
+        .first();
+
+      if (temporary) {
+        await db.cachedRecords.delete(temporary.localId);
+      }
+
+      const existing = await db.cachedRecords
+        .where("[module+recordId]")
+        .equals(["salaries", String(salary._id)])
+        .first();
+
+      await db.cachedRecords.put({
+        ...(existing || {}),
+        module: "salaries",
+        recordId: String(salary._id),
+        data: salary,
+        updatedAt: nowIso(),
+      });
+    }
+
+    // Update each cached salary list only once.
+    for (const row of httpRows) {
+      const key = listKeyOf(row.data);
+
+      if (!key || !Array.isArray(row.data[key])) continue;
+
+      const temporaryIds = new Set(
+        reconciledSalaries.map((salary) => {
+          const workerId = String(
+            salary.worker?._id || salary.worker || ""
+          );
+
+          return `pending:${operationId}:${workerId}`;
+        })
+      );
+
+      const serverIds = new Set(
+        reconciledSalaries.map((salary) => String(salary._id))
+      );
+
+      const remaining = row.data[key].filter((item) => {
+        const id = String(item?._id || "");
+
+        return !temporaryIds.has(id) && !serverIds.has(id);
+      });
+
+      const nextList = [
+        ...reconciledSalaries,
+        ...remaining,
+      ];
+
+      await db.cachedRecords.put({
+        ...row,
+        data: {
+          ...row.data,
+          [key]: nextList,
+        },
+        updatedAt: nowIso(),
+      });
+    }
+  });
+
+  return reconciledSalaries;
 }

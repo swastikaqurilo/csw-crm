@@ -79,8 +79,12 @@ export async function applyCreate({ data, operationId }) {
     typeof data?.material === "object" ? data.material?._id : data?.material;
 
   const stock = materialId
-    ? await getCachedByModuleAndId("rawStock", "/raw-material", materialId)
-    : null;
+  ? await getCachedByModuleAndId(
+      "rawStock",
+      "/raw-material/stock",
+      materialId
+    )
+  : null;
 
   const quantity = Number(data?.quantity) || 0;
   const unitPrice = Number(data?.unitPrice) || 0;
@@ -219,7 +223,7 @@ export async function applyAction({
       pendingSync: true,
     });
 
-    await patchCachedCollections("/raw-material", (list) =>
+    await patchCachedCollections("/raw-material/stock", (list) =>
       list.map((stock) => {
         if (String(stock?._id) !== String(materialId)) return stock;
         const beforeQty = Number(stock.quantity);
@@ -537,7 +541,7 @@ export async function reconcileAction({ url, operationId, response }) {
       await patchDedicatedRecord("rawStock", materialId, (stock) =>
         stock ? stripMovement(stock) : stock
       );
-      await patchCachedCollections("/raw-material", (list) =>
+      await patchCachedCollections("/raw-material/stock", (list) =>
         list.map((stock) =>
           String(stock?._id) === String(materialId) ? stripMovement(stock) : stock
         )
