@@ -22,7 +22,7 @@ const STOCK_DEDUCTED = new Set([
 /* ─────────────── cache helpers ─────────────── */
 
 export function getCachedOrder(id) {
-  return getCachedByModuleAndId("orders", "/orders", id);
+  return getCachedByModuleAndId("orders", "/order", id);
 }
 
 async function patchOrderCaches(id, updater) {
@@ -358,7 +358,7 @@ function mergeReturned(current, returned) {
 
 export async function reconcileCreate({ url, operationId, response }) {
   const path = String(url || "").split("?")[0];
-  if (!/^\/orders?\/?$/.test(path)) return;
+  if (!/\/orders?\/?$/.test(base)) return;
 
   const created = response?.data?.data;
   if (!created?._id) return;

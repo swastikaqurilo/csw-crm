@@ -236,21 +236,50 @@ function RawMaterials() {
   useEffect(() => { if (error) setSuccess(""); }, [error]);
   useEffect(() => { if (success) setError(""); }, [success]);
 
+  
   const fetchStock = useCallback(async ({ silent } = {}) => {
     try {
       if (!silent) setStockLoading(true);
+
+      let cached = [];
+
       try {
-        const cached = await getRawMaterialFromCache();     // ← reads http + dedicated
-        if (cached.length > 0) setStock(cached);
-      } catch { /* ignore */ }
+        cached = await getRawMaterialFromCache();
+        if (cached.length > 0) {
+          setStock(cached);
+        }
+      } catch {}
+
       try {
         const res = await getRawStock();
-        setStock(res.data?.data || []);
-      } catch { /* offline — cache stays */ }
+        const serverRows = res.data?.data || [];
+
+        setStock((current) => {
+          const merged = new Map(
+            serverRows.map((item) => [String(item._id), item])
+          );
+
+          for (const item of current) {
+            if (item.__pending) {
+              merged.set(String(item._id), item);
+            }
+          }
+
+          for (const item of cached) {
+            if (item.__pending) {
+              merged.set(String(item._id), item);
+            }
+          }
+
+          return [...merged.values()];
+        });
+      } catch {
+      }
     } finally {
       if (!silent) setStockLoading(false);
     }
   }, []);
+
 
   const fetchPurchases = useCallback(async ({ silent } = {}) => {
     try {
@@ -382,101 +411,96 @@ function RawMaterials() {
   });
 
   
-const submitMaterial = async (e) => {
-  e.preventDefault();
-  if (saving || !material) return;
+  const submitMaterial = async (e) => {
+    e.preventDefault();
+    if (saving || !material) return;
 
-  const f = material.form;
-  const name = f.name.trim();
-  const sizeKg = Number(f.sizeKg);
+    const f = material.form;
+    const name = f.name.trim();
+    const sizeKg = Number(f.sizeKg);
 
-  if (f.category === "Reel" && (!Number.isFinite(sizeKg) || sizeKg <= 0)) {
-    setError("Enter a valid reel size greater than 0.");
-    return;
-  }
-
-  if (f.category !== "Reel" && !name) {
-    setError("Material name is required.");
-    return;
-  }
-
-  const payload = {
-    category: f.category,
-    name:
-      f.category === "Reel"
-        ? name || `Reel ${sizeKg}kg`
-        : name,
-    ...(f.category === "Reel" ? { sizeKg } : {}),
-    unit: UNIT_BY_CATEGORY[f.category],
-    reorderLevel: Number(f.reorderLevel) || 0,
-    criticalLevel: Number(f.criticalLevel) || 0,
-    notes: f.notes.trim() || undefined,
-  };
-
-  const tempId = `temp-${Date.now()}`;
-
-  const optimisticMaterial = {
-    ...payload,
-    _id: tempId,
-    quantity: 0,
-    reservedQty: 0,
-    availableQty: 0,
-    __pending: true,
-  };
-
-  setSaving(true);
-  setError("");
-  setSuccess("");
-
-  // Show the new material immediately.
-  setStock((current) => [
-    optimisticMaterial,
-    ...current.filter((item) => item._id !== tempId),
-  ]);
-
-  try {
-    const res = await createRawStock(payload);
-    const result = res.data?.data;
-
-    if (isQueued(res)) {
-      setMaterial(null);
-      setSuccess("Material saved.");
-      await refreshAll();
+    if (f.category === "Reel" && (!Number.isFinite(sizeKg) || sizeKg <= 0)) {
+      setError("Enter a valid reel size greater than 0.");
       return;
     }
 
-    await db.cachedRecords
-      .where("[module+recordId]")
-      .equals(["rawStock", tempId])
-      .delete();
+    if (f.category !== "Reel" && !name) {
+      setError("Material name is required.");
+      return;
+    }
 
-    setStock((current) =>
-      current.map((item) =>
-        item._id === tempId ? result : item
-      )
-    );
+    const payload = {
+      category: f.category,
+      name: f.category === "Reel" ? name || `Reel ${sizeKg}kg` : name,
+      ...(f.category === "Reel" ? { sizeKg } : {}),
+      unit: UNIT_BY_CATEGORY[f.category],
+      reorderLevel: Number(f.reorderLevel) || 0,
+      criticalLevel: Number(f.criticalLevel) || 0,
+      notes: f.notes.trim() || undefined,
+    };
 
-    setMaterial(null);
-    await refreshAll();
-    setSuccess("Material saved.");
-  } catch (err) {
-    // Roll back the optimistic entry if the request genuinely failed.
-    setStock((current) =>
-      current.filter((item) => item._id !== tempId)
-    );
+    const tempId = `temp-${Date.now()}`;
 
-    await db.cachedRecords
-      .where("[module+recordId]")
-      .equals(["rawStock", tempId])
-      .delete()
-      .catch(() => {});
+    const optimisticMaterial = {
+      ...payload,
+      _id: tempId,
+      quantity: 0,
+      reservedQty: 0,
+      availableQty: 0,
+      __pending: true,
+    };
 
-    setError(errMsg(err, "Failed to save material."));
-  } finally {
-    setSaving(false);
-  }
-};
+    setSaving(true);
+    setError("");
+    setSuccess("");
 
+    setStock((current) => [
+      optimisticMaterial,
+      ...current.filter((item) => item._id !== tempId),
+    ]);
+
+    try {
+      const res = await createRawStock(payload);
+      const result = res.data?.data;
+
+      if (isQueued(res)) {
+        const visibleMaterial = result?._id
+          ? { ...optimisticMaterial, ...result, __pending: true }
+          : optimisticMaterial;
+
+        setStock((current) => [
+          visibleMaterial,
+          ...current.filter(
+            (item) =>
+              item._id !== tempId &&
+              item._id !== result?._id
+          ),
+        ]);
+
+        setMaterial(null);
+        setSuccess("Material added successfully.");
+        return;
+      }
+
+      setStock((current) =>
+        current.map((item) =>
+          item._id === tempId ? result : item
+        )
+      );
+
+      setMaterial(null);
+      await refreshAll();
+      setSuccess("Material saved.");
+    } catch (err) {
+      setStock((current) =>
+        current.filter((item) => item._id !== tempId)
+      );
+
+      setError(errMsg(err, "Failed to save material."));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const openAdjust = (item, type = "in") =>
     setAdjust({ item, form: { type, quantity: "", reason: "", notes: "" } });

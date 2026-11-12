@@ -169,11 +169,17 @@ export async function applyEdit({ id, data }) {
 
 export async function applyAction({
   purchaseId,
-  action,
+  action: rawAction,
   operationId,
   data,
   paymentId,
 }) {
+  const action =
+    rawAction === "payments"
+      ? paymentId
+        ? "deletePayment"
+        : "payment"
+      : rawAction;
   const purchase = await getCachedPurchase(purchaseId);
   if (!purchase) {
     throw new Error(

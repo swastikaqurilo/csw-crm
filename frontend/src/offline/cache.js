@@ -35,6 +35,7 @@ export function newOperationId() {
 }
 
 
+
 export function collectionFor(url) {
   const path =
     String(url || "").split("?")[0].replace(/\/+$/, "") || "/";
@@ -58,17 +59,22 @@ export function collectionFor(url) {
   }
 
   const match = normalizedPath.match(
-  /^\/(enquiries|contacts|follow-ups|orders|payment|payments|expense|expenses|workers|salaries)(?:\/|$)/
-);
+    /^\/(enquiries|contacts|follow-ups|order|orders|payment|payments|expense|expenses|workers|salaries)(?:\/|$)/
+  );
 
-if (!match) return null;
+  if (!match) return null;
 
-return ["payment", "expense"].includes(match[1])
-  ? match[1] === "payment"
-    ? "payments"
-    : "expenses"
-  : match[1];
+  if (match[1] === "order" || match[1] === "orders") {
+    return "orders";
+  }
+
+  return ["payment", "expense"].includes(match[1])
+    ? match[1] === "payment"
+      ? "payments"
+      : "expenses"
+    : match[1];
 }
+
 
 export function cachePathForCollection(collection) {
   if (collection === "rawStock") return "/raw-material/stock";
@@ -77,6 +83,7 @@ export function cachePathForCollection(collection) {
   if (collection === "productProductions") return "/products";
   if (collection === "payments") return "/payment";
   if (collection === "expenses") return "/expense";
+  if (collection === "orders") return "/order";
 
   return `/${collection}`;
 }

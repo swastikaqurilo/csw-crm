@@ -13,12 +13,14 @@ console.log("CSW OFFLINE ROUTER UPDATED - TEST 123");
 
 const APPLY = [
   /* Purchases */
+  
   {
     v: ["POST", "DELETE"],
     p: /^\/raw-material\/purchases\/([^/]+)\/(receive|cancel|payments)(?:\/([^/]+))?\/?$/,
     h: purchases.applyAction,
     k: ["purchaseId", "action", "paymentId"],
   },
+
   {
     v: ["POST"],
     p: /^\/raw-material\/purchases\/?$/,
@@ -35,6 +37,25 @@ const APPLY = [
     p: /^\/raw-material\/?$/,
     h: NOOP,
   },
+
+{
+  v: ["POST"],
+  p: /^\/raw-material\/stock\/?$/,
+  h: stock.applyRawMaterialCreate,
+},
+{
+  v: ["PATCH"],
+  p: /^\/raw-material\/stock\/([^/]+)\/?$/,
+  h: stock.applyRawStockUpdate,
+  k: ["id"],
+},
+{
+  v: ["POST"],
+  p: /^\/raw-material\/stock\/([^/]+)\/adjust\/?$/,
+  h: stock.applyRawStockAdjust,
+  k: ["id"],
+},
+
 
   /* Orders */
   {
@@ -162,12 +183,11 @@ const APPLY = [
 ];
 
 const RECONCILE = [
-  /* Purchases */
   {
-    v: ["POST"],
+    v: ["POST", "DELETE"],
     p: /^\/raw-material\/purchases\/([^/]+)\/(receive|cancel|payments)(?:\/([^/]+))?\/?$/,
     h: purchases.reconcileAction,
-  },
+  }, 
   {
     v: ["POST"],
     p: /^\/raw-material\/purchases\/?$/,
@@ -180,10 +200,19 @@ const RECONCILE = [
   },
   {
     v: ["POST"],
-    p: /^\/raw-material\/?$/,
+    p: /^\/raw-material\/stock\/?$/,
     h: stock.reconcileRawMaterialCreate,
   },
-
+  {
+  v: ["PATCH"],
+  p: /^\/raw-material\/stock\/([^/]+)\/?$/,
+  h: stock.reconcileRawStockUpdate,
+},
+{
+  v: ["POST"],
+  p: /^\/raw-material\/stock\/([^/]+)\/adjust\/?$/,
+  h: stock.reconcileRawStockAdjust,
+},
     /* Production + product stock */
   {
     v: ["POST"],
@@ -302,7 +331,7 @@ const RECONCILE = [
 const ON_FAILURE = [
   {
     v: ["POST", "DELETE"],
-    p: /^\/raw-material\/purchases\/([^/]+)\/(receive|cancel|payments)/,
+    p: /^\/raw-material\/purchases\/([^/]+)\/(receive|cancel|payments)(?:\/([^/]+))?\/?$/,
     h: purchases.clearFailedAction,
   },
   {

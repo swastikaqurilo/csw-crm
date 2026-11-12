@@ -58,7 +58,7 @@ export async function getOrdersFromCache({
 } = {}) {
   await openDb();
 
-  let list = await collectModule("orders", "/orders");
+  let list = await collectModule("orders", "/order");
 
   const allContacts = await collectModule("contacts", "/contacts");
     const contactById = new Map(allContacts.map((c) => [String(c._id), c]));
@@ -142,7 +142,7 @@ export async function getRawMaterialFromCache() {
 }
 
 export function getRawMaterialByIdFromCache(id) {
-  return getCachedByModuleAndId("rawStock", "/raw-material", id);
+  return getCachedByModuleAndId("rawStock", "/raw-material/stock", id);
 }
 
 export async function getPurchasesFromCache() {
