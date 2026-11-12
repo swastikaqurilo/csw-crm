@@ -358,7 +358,7 @@ function mergeReturned(current, returned) {
 
 export async function reconcileCreate({ url, operationId, response }) {
   const path = String(url || "").split("?")[0];
-  if (!/\/orders?\/?$/.test(base)) return;
+  if (!/\/orders?\/?$/.test(path)) return;
 
   const created = response?.data?.data;
   if (!created?._id) return;

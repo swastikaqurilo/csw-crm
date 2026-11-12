@@ -14,6 +14,10 @@ import {
 import {
   getAttendanceFromCache,
   getAttendanceHistoryPageFromCache,
+  getPaymentsFromCache,
+  getPaymentByIdFromCache,
+  getPaymentSummaryFromCache,
+  getPaymentsByOrderFromCache,
 } from "../offline/reads.js";
 
 const BASE_URL =
@@ -239,6 +243,139 @@ api.interceptors.response.use(
     if (method === "GET") {
     if (!isNetworkError(error)) {
       return Promise.reject(error);
+    }
+
+    const paymentPath = String(cfg.url || "")
+      .split("?")[0]
+      .replace(/^\/api(?=\/)/, "");
+
+    // Payment list with search, mode, status and date filters.
+    if (
+      paymentPath === "/payment" ||
+      paymentPath === "/payments"
+    ) {
+      const payments = await getPaymentsFromCache({
+        search: cfg.params?.search,
+        paymentMode: cfg.params?.paymentMode,
+        status: cfg.params?.status,
+        from: cfg.params?.from,
+        to: cfg.params?.to,
+      }).catch((err) => {
+        console.error(
+          "[axios] Local payments read failed:",
+          err
+        );
+        return null;
+      });
+
+      if (payments) {
+        return {
+          data: {
+            success: true,
+            data: payments,
+            pagination: {
+              page: Number(cfg.params?.page) || 1,
+              limit: Number(cfg.params?.limit) || payments.length,
+              total: payments.length,
+              totalPages: 1,
+            },
+          },
+          status: 200,
+          statusText: "OK (local payments)",
+          headers: {},
+          config: cfg,
+        };
+      }
+    }
+
+    // Payment summary cards.
+    if (
+      paymentPath === "/payment/summary" ||
+      paymentPath === "/payments/summary"
+    ) {
+      const summary = await getPaymentSummaryFromCache().catch(
+        (err) => {
+          console.error(
+            "[axios] Local payment summary read failed:",
+            err
+          );
+          return null;
+        }
+      );
+
+      if (summary) {
+        return {
+          data: {
+            success: true,
+            data: summary,
+          },
+          status: 200,
+          statusText: "OK (local payment summary)",
+          headers: {},
+          config: cfg,
+        };
+      }
+    }
+
+    const paymentByOrderMatch = paymentPath.match(
+      /^\/payments?\/order\/([^/]+)$/
+    );
+
+    if (paymentByOrderMatch) {
+      const result = await getPaymentsByOrderFromCache(
+        decodeURIComponent(paymentByOrderMatch[1])
+      ).catch((err) => {
+        console.error(
+          "[axios] Local order payments read failed:",
+          err
+        );
+        return null;
+      });
+
+      if (result) {
+        return {
+          data: {
+            success: true,
+            ...result,
+          },
+          status: 200,
+          statusText: "OK (local order payments)",
+          headers: {},
+          config: cfg,
+        };
+      }
+    }
+
+    const paymentByIdMatch = paymentPath.match(
+      /^\/payments?\/([^/]+)$/
+    );
+
+    if (
+      paymentByIdMatch &&
+      paymentByIdMatch[1] !== "summary"
+    ) {
+      const payment = await getPaymentByIdFromCache(
+        decodeURIComponent(paymentByIdMatch[1])
+      ).catch((err) => {
+        console.error(
+          "[axios] Local payment lookup failed:",
+          err
+        );
+        return null;
+      });
+
+      if (payment) {
+        return {
+          data: {
+            success: true,
+            data: payment,
+          },
+          status: 200,
+          statusText: "OK (local payment)",
+          headers: {},
+          config: cfg,
+        };
+      }
     }
 
     // Attendance must read the latest dedicated local record first.

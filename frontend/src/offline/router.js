@@ -87,11 +87,23 @@ const APPLY = [
     h: orders.applyCreate,
   },
 
-  /* Payments */
+    /* Payments */
   {
     v: ["POST"],
     p: /^\/(?:api\/)?payments?\/?$/,
     h: orders.applyPaymentCreate,
+  },
+  {
+    v: ["PUT", "PATCH"],
+    p: /^\/(?:api\/)?payments?\/([^/]+)\/?$/,
+    h: orders.applyPaymentUpdate,
+    k: ["id"],
+  },
+  {
+    v: ["DELETE"],
+    p: /^\/(?:api\/)?payments?\/([^/]+)\/?$/,
+    h: orders.applyPaymentDelete,
+    k: ["id"],
   },
 
   /* Production + product stock */
@@ -247,7 +259,7 @@ const RECONCILE = [
     h: orders.reconcileCreate,
   },
 
-  /* Payments */
+    /* Payments */
   {
     v: ["POST"],
     p: /^\/(?:api\/)?payments?\/?$/,
@@ -255,18 +267,15 @@ const RECONCILE = [
   },
   {
     v: ["PUT", "PATCH"],
-    p: /^\/products\/stock\/([^/]+)\/(reserved|adjust|scrap)\/?$/,
-    h: stock.reconcileProductStockAction,
-  },
-  {
-    v: ["PUT", "PATCH"],
-    p: /^\/products\/([^/]+)\/?$/,
-    h: stock.reconcileProductionEdit,
+    p: /^\/(?:api\/)?payments?\/([^/]+)\/?$/,
+    h: orders.reconcilePaymentUpdate,
+    k: ["id"],
   },
   {
     v: ["DELETE"],
-    p: /^\/products\/([^/]+)\/?$/,
-    h: stock.reconcileProductionDelete,
+    p: /^\/(?:api\/)?payments?\/([^/]+)\/?$/,
+    h: orders.reconcilePaymentDelete,
+    k: ["id"],
   },
 
     /* Expenses */

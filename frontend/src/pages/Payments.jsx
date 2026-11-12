@@ -258,8 +258,41 @@ function Payments() {
       const orderId = p.order?._id || p.order;
       if (!orderId) continue;
       if (!groups[orderId]) {
+        const matchingOrder = orders.find(
+          (o) => String(o._id) === String(orderId)
+        );
+
+        const paymentOrder =
+          typeof p.order === "object" && p.order !== null
+            ? p.order
+            : {};
+
         groups[orderId] = {
-          order: p.order || { _id: orderId, orderNumber: "Unknown Order" },
+          order: {
+            ...matchingOrder,
+            ...paymentOrder,
+            _id: orderId,
+            contact:
+              paymentOrder.contact ||
+              matchingOrder?.contact ||
+              null,
+            customerName:
+              paymentOrder.customerName ||
+              matchingOrder?.customerName ||
+              "",
+            customerPhone:
+              paymentOrder.customerPhone ||
+              matchingOrder?.customerPhone ||
+              "",
+            orderNumber:
+              paymentOrder.orderNumber ||
+              matchingOrder?.orderNumber ||
+              "Unknown Order",
+            grandTotal:
+              paymentOrder.grandTotal ??
+              matchingOrder?.grandTotal ??
+              0,
+          },
           payments: [],
           totalAmount: 0, completedAmount: 0, pendingAmount: 0,
           latestDate: p.paymentDate, latestTimestamp: ts(p.paymentDate),
@@ -285,7 +318,7 @@ function Payments() {
       else g.status = g.order.paymentStatus || "Pending";
     }
     return Object.values(groups).sort((a, b) => b.latestTimestamp - a.latestTimestamp || (b.order.orderNumber || "").localeCompare(a.order.orderNumber || ""));
-  }, [payments]);
+  }, [payments, orders]);
 
   const totalOrders = groupedPayments.length;
   const totalPages = Math.max(1, Math.ceil(totalOrders / ORDERS_PER_PAGE));
@@ -349,15 +382,26 @@ function Payments() {
   };
 
   const openEdit = async (p) => {
+    if (!p) return;
+
     try {
       setSaving(true);
-      const res = await getPaymentById(p._id);
-      const full = res?.data?.data || p;
+
+      let full = p;
+
+      try {
+        const res = await getPaymentById(p._id);
+        full = res?.data?.data || p;
+      } catch (err) {
+        // Use the payment already loaded in the table when offline.
+        console.warn("Using locally available payment details:", err);
+      }
+
       setView(null);
       setModal({
         editing: full,
         form: {
-          order: full.order?._id || "",
+          order: full.order?._id || full.order || "",
           amount: full.amount || "",
           paymentDate: toInputDate(full.paymentDate),
           paymentMode: full.paymentMode || "Bank Transfer",
@@ -370,8 +414,8 @@ function Payments() {
         },
       });
     } catch (err) {
-      console.error("Failed to load payment:", err);
-      window.alert(err?.response?.data?.message || "Failed to load payment details.");
+      console.error("Failed to open payment:", err);
+      window.alert("Unable to open payment details.");
     } finally {
       setSaving(false);
     }

@@ -97,14 +97,168 @@ export async function getOrdersFromCache({
 }
 
 export function getOrderByIdFromCache(id) {
-  return getCachedByModuleAndId("orders", "/orders", id);
+  return getCachedByModuleAndId("orders", "/order", id);
+}
+
+/* ─────────────── payments (all) ─────────────── */
+
+function paymentDateKey(value) {
+  if (!value) return "";
+
+  const raw = String(value);
+
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+    return raw.slice(0, 10);
+  }
+
+  const date = new Date(value);
+
+  return Number.isNaN(date.getTime())
+    ? ""
+    : date.toISOString().slice(0, 10);
+}
+
+export async function getPaymentsFromCache({
+  search = "",
+  paymentMode,
+  status,
+  from,
+  to,
+} = {}) {
+  let list = await collectModule("payments", "/payment");
+
+  // Attach cached order details when payment.order contains only an ID.
+  const orders = await collectModule("orders", "/order");
+
+  list = list.map((payment) => {
+    const orderId =
+      payment.order?._id || payment.order;
+
+    const cachedOrder = orders.find(
+      (order) => String(order._id) === String(orderId)
+    );
+
+    return {
+      ...payment,
+      order: {
+        ...(cachedOrder || {}),
+        ...(typeof payment.order === "object" && payment.order !== null
+          ? payment.order
+          : {}),
+      },
+    };
+  });
+
+  if (search.trim()) {
+    const q = search.trim().toLowerCase();
+
+    list = list.filter((payment) => {
+      const order = payment.order || {};
+      const contact = order.contact || payment.contact || {};
+
+      const searchable = [
+        payment.paymentNumber,
+        payment.transactionId,
+        payment.chequeNumber,
+        payment.bankName,
+        payment.notes,
+        order.orderNumber,
+        order.customerName,
+        contact.company,
+        contact.name,
+        contact.phone,
+        order.customerPhone,
+      ];
+
+      return searchable.some((value) =>
+        String(value || "").toLowerCase().includes(q)
+      );
+    });
+  }
+
+  if (paymentMode) {
+    list = list.filter(
+      (payment) => payment.paymentMode === paymentMode
+    );
+  }
+
+  if (status) {
+    list = list.filter(
+      (payment) => payment.status === status
+    );
+  }
+
+  if (from) {
+    list = list.filter(
+      (payment) => paymentDateKey(payment.paymentDate) >= from
+    );
+  }
+
+  if (to) {
+    list = list.filter(
+      (payment) => paymentDateKey(payment.paymentDate) <= to
+    );
+  }
+
+  return list.sort(byDateDesc("createdAt"));
+}
+
+export async function getPaymentByIdFromCache(id) {
+  return getCachedByModuleAndId("payments", "/payment", id);
+}
+
+export async function getPaymentSummaryFromCache() {
+  const payments = await getPaymentsFromCache();
+
+  const now = new Date();
+  const today =
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+
+  const completed = payments.filter(
+    (payment) => payment.status === "Completed"
+  );
+
+  const todayPayments = completed.filter(
+    (payment) => paymentDateKey(payment.paymentDate) === today
+  );
+
+  return {
+    totalCollected: completed.reduce(
+      (sum, payment) => sum + (Number(payment.amount) || 0),
+      0
+    ),
+
+    totalCollectedCount: completed.length,
+
+    totalToday: todayPayments.reduce(
+      (sum, payment) => sum + (Number(payment.amount) || 0),
+      0
+    ),
+
+    totalTodayCount: todayPayments.length,
+
+    byStatus: ["Completed", "Pending", "Cancelled"].map((name) => {
+      const rows = payments.filter(
+        (payment) => payment.status === name
+      );
+
+      return {
+        _id: name,
+        count: rows.length,
+        amount: rows.reduce(
+          (sum, payment) => sum + (Number(payment.amount) || 0),
+          0
+        ),
+      };
+    }),
+  };
 }
 
 export async function getPaymentsByOrderFromCache(orderId) {
   const strId = String(orderId);
-  const order = await getCachedByModuleAndId("orders", "/orders", strId);
+  const order = await getCachedByModuleAndId("orders", "/order", strId);
 
-  const payments = await collectModule("payments", "/payments");
+  const payments = await collectModule("payments", "/payment");
   const list = payments
     .filter((p) => String(p.order?._id || p.order) === strId)
     .sort(byDateDesc("createdAt"));
@@ -180,12 +334,6 @@ export async function getFollowUpsFromCache() {
   return list.sort(byDateDesc("dueDate"));
 }
 
-/* ─────────────── payments (all) ─────────────── */
-
-export async function getPaymentsFromCache() {
-  const list = await collectModule("payments", "/payments");
-  return list.sort(byDateDesc("createdAt"));
-}
 
 /* ─────────────── expenses ─────────────── */
 
