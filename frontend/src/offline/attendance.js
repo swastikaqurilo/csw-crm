@@ -94,15 +94,54 @@ export async function getAttendanceByDate(date) {
 export async function getAttendanceHistoryFromCache() {
   await openDb();
 
-  const rows = await db.cachedRecords
+  const byDate = new Map();
+
+  // Read all cached server history responses.
+  const historyRows = await httpRowsForBasePath(
+    "/workers/attendance/history"
+  );
+
+  for (const row of historyRows) {
+    const payload = row.data;
+    const body = payload?.data ?? payload;
+
+    // Support all response shapes used by the API.
+    const records = Array.isArray(body)
+      ? body
+      : Array.isArray(body?.attendance)
+        ? body.attendance
+        : Array.isArray(body?.records)
+          ? body.records
+          : Array.isArray(body?.history)
+            ? body.history
+            : [];
+
+    for (const record of records) {
+      const date = normalizeDate(record?.date);
+      if (!date) continue;
+
+      byDate.set(date, record);
+    }
+  }
+
+  // Local attendance takes priority over cached server history.
+  const localRows = await db.cachedRecords
     .where("module")
     .equals(MODULE)
     .toArray();
 
-  return rows
-    .map((row) => row.data)
-    .filter(Boolean)
-    .sort((a, b) => b.date.localeCompare(a.date));
+  for (const row of localRows) {
+    const record = row.data;
+    const date = normalizeDate(record?.date || row.recordId);
+
+    if (!date) continue;
+
+    byDate.set(date, record);
+  }
+
+  return Array.from(byDate.values()).sort((a, b) =>
+    normalizeDate(b.date).localeCompare(normalizeDate(a.date))
+  );
 }
 
 export async function applySave({ data, operationId }) {

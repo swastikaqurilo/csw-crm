@@ -96,6 +96,14 @@ export async function getOrdersFromCache({
   };
 }
 
+export async function getExpensesFromCache() {
+  await openDb();
+
+  const expenses = await collectModule("expenses", "/expense");
+
+  return expenses.sort(byDateDesc("date"));
+}
+
 export function getOrderByIdFromCache(id) {
   return getCachedByModuleAndId("orders", "/order", id);
 }
@@ -337,10 +345,6 @@ export async function getFollowUpsFromCache() {
 
 /* ─────────────── expenses ─────────────── */
 
-export async function getExpensesFromCache() {
-  const list = await collectModule("expenses", "/expense");
-  return list.sort(byDateDesc("date"));
-}
 
 export function getExpenseByIdFromCache(id) {
   return getCachedByModuleAndId("expenses", "/expense", id);
@@ -424,6 +428,8 @@ export async function getAttendanceHistoryPageFromCache({
 } = {}) {
   const records = await readAttendanceHistory();
 
+  console.log("[ATTENDANCE TRACE] Records returned:", records.map(r => r.date));
+
   const workersResult = await getWorkersFromCache({
     page: 1,
     limit: 1000,
@@ -445,6 +451,11 @@ export async function getAttendanceHistoryPageFromCache({
       : 0;
 
     const totalWorkers = eligibleWorkers.length;
+
+      console.log("[ATTENDANCE TRACE] Final page:", {
+        total: enriched.length,
+        dates: enriched.slice(start, start + limit).map(r => r.date),
+      });
 
     return {
       ...record,

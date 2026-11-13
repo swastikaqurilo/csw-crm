@@ -18,6 +18,7 @@ import {
   getPaymentByIdFromCache,
   getPaymentSummaryFromCache,
   getPaymentsByOrderFromCache,
+  getExpensesFromCache,
 } from "../offline/reads.js";
 
 const BASE_URL =
@@ -212,6 +213,14 @@ api.interceptors.response.use(
   async (error) => {
     const cfg = error.config || {};
     const url = cfg.url || "";
+    console.log("[ATTENDANCE DEBUG]", {
+      url: cfg.url,
+      baseURL: cfg.baseURL,
+      method: cfg.method,
+      code: error?.code,
+      networkError: isNetworkError(error),
+      params: cfg.params,
+    });
     if (
       error.response?.status === 401 &&
       !isNetworkError(error) &&
@@ -243,6 +252,30 @@ api.interceptors.response.use(
     if (method === "GET") {
     if (!isNetworkError(error)) {
       return Promise.reject(error);
+    }
+    // Expenses: read the latest locally cached records.
+    const expensePath = String(cfg.url || "")
+      .split("?")[0]
+      .replace(/^\/api(?=\/)/, "");
+
+    if (expensePath === "/expense" || expensePath === "/expenses") {
+      const expenses = await getExpensesFromCache().catch((err) => {
+        console.error("[axios] Local expenses read failed:", err);
+        return null;
+      });
+
+      if (expenses) {
+        return {
+          data: {
+            success: true,
+            data: expenses,
+          },
+          status: 200,
+          statusText: "OK (local expenses)",
+          headers: {},
+          config: cfg,
+        };
+      }
     }
 
     const paymentPath = String(cfg.url || "")
@@ -405,6 +438,7 @@ if (
   String(cfg.url || "").split("?")[0] ===
   "/workers/attendance/history"
 ) {
+  
   const history = await getAttendanceHistoryPageFromCache({
     page: Number(cfg.params?.page) || 1,
     limit: Number(cfg.params?.limit) || 8,
@@ -413,11 +447,15 @@ if (
     return null;
   });
 
+  console.log("[ATTENDANCE HISTORY CACHE RESULT]", history);
+
   if (history) {
+    console.log("[axios] Returning cached attendance history");
+
     return {
       data: history,
       status: 200,
-      statusText: "OK (local attendance history)",
+      statusText: "OK",
       headers: {},
       config: cfg,
     };
