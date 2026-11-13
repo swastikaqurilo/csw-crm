@@ -6,12 +6,38 @@ import * as stock from "./stock.js";
 import * as workers from "./workers.js";
 import * as salary from "./salary.js";
 import * as attendance from "./attendance.js";
+import * as enquiries from "./enquiries.js";
 
 const NOOP = () => null;
 
 console.log("CSW OFFLINE ROUTER UPDATED - TEST 123");
 
 const APPLY = [
+
+    /* Enquiries */
+  {
+    v: ["POST"],
+    p: /^\/(?:api\/)?enquiries\/?$/,
+    h: enquiries.applyCreate,
+  },
+  {
+    v: ["PUT", "PATCH"],
+    p: /^\/(?:api\/)?enquiries\/([^/]+)\/?$/,
+    h: enquiries.applyUpdate,
+    k: ["id"],
+  },
+  {
+    v: ["DELETE"],
+    p: /^\/(?:api\/)?enquiries\/([^/]+)\/?$/,
+    h: enquiries.applyDelete,
+    k: ["id"],
+  },
+  {
+    v: ["POST"],
+    p: /^\/(?:api\/)?enquiries\/([^/]+)\/notes\/?$/,
+    h: enquiries.applyNote,
+    k: ["id"],
+  },
   /* Purchases */
   
   {
@@ -195,6 +221,28 @@ const APPLY = [
 ];
 
 const RECONCILE = [
+
+    /* Enquiries */
+  {
+    v: ["POST"],
+    p: /^\/(?:api\/)?enquiries\/?$/,
+    h: enquiries.reconcileCreate,
+  },
+  {
+    v: ["PUT", "PATCH"],
+    p: /^\/(?:api\/)?enquiries\/([^/]+)\/?$/,
+    h: enquiries.reconcileUpdate,
+  },
+  {
+    v: ["DELETE"],
+    p: /^\/(?:api\/)?enquiries\/([^/]+)\/?$/,
+    h: enquiries.reconcileDelete,
+  },
+  {
+    v: ["POST"],
+    p: /^\/(?:api\/)?enquiries\/([^/]+)\/notes\/?$/,
+    h: enquiries.reconcileNote,
+  },
   {
     v: ["POST", "DELETE"],
     p: /^\/raw-material\/purchases\/([^/]+)\/(receive|cancel|payments)(?:\/([^/]+))?\/?$/,

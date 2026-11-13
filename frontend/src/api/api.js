@@ -10,6 +10,7 @@
     export const createEnquiry = (data) => api.post("/enquiries", data);
     export const updateEnquiry = (id, data) => api.put(`/enquiries/${id}`, data);
     export const deleteEnquiry = (id) => api.delete(`/enquiries/${id}`);
+    export const addEnquiryNote = (id, data) => api.post(`/enquiries/${id}/notes`, data);
 
     export const getContacts = (params) => api.get("/contacts", { params });
     export const getContactById = (id) => api.get(`/contacts/${id}`);

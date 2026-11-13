@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { loadWithOfflineFallback } from "../db/offlineData";
 import {
   Search,
   UserRound,
@@ -30,20 +29,19 @@ import {
   ArrowDown,
   ArrowUpDown,
 } from "lucide-react";
-
-import {
-  getEnquiries,
-  getEnquiryById,
-  createEnquiry,
-  updateEnquiry,
-  deleteEnquiry,
-} from "../api/api";
-import { toast } from "react-toastify";
-
 import {
   cacheEnquiries,
   getCachedEnquiries,
-} from "../db/enquiriesCache";
+} from "../offline/enquiries.js";
+import { getEnquiriesFromCache } from "../offline/reads.js";
+import {
+  getEnquiries,
+  createEnquiry,
+  updateEnquiry,
+  deleteEnquiry,
+  addEnquiryNote,
+} from "../api/api";
+import { toast } from "react-toastify";
 
 const STATUS_OPTIONS = [
   "New",
@@ -373,11 +371,71 @@ function Enquiries() {
     notes: "",
   });
 
-  
-const loadEnquiries = async () => {
-  try {
-    setLoading(true);
+  const loadLocalEnquiries = async (params) => {
+    const cached = await getCachedEnquiries(params);
+    let records = cached?.data || [];
 
+    const query = params.search?.toLowerCase() || "";
+
+    records = records.filter((item) => {
+      const matchesSearch =
+        !query ||
+        [
+          item.enquiryNumber,
+          item.customerName,
+          item.company,
+          item.project,
+          item.product,
+        ].some((value) =>
+          String(value || "").toLowerCase().includes(query)
+        );
+
+      const matchesStatus =
+        !params.status || item.status === params.status;
+
+      const matchesSource =
+        !params.source || item.source === params.source;
+
+      return (
+        matchesSearch &&
+        matchesStatus &&
+        matchesSource &&
+        item.isActive !== false
+      );
+    });
+
+    records.sort(
+      (a, b) =>
+        new Date(b.createdAt || 0) -
+        new Date(a.createdAt || 0)
+    );
+
+    const localTotal = records.length;
+    const localPages = Math.max(
+      1,
+      Math.ceil(localTotal / limit)
+    );
+
+    const safePage = Math.min(page, localPages);
+    const start = (safePage - 1) * limit;
+
+    const mapped = records
+      .slice(start, start + limit)
+      .map(mapEnquiry);
+
+    setEnquiries(mapped);
+    setTotal(localTotal);
+    setPages(localPages);
+
+    if (
+      selectedId &&
+      !mapped.some((item) => item.id === selectedId)
+    ) {
+      setSelectedId(null);
+    }
+  };
+  
+  const loadEnquiries = async () => {
     const params = { page, limit };
 
     if (search.trim()) params.search = search.trim();
@@ -388,80 +446,58 @@ const loadEnquiries = async () => {
       params.source = sourceFilter;
     }
 
-    const response = await getEnquiries(params);
+    try {
+      setLoading(true);
 
-    const payload = {
-      data: response?.data?.data || [],
-      total: response?.data?.total || 0,
-      pages: response?.data?.pages || 1,
-    };
+      if (
+        typeof navigator !== "undefined" &&
+        !navigator.onLine
+      ) {
+        await loadLocalEnquiries(params);
+        return;
+      }
 
-    cacheEnquiries(params, payload).catch((e) =>
-      console.warn("[enquiries] cache write failed:", e)
-    );
+      const response = await getEnquiries(params);
 
-    const mapped = payload.data.map(mapEnquiry);
+      const payload = {
+        data: response?.data?.data || [],
+        total: response?.data?.total || 0,
+        pages: response?.data?.pages || 1,
+      };
 
-    setEnquiries(mapped);
-    setTotal(payload.total);
-    setPages(payload.pages);
+      await cacheEnquiries(params, payload);
 
-    if (selectedId) {
-      const stillExists = mapped.some(
-        (item) => item.id === selectedId
-      );
+      const mapped = payload.data.map(mapEnquiry);
 
-      if (!stillExists) setSelectedId(null);
-    }
-  } catch (err) {
-    // Only use the cache for network/offline failures.
-    // Do not bypass server authentication or authorization errors.
-    const isNetworkFailure =
-      !err?.response || !navigator.onLine;
+      setEnquiries(mapped);
+      setTotal(payload.total);
+      setPages(payload.pages);
 
-    if (isNetworkFailure) {
-      try {
-        const cached = await getCachedEnquiries(params);
+      if (selectedId && !mapped.some((item) => item.id === selectedId)) {
+        setSelectedId(null);
+      }
+    } catch (err) {
+      const isNetworkFailure =
+        !err?.response ||
+        (typeof navigator !== "undefined" && !navigator.onLine);
 
-        if (cached) {
-          const mapped = cached.data.map(mapEnquiry);
-
-          setEnquiries(mapped);
-          setTotal(cached.total);
-          setPages(cached.pages);
-
-          if (selectedId) {
-            const stillExists = mapped.some(
-              (item) => item.id === selectedId
-            );
-
-            if (!stillExists) setSelectedId(null);
-          }
-
-          toast.info(
-            "Offline mode: showing saved enquiries. Changes require an internet connection."
-          );
-          return;
-        }
-      } catch (cacheError) {
-        console.error(
-          "Failed to read cached enquiries:",
-          cacheError
+      if (isNetworkFailure) {
+        await loadLocalEnquiries(params);
+      } else {
+        toast.error(
+          err?.response?.data?.message || "Unable to load enquiries."
         );
       }
+
+      toast.error(
+        isNetworkFailure
+          ? "No saved enquiries are available for these filters."
+          : err?.response?.data?.message || "Failed to load enquiries."
+      );
+    } finally {
+      setLoading(false);
     }
-
-    toast.error(
-      isNetworkFailure
-        ? "No saved enquiries are available offline. Connect to the internet and open Enquiries to cache them."
-        : err?.response?.data?.message ||
-            "Failed to load enquiries."
-    );
-  } finally {
-    setLoading(false);
-  }
-};
-
+  };
 
   useEffect(() => {
     loadEnquiries();
@@ -625,40 +661,52 @@ const loadEnquiries = async () => {
       const payload = {
         ...newEnquiry,
         estimatedValue:
-          newEnquiry.estimatedValue === "" ? 0 : Number(newEnquiry.estimatedValue),
+          newEnquiry.estimatedValue === ""
+            ? 0
+            : Number(newEnquiry.estimatedValue),
       };
 
       if (editingEnquiryId) {
         await updateEnquiry(editingEnquiryId, payload);
+
         toast.success("Enquiry updated successfully.");
+
         setShowNewModal(false);
         setEditingEnquiryId(null);
         setNewEnquiry(EMPTY_ENQUIRY);
+
         await loadEnquiries();
       } else {
         const response = await createEnquiry(payload);
-        toast.success("Enquiry created successfully.");
         const created = response?.data?.data;
+
+        toast.success("Enquiry created successfully.");
+
         setShowNewModal(false);
         setNewEnquiry(EMPTY_ENQUIRY);
-        await loadEnquiries();
-        if (created?.enquiryNumber) setSelectedId(created.enquiryNumber);
-      }
-    } catch (err) {
-      toast.error(err?.response?.data?.message || "Failed to save enquiry.");
-    } finally {
-      setSaving(false);
-    }
-  };
 
-  const handleStatusChange = async (newStatus) => {
-    if (!selectedEnquiry?.mongoId) return;
-    try {
-      setSaving(true);
-      await updateEnquiry(selectedEnquiry.mongoId, { status: newStatus });
-      await loadEnquiries();
-    } catch (err) {
-      toast.error(err?.response?.data?.message || "Failed to update enquiry.");
+        if (
+          created?.enquiryNumber &&
+          !response?.data?.offline
+        ) {
+          setSelectedId(created.enquiryNumber);
+        }
+
+        await loadEnquiries();
+      }
+     } catch (err) {
+      console.error("CREATE / UPDATE ENQUIRY ERROR:", err);
+      console.error("Error message:", err?.message);
+      console.error("Response data:", err?.response?.data);
+      console.error("Status:", err?.response?.status);
+      console.error("Request URL:", err?.config?.url);
+      console.error("Request method:", err?.config?.method);
+
+      toast.error(
+        err?.response?.data?.message ||
+        err?.message ||
+        "Unable to save enquiry."
+      );
     } finally {
       setSaving(false);
     }
@@ -666,22 +714,33 @@ const loadEnquiries = async () => {
 
   const handleDeleteEnquiry = async (enquiry = null) => {
     const target = enquiry || selectedEnquiry;
+
     if (!target?.mongoId) return;
 
     const confirmed = await confirmToast(
       `Are you sure you want to delete ${target.id}?`
     );
+
     if (!confirmed) return;
 
     try {
       setSaving(true);
+
       await deleteEnquiry(target.mongoId);
+
       toast.success("Enquiry deleted.");
+
       setOpenRowMenu(null);
-      if (selectedEnquiry?.mongoId === target.mongoId) setSelectedId(null);
+
+      if (selectedEnquiry?.mongoId === target.mongoId) {
+        setSelectedId(null);
+      }
+
       await loadEnquiries();
     } catch (err) {
-      toast.error(err?.response?.data?.message || "Failed to delete enquiry.");
+      toast.error(
+        err?.response?.data?.message || "Unable to delete enquiry."
+      );
     } finally {
       setSaving(false);
     }
@@ -689,31 +748,47 @@ const loadEnquiries = async () => {
 
   const handleAddNote = async () => {
     if (!selectedEnquiry?.mongoId) return;
-    if (!noteText.trim()) {
+
+    const cleanNote = noteText.trim();
+
+    if (!cleanNote) {
       toast.error("Please enter a note.");
       return;
     }
+
     try {
       setSaving(true);
 
-      const res = await fetch(`/api/enquiries/${selectedEnquiry.mongoId}/notes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: noteText.trim(), createdBy: "System" }),
-      });
+      const response = await addEnquiryNote(
+        selectedEnquiry.mongoId,
+        {
+          text: cleanNote,
+          createdBy: "System",
+        }
+      );
 
-      if (!res.ok) throw new Error("Failed to add note");
+      const updatedRecord = response?.data?.data;
+
+      if (updatedRecord) {
+        const updated = mapEnquiry(updatedRecord);
+
+        setEnquiries((current) =>
+          current.map((item) =>
+            item.mongoId === updated.mongoId
+              ? updated
+              : item
+          )
+        );
+      }
+
       toast.success("Note added.");
+
       setNoteText("");
       setShowNoteModal(false);
-
-      const enquiryResponse = await getEnquiryById(selectedEnquiry.mongoId);
-      const updated = mapEnquiry(enquiryResponse.data.data);
-      setEnquiries((cur) =>
-        cur.map((it) => (it.mongoId === updated.mongoId ? updated : it))
-      );
     } catch (err) {
-      toast.error("Failed to add note.");
+      toast.error(
+        err?.response?.data?.message || "Unable to add note."
+      );
     } finally {
       setSaving(false);
     }
@@ -834,9 +909,9 @@ const loadEnquiries = async () => {
     toast.success("Quotation marked as sent.");
   };
 
-  /* ------------------------------------------------------------------ */
-  /*  Render                                                             */
-  /* ------------------------------------------------------------------ */
+  const quoteInputClass =
+  "h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition-colors placeholder:text-slate-400 hover:border-slate-300 focus:border-[#315b89] focus:ring-2 focus:ring-[#002244]/10";
+
   const isCompact = density === "compact";
 
   return (
@@ -1119,6 +1194,15 @@ const loadEnquiries = async () => {
                           </div>
                         </td>
                       )}
+
+                      {/* Project */}
+                        {!isCompact && (
+                          <td className={`px-4 ${rowPad}`}>
+                            <div className="max-w-[160px] truncate text-sm text-slate-600">
+                              {item.project}
+                            </div>
+                          </td>
+                        )}
 
                       <td className={`px-4 ${rowPad}`}>
                         <div className="max-w-[140px] truncate text-sm text-slate-600">
@@ -1875,101 +1959,135 @@ const loadEnquiries = async () => {
         </div>
       )}
 
-      {/* QUOTATION MODAL */}
+      {/* QUOTATION MODAL */}   
       {showQuoteModal && selectedEnquiry && (
         <div
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4"
+          className="quote-modal fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/60 p-3 backdrop-blur-sm sm:p-5"
           onClick={closeQuoteModal}
         >
           <div
-            className="flex max-h-[95vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+            className="flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-6 py-4">
+            {/* Header */}
+            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 bg-white px-5 py-4 sm:px-7">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-base font-bold text-slate-900">New Quotation</h2>
+                  <h2 className="text-lg font-bold tracking-tight text-[#002244]">
+                    New Quotation
+                  </h2>
                   <span
-                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                    className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${
                       quoteStatus === "Sent"
                         ? "bg-emerald-50 text-emerald-700"
-                        : "bg-slate-100 text-slate-500"
+                        : "bg-amber-50 text-amber-700"
                     }`}
                   >
                     {quoteStatus}
                   </span>
                 </div>
-                <p className="mt-1 truncate font-mono text-xs text-slate-400">
-                  {quoteNumber} · Linked to {selectedEnquiry.id} · {selectedEnquiry.customer}
+
+                <p className="mt-1 truncate text-xs text-slate-500">
+                  <span className="font-mono font-semibold text-slate-700">
+                    {quoteNumber}
+                  </span>
+                  <span className="mx-2 text-slate-300">/</span>
+                  {selectedEnquiry.id} · {selectedEnquiry.customer}
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setQuoteMode((m) => (m === "edit" ? "preview" : "edit"))}
-                  className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-600 transition hover:border-slate-400 hover:text-slate-900"
+                  onClick={() =>
+                    setQuoteMode((m) => (m === "edit" ? "preview" : "edit"))
+                  }
+                  className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition hover:border-[#002244]/30 hover:bg-slate-50 hover:text-[#002244]"
                 >
-                  <Eye size={14} />
+                  <Eye size={15} />
                   {quoteMode === "edit" ? "Preview" : "Edit"}
                 </button>
+
                 <button
                   type="button"
                   onClick={handleSaveQuoteDraft}
-                  className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-600 transition hover:border-slate-400 hover:text-slate-900"
+                  className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 hover:text-[#002244]"
                 >
-                  <Save size={14} />
+                  <Save size={15} />
                   Save draft
                 </button>
+
                 <button
                   type="button"
                   onClick={handleSendQuote}
-                  className="inline-flex h-9 items-center gap-1.5 rounded-md bg-[#002244] px-3.5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#00345f]"
+                  className="inline-flex h-9 items-center gap-2 rounded-lg bg-[#002244] px-4 text-xs font-semibold text-white shadow-sm transition hover:bg-[#00345f] active:scale-[0.98]"
                 >
                   <Send size={14} />
-                  Send
+                  Send quotation
                 </button>
+
                 <button
                   type="button"
                   onClick={closeQuoteModal}
-                  className="flex h-9 w-9 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                  className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600"
                   aria-label="Close quotation"
                 >
-                  <X size={16} />
+                  <X size={17} />
                 </button>
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+            {/* Content */}
+            <div className="min-h-0 flex-1 overflow-y-auto bg-slate-50/70 px-4 py-5 sm:px-7 sm:py-6">
               {quoteMode === "edit" ? (
                 <div className="space-y-6">
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                    <div className="rounded-lg border border-slate-200 p-4">
-                      <h3 className="text-xs font-semibold text-slate-500">Bill to</h3>
-                      <div className="mt-2.5 flex items-center gap-3">
-                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#002244] text-xs font-bold text-white">
+
+                  {/* Customer and quotation details */}
+                  <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+
+                    {/* Bill to */}
+                    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                      <div className="mb-4 flex items-center gap-2">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-[#002244]">
+                          <UserRound size={16} />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-bold text-slate-800">
+                            Bill to
+                          </h3>
+                          <p className="text-[11px] text-slate-400">
+                            Customer information
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3 rounded-lg bg-slate-50 p-3">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#002244] text-xs font-bold text-white">
                           {getInitials(selectedEnquiry.customer)}
                         </div>
                         <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold text-slate-800">
+                          <p className="truncate text-sm font-bold text-slate-800">
                             {selectedEnquiry.customer}
-                          </div>
-                          <div className="truncate text-xs text-slate-400">
+                          </p>
+                          <p className="truncate text-xs text-slate-500">
                             {selectedEnquiry.company}
-                          </div>
+                          </p>
                         </div>
                       </div>
+
                       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <FormField label="GSTIN">
                           <input
-                            className="form-input"
+                            className={quoteInputClass}
                             value={quoteGstin}
                             onChange={(e) => setQuoteGstin(e.target.value)}
                             placeholder="22AAAAA0000A1Z5"
                           />
                         </FormField>
+
                         <FormField label="Address">
                           <input
-                            className="form-input"
+                            className={quoteInputClass}
                             value={quoteAddress}
                             onChange={(e) => setQuoteAddress(e.target.value)}
                             placeholder="City, State"
@@ -1977,25 +2095,46 @@ const loadEnquiries = async () => {
                         </FormField>
                       </div>
                     </div>
-                    <div className="rounded-lg border border-slate-200 p-4">
-                      <h3 className="text-xs font-semibold text-slate-500">Quote details</h3>
-                      <div className="mt-2.5 flex items-center justify-between text-xs text-slate-500">
-                        <span>Quote number</span>
-                        <span className="font-mono font-semibold text-slate-700">{quoteNumber}</span>
+
+                    {/* Quote details */}
+                    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                      <div className="mb-4 flex items-center gap-2">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-[#002244]">
+                          <FileText size={16} />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-bold text-slate-800">
+                            Quote details
+                          </h3>
+                          <p className="text-[11px] text-slate-400">
+                            Quotation reference and dates
+                          </p>
+                        </div>
                       </div>
+
+                      <div className="rounded-lg bg-slate-50 px-3 py-2.5">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                          Quote number
+                        </p>
+                        <p className="mt-1 font-mono text-sm font-bold text-[#002244]">
+                          {quoteNumber}
+                        </p>
+                      </div>
+
                       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <FormField label="Quote date" required>
                           <input
                             type="date"
-                            className="form-input"
+                            className={`${quoteInputClass} cursor-pointer`}
                             value={quoteDate}
                             onChange={(e) => setQuoteDate(e.target.value)}
                           />
                         </FormField>
+
                         <FormField label="Valid till" required>
                           <input
                             type="date"
-                            className="form-input"
+                            className={`${quoteInputClass} cursor-pointer`}
                             value={quoteValidTill}
                             onChange={(e) => setQuoteValidTill(e.target.value)}
                           />
@@ -2004,104 +2143,143 @@ const loadEnquiries = async () => {
                     </div>
                   </div>
 
-                  <div>
-                    <div className="mb-2 flex items-center justify-between">
-                      <h3 className="text-xs font-semibold text-slate-500">Items</h3>
+                  {/* Quotation items */}
+                  <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-800">
+                          Quotation items
+                        </h3>
+                        <p className="mt-0.5 text-[11px] text-slate-400">
+                          Add products and define pricing
+                        </p>
+                      </div>
+
+                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-600">
+                        {quoteComputed.rows.length} items
+                      </span>
                     </div>
-                    <div className="overflow-hidden overflow-x-auto rounded-lg border border-slate-200">
-                      <table className="w-full min-w-[760px] table-fixed border-collapse text-left">
-                        <colgroup>
-                          <col />
-                          <col className="w-20" />
-                          <col className="w-16" />
-                          <col className="w-24" />
-                          <col className="w-28" />
-                          <col className="w-20" />
-                          <col className="w-32" />
-                          <col className="w-10" />
-                        </colgroup>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[760px] border-collapse text-left">
                         <thead>
-                          <tr className="border-b border-slate-200 bg-slate-50/60">
-                            <th className="px-3 py-2.5 text-xs font-medium text-slate-500">Description</th>
-                            <th className="px-2 py-2.5 text-xs font-medium text-slate-500">Gauge</th>
-                            <th className="px-2 py-2.5 text-xs font-medium text-slate-500">Qty</th>
-                            <th className="px-2 py-2.5 text-xs font-medium text-slate-500">Unit</th>
-                            <th className="px-2 py-2.5 text-right text-xs font-medium text-slate-500">Rate</th>
-                            <th className="px-2 py-2.5 text-right text-xs font-medium text-slate-500">Disc %</th>
-                            <th className="px-3 py-2.5 text-right text-xs font-medium text-slate-500">Total</th>
-                            <th className="px-2 py-2.5"></th>
+                          <tr className="border-b border-slate-200 bg-slate-50">
+                            <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                              Description
+                            </th>
+                            <th className="w-24 px-3 py-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                              Qty
+                            </th>
+                            <th className="w-28 px-3 py-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                              Unit
+                            </th>
+                            <th className="w-32 px-3 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                              Rate
+                            </th>
+                            <th className="w-24 px-3 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                              Disc %
+                            </th>
+                            <th className="w-36 px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                              Total
+                            </th>
+                            <th className="w-12 px-2 py-3"></th>
                           </tr>
                         </thead>
+
                         <tbody className="divide-y divide-slate-100">
                           {quoteComputed.rows.map((row) => (
-                            <tr key={row.id}>
-                              <td className="px-3 py-2">
+                            <tr
+                              key={row.id}
+                              className="transition hover:bg-slate-50/70"
+                            >
+                              <td className="px-4 py-3">
                                 <input
-                                  className="form-input"
+                                  className={quoteInputClass}
                                   value={row.description}
-                                  onChange={(e) => updateQuoteItem(row.id, "description", e.target.value)}
+                                  onChange={(e) =>
+                                    updateQuoteItem(
+                                      row.id,
+                                      "description",
+                                      e.target.value
+                                    )
+                                  }
                                   placeholder="GI Wire, Barbed Wire..."
                                 />
                               </td>
-                              <td className="px-2 py-2">
-                                <input
-                                  className="form-input"
-                                  value={row.gauge}
-                                  onChange={(e) => updateQuoteItem(row.id, "gauge", e.target.value)}
-                                  placeholder="12"
-                                />
-                              </td>
-                              <td className="px-2 py-2">
+
+                              <td className="px-3 py-3">
                                 <input
                                   type="number"
                                   min="0"
-                                  className="form-input"
+                                  className={`${quoteInputClass} text-center tabular-nums`}
                                   value={row.qty}
-                                  onChange={(e) => updateQuoteItem(row.id, "qty", e.target.value)}
+                                  onChange={(e) =>
+                                    updateQuoteItem(row.id, "qty", e.target.value)
+                                  }
                                   placeholder="0"
                                 />
                               </td>
-                              <td className="px-2 py-2">
+
+                              <td className="px-3 py-3">
                                 <select
-                                  className="form-input"
+                                  className={`${quoteInputClass} cursor-pointer`}
                                   value={row.unit}
-                                  onChange={(e) => updateQuoteItem(row.id, "unit", e.target.value)}
+                                  onChange={(e) =>
+                                    updateQuoteItem(row.id, "unit", e.target.value)
+                                  }
                                 >
-                                  {UNIT_OPTIONS.map((u) => <option key={u} value={u}>{u}</option>)}
+                                  {UNIT_OPTIONS.map((u) => (
+                                    <option key={u} value={u}>
+                                      {u}
+                                    </option>
+                                  ))}
                                 </select>
                               </td>
-                              <td className="px-2 py-2">
+
+                              <td className="px-3 py-3">
                                 <input
                                   type="number"
                                   min="0"
-                                  className="form-input text-right"
+                                  className={`${quoteInputClass} appearance-none text-right tabular-nums`}
                                   value={row.rate}
-                                  onChange={(e) => updateQuoteItem(row.id, "rate", e.target.value)}
+                                  onChange={(e) =>
+                                    updateQuoteItem(row.id, "rate", e.target.value)
+                                  }
                                   placeholder="0"
                                 />
                               </td>
-                              <td className="px-2 py-2">
+
+                              <td className="px-3 py-3">
                                 <input
                                   type="number"
                                   min="0"
                                   max="100"
-                                  className="form-input text-right"
+                                  className={`${quoteInputClass} appearance-none text-right tabular-nums`}
                                   value={row.discountPct}
-                                  onChange={(e) => updateQuoteItem(row.id, "discountPct", e.target.value)}
+                                  onChange={(e) =>
+                                    updateQuoteItem(
+                                      row.id,
+                                      "discountPct",
+                                      e.target.value
+                                    )
+                                  }
                                   placeholder="0"
                                 />
                               </td>
-                              <td className="px-3 py-2 text-right text-sm font-semibold tabular-nums text-slate-800">
+
+                              <td className="px-4 py-3 text-right text-sm font-bold tabular-nums text-slate-800">
                                 {formatCurrency(row.lineTotal)}
                               </td>
-                              <td className="px-2 py-2 text-right">
+
+                              <td className="px-2 py-3 text-right">
                                 <button
                                   type="button"
                                   onClick={() => removeQuoteItem(row.id)}
                                   disabled={quoteItems.length === 1}
-                                  className="flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-30"
+                                  className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-30"
+                                  aria-label="Remove item"
                                 >
-                                  <Trash2 size={13} />
+                                  <Trash2 size={14} />
                                 </button>
                               </td>
                             </tr>
@@ -2109,79 +2287,153 @@ const loadEnquiries = async () => {
                         </tbody>
                       </table>
                     </div>
-                    <button
-                      type="button"
-                      onClick={addQuoteItem}
-                      className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-[#315b89] hover:underline"
-                    >
-                      <Plus size={13} />
-                      Add item
-                    </button>
-                  </div>
 
-                  <div className="flex justify-end">
-                    <div className="w-full max-w-sm space-y-1.5 rounded-lg border border-slate-200 p-4">
-                      <TotalRow label="Subtotal" value={formatCurrency(quoteComputed.subtotal)} />
-                      <TotalRow label="Discount" value={`- ${formatCurrency(quoteComputed.discountTotal)}`} />
-                      <TotalRow label="Taxable" value={formatCurrency(quoteComputed.taxable)} />
-                      <TotalRow label="CGST 9%" value={formatCurrency(quoteComputed.cgst)} />
-                      <TotalRow label="SGST 9%" value={formatCurrency(quoteComputed.sgst)} />
-                      <TotalRow label="Round off" value={formatCurrency(quoteComputed.roundOff)} />
-                      <div className="my-1.5 border-t border-slate-200" />
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-semibold text-slate-800">Grand total</span>
-                        <span className="text-base font-bold tabular-nums text-slate-900">
-                          {formatCurrency(quoteComputed.grandTotal)}
-                        </span>
-                      </div>
-                      <p className="pt-1 text-right text-[11px] italic text-slate-400">
-                        {amountInWords(quoteComputed.grandTotal)}
-                      </p>
+                    <div className="border-t border-slate-100 px-5 py-3">
+                      <button
+                        type="button"
+                        onClick={addQuoteItem}
+                        className="inline-flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-bold text-[#315b89] transition hover:bg-blue-50"
+                      >
+                        <Plus size={15} />
+                        Add another item
+                      </button>
                     </div>
                   </div>
 
-                  <DetailSection title="Terms & conditions">
+                  {/* Totals */}
+                  <div className="flex justify-end">
+                    <div className="w-full max-w-md overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                      <div className="border-b border-slate-100 px-5 py-3">
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                          Quotation summary
+                        </h3>
+                      </div>
+
+                      <div className="space-y-2 px-5 py-4">
+                        <TotalRow
+                          label="Subtotal"
+                          value={formatCurrency(quoteComputed.subtotal)}
+                        />
+                        <TotalRow
+                          label="Discount"
+                          value={`- ${formatCurrency(quoteComputed.discountTotal)}`}
+                        />
+                        <TotalRow
+                          label="Taxable"
+                          value={formatCurrency(quoteComputed.taxable)}
+                        />
+                        <TotalRow
+                          label="CGST 9%"
+                          value={formatCurrency(quoteComputed.cgst)}
+                        />
+                        <TotalRow
+                          label="SGST 9%"
+                          value={formatCurrency(quoteComputed.sgst)}
+                        />
+                        <TotalRow
+                          label="Round off"
+                          value={formatCurrency(quoteComputed.roundOff)}
+                        />
+
+                        <div className="my-2 border-t border-dashed border-slate-200" />
+
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-bold text-slate-800">
+                            Grand total
+                          </span>
+                          <span className="text-xl font-extrabold tabular-nums text-[#002244]">
+                            {formatCurrency(quoteComputed.grandTotal)}
+                          </span>
+                        </div>
+
+                        <p className="pt-1 text-right text-[11px] italic text-slate-400">
+                          {amountInWords(quoteComputed.grandTotal)}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Terms and conditions */}
+                  <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="mb-4">
+                      <h3 className="text-sm font-bold text-slate-800">
+                        Terms & conditions
+                      </h3>
+                      <p className="mt-0.5 text-[11px] text-slate-400">
+                        Define the commercial terms for this quotation
+                      </p>
+                    </div>
+
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <FormField label="Payment">
                         <input
-                          className="form-input"
+                          className={quoteInputClass}
                           value={quoteTerms.payment}
-                          onChange={(e) => setQuoteTerms({ ...quoteTerms, payment: e.target.value })}
+                          onChange={(e) =>
+                            setQuoteTerms({
+                              ...quoteTerms,
+                              payment: e.target.value,
+                            })
+                          }
                         />
                       </FormField>
+
                       <FormField label="Delivery">
                         <input
-                          className="form-input"
+                          className={quoteInputClass}
                           value={quoteTerms.delivery}
-                          onChange={(e) => setQuoteTerms({ ...quoteTerms, delivery: e.target.value })}
+                          onChange={(e) =>
+                            setQuoteTerms({
+                              ...quoteTerms,
+                              delivery: e.target.value,
+                            })
+                          }
                         />
                       </FormField>
+
                       <FormField label="Freight">
                         <input
-                          className="form-input"
+                          className={quoteInputClass}
                           value={quoteTerms.freight}
-                          onChange={(e) => setQuoteTerms({ ...quoteTerms, freight: e.target.value })}
+                          onChange={(e) =>
+                            setQuoteTerms({
+                              ...quoteTerms,
+                              freight: e.target.value,
+                            })
+                          }
                         />
                       </FormField>
+
                       <FormField label="Validity">
                         <input
-                          className="form-input"
+                          className={quoteInputClass}
                           value={quoteTerms.validity}
-                          onChange={(e) => setQuoteTerms({ ...quoteTerms, validity: e.target.value })}
+                          onChange={(e) =>
+                            setQuoteTerms({
+                              ...quoteTerms,
+                              validity: e.target.value,
+                            })
+                          }
                         />
                       </FormField>
                     </div>
+
                     <div className="mt-3">
                       <FormField label="Notes">
                         <textarea
-                          className="form-input min-h-[70px] resize-y py-2.5"
+                          className={`${quoteInputClass} !h-auto min-h-[90px] resize-y py-2.5`}
                           value={quoteTerms.notes}
-                          onChange={(e) => setQuoteTerms({ ...quoteTerms, notes: e.target.value })}
+                          onChange={(e) =>
+                            setQuoteTerms({
+                              ...quoteTerms,
+                              notes: e.target.value,
+                            })
+                          }
                           placeholder="Any additional notes for the customer..."
                         />
                       </FormField>
                     </div>
-                  </DetailSection>
+                  </div>
                 </div>
               ) : (
                 <QuotePreview
@@ -2199,13 +2451,10 @@ const loadEnquiries = async () => {
           </div>
         </div>
       )}
+
     </div>
   );
 }
-
-/* ------------------------------------------------------------------ */
-/*  Small presentational components                                    */
-/* ------------------------------------------------------------------ */
 
 function TotalRow({ label, value }) {
   return (

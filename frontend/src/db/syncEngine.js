@@ -1,6 +1,7 @@
 import api from "../api/axios";
 import { db, openDb } from "./database";
 import { flush } from "../offline/index.js";
+import { readCachedResponse } from "./httpCache.js";
 
 const MODULES = {
   contacts:  "/sync/contacts",
@@ -15,6 +16,114 @@ const MODULES = {
 };
 
 const PAGE_SIZE = 200;
+
+
+const DASHBOARD_DATASETS = [
+  {
+    key: "accounting",
+    url: "/accounting/dashboard",
+    params: {},
+  },
+  {
+    key: "rawStock",
+    url: "/raw-material/stock",
+  },
+  {
+    key: "productStock",
+    url: "/products/stock",
+  },
+  {
+    key: "orders",
+    url: "/order",
+    params: { limit: 500, sort: "-createdAt" },
+  },
+  {
+    key: "enquiries",
+    url: "/enquiries",
+    params: { limit: 200, sort: "-createdAt" },
+  },
+  {
+    key: "payments",
+    url: "/payment",
+    params: { limit: 100, sort: "-createdAt" },
+  },
+  {
+    key: "followups",
+    url: "/follow-ups",
+    params: { limit: 100 },
+  },
+];
+
+async function refreshDashboardCache({ refreshAll = false } = {}) {
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
+    return { skipped: true, reason: "offline" };
+  }
+
+  let token = null;
+
+  try {
+    token = localStorage.getItem("token");
+  } catch {
+    return { skipped: true, reason: "storage-unavailable" };
+  }
+
+  if (!token) {
+    return { skipped: true, reason: "no-session" };
+  }
+
+  const results = await Promise.all(
+    DASHBOARD_DATASETS.map(async (item) => {
+      const cached = await readCachedResponse(
+        item.url,
+        item.params
+      ).catch(() => null);
+
+      const mustRefresh =
+        refreshAll ||
+        item.key === "accounting" ||
+        item.key === "followups" ||
+        cached === null;
+
+      if (!mustRefresh) {
+        return {
+          key: item.key,
+          status: "cached",
+        };
+      }
+
+      try {
+        const config =
+          item.params === undefined
+            ? undefined
+            : { params: item.params };
+
+        await api.get(item.url, config);
+
+        return {
+          key: item.key,
+          status: "refreshed",
+        };
+      } catch (error) {
+        return {
+          key: item.key,
+          status: "error",
+          error:
+            error?.response?.data?.message ||
+            error?.message ||
+            "Request failed",
+        };
+      }
+    })
+  );
+
+  return {
+    complete: results.every(
+      (item) => item.status !== "error"
+    ),
+    datasets: results,
+  };
+}
+
 
 let activeSync = null;
 
@@ -164,7 +273,6 @@ export function syncAll() {
       return { skipped: true, reason: "offline" };
     }
 
-    // 1. Push local outbox first
     const push = await flush({
       send: async (op) =>
         api.request({
@@ -176,13 +284,11 @@ export function syncAll() {
         }),
     });
 
-    // 🚨 THE FIX: If we got a 401, stop syncing but DO NOT redirect
     if (push.authError) {
       console.warn("Sync paused: Auth expired. Waiting for manual login.");
       return { push, pull: [], error: "AUTH_EXPIRED" };
     }
 
-    // 2. Pull server deltas for every registered module
     const pull = [];
     for (const [module, endpoint] of Object.entries(MODULES)) {
       try {
@@ -192,7 +298,26 @@ export function syncAll() {
       }
     }
 
-    return { push, pull };
+    const dataChanged =
+      push.succeeded > 0 ||
+      pull.some(
+        (item) =>
+          !item.error &&
+          (
+            item.recordsSynced > 0 ||
+            item.tombstonesApplied > 0
+          )
+      );
+
+    const dashboardCache = await refreshDashboardCache({
+      refreshAll: dataChanged,
+    });
+
+    return {
+      push,
+      pull,
+      dashboardCache,
+    };
   })().finally(() => {
     activeSync = null;
   });

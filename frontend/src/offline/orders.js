@@ -391,7 +391,7 @@ export async function reconcileCreate({ url, operationId, response }) {
   });
 }
 
-export async function reconcileUpdate({ url, method, response }) {
+export async function reconcileUpdate({ url, method, operationId, response }) {
   const path = String(url || "").split("?")[0];
   const m = path.match(/^\/orders?\/([^/]+)\/?$/);
   if (!m || !["PUT", "PATCH"].includes(String(method || "").toUpperCase()))
@@ -451,6 +451,7 @@ export async function reconcileDelete({ url }) {
   await patchCachedCollections("/orders", (list) =>
     list.filter((o) => String(o._id) !== id)
   );
+  
   await removeDedicatedRecord("orders", id);
 }
 
