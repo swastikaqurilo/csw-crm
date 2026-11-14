@@ -339,9 +339,13 @@ export function getEnquiryByIdFromCache(id) {
 
 export async function getFollowUpsFromCache() {
   const list = await collectModule("follow-ups", "/follow-ups");
-  return list.sort(byDateDesc("dueDate"));
-}
 
+  return list.sort(
+    (a, b) =>
+      new Date(a.scheduledAt || 0) -
+      new Date(b.scheduledAt || 0)
+  );
+}
 
 /* ─────────────── expenses ─────────────── */
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "react-toastify";
-import { loadWithOfflineFallback } from "../db/offlineData";
+import { getContactsFromCache } from "../offline";
 import {
   Search,
   Plus,
@@ -31,10 +31,6 @@ import {
   updateContact,
   deleteContact,
 } from "../api/api";
-
-/* ------------------------------------------------------------------ */
-/*  Constants                                                          */
-/* ------------------------------------------------------------------ */
 
 const ALLOWED_ROLES = ["customer", "supplier", "partner", "other", ""];
 const CONTACTS_PER_PAGE = 10;
@@ -313,33 +309,50 @@ function Contacts() {
   /* ---- guard against stale loadContacts results ---- */
   const loadTokenRef = useRef(0);
 
- const loadContacts = useCallback(async () => {
+const loadContacts = useCallback(async () => {
   const token = ++loadTokenRef.current;
+
   try {
     setLoading(true);
 
-    const { data, fromCache } = await loadWithOfflineFallback(
-      () => getContacts({ page: 1, limit: 1000 }),
-      "contacts",
-      (res) => res?.data?.data ?? []
-    );
+    let data = [];
+
+    if (!navigator.onLine) {
+      data = await getContactsFromCache();
+    } else {
+      try {
+        const response = await getContacts({
+          page: 1,
+          limit: 1000,
+        });
+
+        data = response?.data?.data ?? [];
+      } catch (error) {
+        const cached = await getContactsFromCache();
+
+        if (cached.length > 0) {
+          data = cached;
+        } else {
+          throw error;
+        }
+      }
+    }
 
     if (token !== loadTokenRef.current) return;
 
     setContacts(data);
-
-    if (fromCache) {
-      toast.info("Showing offline data", { autoClose: 2000 });
-    }
   } catch (err) {
     if (token !== loadTokenRef.current) return;
+
     toast.error(
       err?.response?.data?.message ||
         err?.message ||
         "Unable to load contacts."
     );
   } finally {
-    if (token === loadTokenRef.current) setLoading(false);
+    if (token === loadTokenRef.current) {
+      setLoading(false);
+    }
   }
 }, []);
 
@@ -605,7 +618,9 @@ function Contacts() {
       toast.success("Contact created successfully.");
     }
 
-    closeModal();
+    setShowModal(false);
+    setEditingContact(null);
+    setFormData(emptyForm());
     await loadContacts();
   } catch (err) {
     toast.error(

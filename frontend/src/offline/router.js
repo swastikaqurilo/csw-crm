@@ -7,12 +7,32 @@ import * as workers from "./workers.js";
 import * as salary from "./salary.js";
 import * as attendance from "./attendance.js";
 import * as enquiries from "./enquiries.js";
+import * as contacts from "./contacts.js";
 
 const NOOP = () => null;
 
 console.log("CSW OFFLINE ROUTER UPDATED - TEST 123");
 
 const APPLY = [
+
+    /* Contacts */
+  {
+    v: ["POST"],
+    p: /^\/(?:api\/)?contacts\/?$/,
+    h: contacts.applyCreate,
+  },
+  {
+    v: ["PUT", "PATCH"],
+    p: /^\/(?:api\/)?contacts\/([^/]+)\/?$/,
+    h: contacts.applyUpdate,
+    k: ["id"],
+  },
+  {
+    v: ["DELETE"],
+    p: /^\/(?:api\/)?contacts\/([^/]+)\/?$/,
+    h: contacts.applyDelete,
+    k: ["id"],
+  },
 
     /* Enquiries */
   {
@@ -221,6 +241,24 @@ const APPLY = [
 ];
 
 const RECONCILE = [
+    /* Contacts */
+  {
+    v: ["POST"],
+    p: /^\/(?:api\/)?contacts\/?$/,
+    h: contacts.reconcileCreate,
+  },
+  {
+    v: ["PUT", "PATCH"],
+    p: /^\/(?:api\/)?contacts\/([^/]+)\/?$/,
+    h: contacts.reconcileUpdate,
+    k: ["id"],
+  },
+  {
+    v: ["DELETE"],
+    p: /^\/(?:api\/)?contacts\/([^/]+)\/?$/,
+    h: contacts.reconcileDelete,
+    k: ["id"],
+  },
 
     /* Enquiries */
   {

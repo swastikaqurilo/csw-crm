@@ -26,6 +26,12 @@ import {
   getEnquiries,
 } from "../api/api";
 
+import {
+  getFollowUpsFromCache,
+  getContactsFromCache,
+  getEnquiriesFromCache,
+} from "../offline";
+
 const tabs = ["Today", "Upcoming", "Overdue", "Completed"];
 
 const typeOptions = [
@@ -88,15 +94,26 @@ function FollowUps() {
       setLoading(true);
       setError("");
 
-      const response = await getFollowups();
+      let data = [];
 
-      setFollowUps(response.data?.data || []);
+      if (!navigator.onLine) {
+        data = await getFollowUpsFromCache();
+      } else {
+        try {
+          const response = await getFollowups();
+          data = response.data?.data || [];
+        } catch (error) {
+          data = await getFollowUpsFromCache();
+        }
+      }
+
+      setFollowUps(data);
     } catch (err) {
       console.error(err);
-
       setError(
         err.response?.data?.message ||
-          "Failed to load follow-ups."
+        err.message ||
+        "Failed to load follow-ups."
       );
     } finally {
       setLoading(false);
@@ -105,12 +122,24 @@ function FollowUps() {
 
   const fetchContacts = async () => {
     try {
-      const response = await getContacts({
-        page: 1,
-        limit: 1000,
-      });
+      let data = [];
 
-      setContacts(response.data?.data || []);
+      if (!navigator.onLine) {
+        data = await getContactsFromCache();
+      } else {
+        try {
+          const response = await getContacts({
+            page: 1,
+            limit: 1000,
+          });
+
+          data = response.data?.data || [];
+        } catch (error) {
+          data = await getContactsFromCache();
+        }
+      }
+
+      setContacts(data);
     } catch (err) {
       console.error("Failed to load contacts:", err);
     }
@@ -118,12 +147,24 @@ function FollowUps() {
 
   const fetchEnquiries = async () => {
     try {
-      const response = await getEnquiries({
-        page: 1,
-        limit: 1000,
-      });
+      let data = [];
 
-      setEnquiries(response.data?.data || []);
+      if (!navigator.onLine) {
+        data = await getEnquiriesFromCache();
+      } else {
+        try {
+          const response = await getEnquiries({
+            page: 1,
+            limit: 1000,
+          });
+
+          data = response.data?.data || [];
+        } catch (error) {
+          data = await getEnquiriesFromCache();
+        }
+      }
+
+      setEnquiries(data);
     } catch (err) {
       console.error("Failed to load enquiries:", err);
     }
