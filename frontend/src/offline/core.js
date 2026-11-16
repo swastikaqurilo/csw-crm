@@ -128,6 +128,7 @@ async function defaultSender(operation) {
 
 /* ─────────────── flush ─────────────── */
 
+
 export async function flush({ send } = {}) {
   if (flushing) return flushing;
 
@@ -144,14 +145,26 @@ export async function flush({ send } = {}) {
 
     for (const originalRow of rows) {
       const row = await db.syncQueue.get(originalRow.id);
+
       if (!row || row.status !== "pending") continue;
+      const earlierFailed = await db.syncQueue
+        .where("status")
+        .equals("failed")
+        .filter((item) => item.id < row.id)
+        .first();
+
+      if (earlierFailed) {
+        deferred += 1;
+        break;
+      }
 
       if (row.nextAttemptAt && row.nextAttemptAt > Date.now()) {
         deferred += 1;
-        continue;
+        break;
       }
 
       const parentTempId = findParentTempId(row);
+
       if (parentTempId) {
         const parent = await db.syncQueue
           .where("operationId")
@@ -160,16 +173,19 @@ export async function flush({ send } = {}) {
 
         if (parent?.status === "failed") {
           await onFailure(row);
+
           await db.syncQueue.update(row.id, {
             status: "failed",
             lastError: "The record this action belongs to failed to sync.",
             nextAttemptAt: 0,
           });
+
           failed += 1;
-        } else {
-          deferred += 1;
+          continue;
         }
-        continue;
+
+        deferred += 1;
+        break;
       }
 
       try {
@@ -190,7 +206,6 @@ export async function flush({ send } = {}) {
         const attempts = (row.attempts || 0) + 1;
         const message = messageOf(error);
 
-        // Honor explicit retryable flag from idempotency middleware
         const explicitlyRetryable = body?.retryable === true;
 
         if (status === 401) {
@@ -200,6 +215,7 @@ export async function flush({ send } = {}) {
             lastError: message,
             nextAttemptAt: Date.now() + BASE_DELAY_MS,
           });
+
           deferred += 1;
           authError = true;
           break;
@@ -222,11 +238,18 @@ export async function flush({ send } = {}) {
           attempts,
           lastError: message,
           nextAttemptAt:
-            permanent || exhausted ? 0 : Date.now() + backoffMs(attempts),
+            permanent || exhausted
+              ? 0
+              : Date.now() + backoffMs(attempts),
         });
 
-        if (permanent || exhausted) failed += 1;
-        else deferred += 1;
+        if (permanent || exhausted) {
+          failed += 1;
+          break;
+        }
+
+        deferred += 1;
+        break;
       }
     }
 

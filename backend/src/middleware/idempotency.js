@@ -84,7 +84,7 @@ module.exports = function idempotency({ required = false } = {}) {
       body: req.body,
     });
 
-    const claimToken = crypto.randomUUID();
+    let claimToken = crypto.randomUUID();
 
     let operation;
 
@@ -127,8 +127,10 @@ module.exports = function idempotency({ required = false } = {}) {
         if (operation.status === "completed") {
           return sendStoredResponse(res, operation);
         }
-
         const STALE_MS = 5 * 60 * 1000;
+
+        const canRetryFailed = operation.status === "failed";
+
         const startedAtMs = new Date(
           operation.startedAt ||
           operation.createdAt ||
@@ -136,7 +138,8 @@ module.exports = function idempotency({ required = false } = {}) {
           0
         ).getTime();
 
-        const isStale = Date.now() - startedAtMs > STALE_MS;
+        const isStale =
+          canRetryFailed || Date.now() - startedAtMs > STALE_MS;
 
         if (!isStale) {
           return res.status(409).json({
@@ -149,19 +152,23 @@ module.exports = function idempotency({ required = false } = {}) {
           });
         }
 
+        const newClaimToken = crypto.randomUUID();
+
         let takenOver;
+
         try {
           takenOver = await SyncOperation.findOneAndUpdate(
             {
               _id: operation._id,
-              status: "in_progress",
-              claimToken: operation.claimToken,  
+              status: operation.status,
+              claimToken: operation.claimToken,
             },
             {
               $set: {
-                claimToken: crypto.randomUUID(),
+                status: "in_progress",
+                claimToken: newClaimToken,
                 startedAt: new Date(),
-                requestHash,                       
+                requestHash,
               },
             },
             { new: true }
@@ -201,61 +208,71 @@ module.exports = function idempotency({ required = false } = {}) {
       // Persist the outcome before sending the response. Express does
       // not await this function, so handle persistence errors here.
       void (async () => {
-        try {
-          const isServerError = res.statusCode >= 500;
+      try {
+        const isSuccessfulResponse =
+          res.statusCode >= 200 && res.statusCode < 300;
 
-          const update = isServerError
-            ? {
-                $set: {
-                  status: "failed",
-                  statusCode: res.statusCode,
-                  failureReason:
-                    "Server error; business outcome requires reconciliation.",
-                },
-              }
-            : {
-                $set: {
-                  status: "completed",
-                  statusCode: res.statusCode,
-                  result: body,
-                  completedAt: new Date(),
-                },
-              };
+        const update = isSuccessfulResponse
+          ? {
+              $set: {
+                status: "completed",
+                statusCode: res.statusCode,
+                result: body,
+                completedAt: new Date(),
+              },
+              $unset: {
+                failureReason: 1,
+              },
+            }
+          : {
+              $set: {
+                status: "failed",
+                statusCode: res.statusCode,
+                failureReason:
+                  body?.message ||
+                  body?.error ||
+                  `Request returned HTTP ${res.statusCode}`,
+              },
+              $unset: {
+                result: 1,
+                completedAt: 1,
+              },
+            };
 
-          const saved = await SyncOperation.updateOne(
-            {
-              _id: operation._id,
-              claimToken,
-              status: "in_progress",
-            },
-            update
+        const saved = await SyncOperation.updateOne(
+          {
+            _id: operation._id,
+            claimToken,
+            status: "in_progress",
+          },
+          update
+        );
+
+        if (saved.matchedCount !== 1) {
+          throw new Error(
+            "Idempotency claim was lost before the result was saved."
           );
-
-          if (saved.matchedCount !== 1) {
-            throw new Error(
-              "Idempotency claim was lost before the result was saved."
-            );
-          }
-
-          originalJson(body);
-        } catch (error) {
-          console.error(
-            "[idempotency] Could not persist operation outcome:",
-            error.message
-          );
-
-          // Do not report a successful response if we cannot safely
-          // record its replayable outcome.
-          if (!res.headersSent) {
-            res.status(503);
-            originalJson({
-              success: false,
-              error: "operation_result_persistence_failed",
-              operationId,
-              retryable: true,
-            });
-          }
         }
+
+        originalJson(body);
+      }catch (error) {
+                console.error(
+                  "[idempotency] Could not persist operation outcome:",
+                  error.message
+                );
+
+                // Do not report a successful response if we cannot safely
+                // record its replayable outcome.
+                if (!res.headersSent) {
+                  res.status(503);
+                  originalJson({
+                    success: false,
+                    error: "operation_result_persistence_failed",
+                    operationId,
+                    retryable: true,
+                  });
+                }
+      }
       })();
 
       return res;

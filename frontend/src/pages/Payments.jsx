@@ -552,7 +552,11 @@ function Payments() {
       setModal(null);
       window.alert("Payment recorded successfully.");
 
-      await Promise.all([fetchSummary(), fetchOrders()]);
+      await Promise.all([
+        fetchPayments(),
+        fetchSummary(),
+        fetchOrders(),
+      ]);
     } catch (err) {
       console.error("Payment save error:", err);
       window.alert(
