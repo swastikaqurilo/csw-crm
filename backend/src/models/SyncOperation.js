@@ -48,6 +48,11 @@ const syncOperationSchema = new mongoose.Schema(
       required: true,
     },
 
+    startedAt: {
+      type: Date,
+      default: Date.now,
+    },
+
     statusCode: {
       type: Number,
       default: null,
