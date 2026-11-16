@@ -91,6 +91,132 @@ function getOperationId(config) {
     null
   );
 }
+
+
+async function readOfflineGet(config) {
+  const url = String(config.url || "").split("?")[0];
+  const path = url.replace(/^\/api(?=\/)/, "");
+  const params = config.params || {};
+
+  const safeRead = async (reader, label) => {
+    try {
+      return await reader();
+    } catch (error) {
+      console.error(`[axios] Offline ${label} read failed:`, error);
+      return null;
+    }
+  };
+
+  if (path === "/expense" || path === "/expenses") {
+    const expenses = await safeRead(
+      () => getExpensesFromCache(),
+      "expenses"
+    );
+    if (expenses != null) {
+      return { success: true, data: expenses };
+    }
+  }
+
+  if (path === "/payment/summary" || path === "/payments/summary") {
+    const summary = await safeRead(
+      () => getPaymentSummaryFromCache(),
+      "payment summary"
+    );
+    if (summary != null) {
+      return { success: true, data: summary };
+    }
+  }
+
+  if (path === "/payment" || path === "/payments") {
+    const payments = await safeRead(
+      () =>
+        getPaymentsFromCache({
+          search: params.search,
+          paymentMode: params.paymentMode,
+          status: params.status,
+          from: params.from,
+          to: params.to,
+        }),
+      "payments"
+    );
+
+    if (payments != null) {
+      return {
+        success: true,
+        data: payments,
+        pagination: {
+          page: Number(params.page) || 1,
+          limit: Number(params.limit) || payments.length,
+          total: payments.length,
+          totalPages: 1,
+        },
+      };
+    }
+  }
+
+  const paymentByOrder = path.match(/^\/payments?\/order\/([^/]+)$/);
+
+  if (paymentByOrder) {
+    const result = await safeRead(
+      () => getPaymentsByOrderFromCache(
+        decodeURIComponent(paymentByOrder[1])
+      ),
+      "order payments"
+    );
+
+    if (result != null) {
+      return { success: true, ...result };
+    }
+  }
+
+  const paymentById = path.match(/^\/payments?\/([^/]+)$/);
+
+  if (paymentById && paymentById[1] !== "summary") {
+    const payment = await safeRead(
+      () => getPaymentByIdFromCache(
+        decodeURIComponent(paymentById[1])
+      ),
+      "payment lookup"
+    );
+
+    if (payment != null) {
+      return { success: true, data: payment };
+    }
+  }
+
+  if (path === "/workers/attendance" && params.date) {
+    const attendance = await safeRead(
+      () => getAttendanceFromCache(params.date),
+      "attendance"
+    );
+
+    if (attendance != null) {
+      return { success: true, data: attendance };
+    }
+  }
+
+  if (path === "/workers/attendance/history") {
+    const history = await safeRead(
+      () =>
+        getAttendanceHistoryPageFromCache({
+          page: Number(params.page) || 1,
+          limit: Number(params.limit) || 8,
+        }),
+      "attendance history"
+    );
+
+    if (history != null) {
+      return history;
+    }
+  }
+
+  return await safeRead(
+    () => readCachedResponse(config.url, config.params),
+    "cached response"
+  );
+}
+
+
 api.interceptors.request.use(async (config) => {
   if (config.__fromOutbox) {
     config.headers = config.headers || {};
@@ -108,10 +234,44 @@ api.interceptors.request.use(async (config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
-  const method = (config.method || "GET").toUpperCase();
-  if (!WRITES.has(method)) {
-    return config;
-  }
+
+const method = (config.method || "GET").toUpperCase();
+
+// Serve offline GET requests directly from IndexedDB.
+if (
+  method === "GET" &&
+  typeof navigator !== "undefined" &&
+  navigator.onLine === false
+) {
+  config.adapter = async (adapterConfig) => {
+    const data = await readOfflineGet(adapterConfig);
+
+    if (data == null) {
+      throw new axios.AxiosError(
+        "No cached response available for this request.",
+        "ERR_NETWORK",
+        adapterConfig
+      );
+    }
+
+    adapterConfig.__offlineLocalRead = true;
+
+    return {
+      data,
+      status: 200,
+      statusText: "OK (local cache)",
+      headers: {},
+      config: adapterConfig,
+    };
+  };
+
+  return config;
+}
+
+if (!WRITES.has(method)) {
+  return config;
+}
+
   if (isAuthRoute(config.url)) {
     return config;
   }
@@ -172,6 +332,7 @@ api.interceptors.response.use(
     if (
       method === "GET" &&
       !cfg.__fromOutbox &&
+      !cfg.__offlineLocalRead &&
       !cfg.url?.includes("/auth/me")
     ) {
       try {
