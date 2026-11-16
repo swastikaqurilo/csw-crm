@@ -8,6 +8,7 @@ import * as salary from "./salary.js";
 import * as attendance from "./attendance.js";
 import * as enquiries from "./enquiries.js";
 import * as contacts from "./contacts.js";
+import * as settings from "./settings.js";
 
 const NOOP = () => null;
 
@@ -238,6 +239,13 @@ const APPLY = [
     p: /^\/salaries\/generate\/?$/,
     h: salary.applyGenerate,
   },
+
+    /* Settings */
+  {
+    v: ["PUT"],
+    p: /^\/(?:api\/)?settings\/?$/,
+    h: settings.applyUpdate,
+  },
 ];
 
 const RECONCILE = [
@@ -420,6 +428,13 @@ const RECONCILE = [
     v: ["POST"],
     p: /^\/workers\/attendance\/?$/,
     h: attendance.reconcileSave,
+  },
+
+    /* Settings */
+  {
+    v: ["PUT"],
+    p: /^\/(?:api\/)?settings\/?$/,
+    h: settings.reconcileUpdate,
   },
 ];
 

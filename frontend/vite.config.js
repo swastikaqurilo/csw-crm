@@ -22,7 +22,7 @@ export default defineConfig({
         description: "Offline-capable CRM and ERP workspace",
         start_url: "/",
         display: "standalone",
-        theme_color: "#ffffff",
+        theme_color: "#0F172A",
         background_color: "#ffffff",
         icons: [
           {

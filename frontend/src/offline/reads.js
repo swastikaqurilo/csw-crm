@@ -11,6 +11,8 @@ import {
   getAttendanceHistoryFromCache as readAttendanceHistory,
 } from "./attendance.js";
 
+import { readCachedResponse } from "../db/httpCache.js";
+
 /* ─────────────── shared merge helper ─────────────── */
 
 const isHollowContact = (c) => !c || typeof c !== "object" || !(c.company || c.name || c.email);
@@ -420,8 +422,6 @@ export function getSalaryByIdFromCache(id) {
   return getCachedByModuleAndId("salaries", "/salaries", id);
 }
 
-
-
 export async function getAttendanceFromCache(date) {
   return getAttendanceByDate(date);
 }
@@ -486,4 +486,21 @@ export async function getAttendanceHistoryPageFromCache({
     },
   };
 }
+/* ─────────────── settings ─────────────── */
 
+export async function getSettingsFromCache() {
+  const records = await listDedicatedRecords("settings");
+
+  const local = records.find(
+    (row) => String(row.recordId) === "global"
+  );
+
+  if (local?.data) {
+    return {
+      success: true,
+      data: local.data,
+    };
+  }
+
+  return readCachedResponse("/settings");
+}

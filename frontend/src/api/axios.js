@@ -1,4 +1,4 @@
-import axios from "axios";  
+import axios from "axios";
 import {
   applyOptimistic,
   enqueue,
@@ -59,11 +59,19 @@ function isNetworkError(error) {
   if (error?.response) return false;
   if (axios.isCancel(error)) return false;
 
+  if (
+    typeof navigator !== "undefined" &&
+    navigator.onLine === false
+  ) {
+    return true;
+  }
+
   const code = error?.code;
 
   return (
     !code ||
     code === "ERR_NETWORK" ||
+    code === "ERR_INTERNET_DISCONNECTED" ||
     code === "ERR_CONNECTION_REFUSED" ||
     code === "ECONNABORTED" ||
     code === "ETIMEDOUT"
@@ -135,7 +143,7 @@ api.interceptors.request.use(async (config) => {
     data: body,
   });
 
-   if (mustQueue && typeof navigator !== "undefined" && navigator.onLine) {
+  if (mustQueue && typeof navigator !== "undefined" && navigator.onLine) {
     void flush().then(() => flush()).catch(() => {});
   }
 
@@ -181,7 +189,6 @@ api.interceptors.response.use(
       }
 
       return response;
-
     }
     if (
       WRITES.has(method) &&
@@ -212,6 +219,12 @@ api.interceptors.response.use(
 
   async (error) => {
     const cfg = error.config || {};
+    const method = (cfg.method || "GET").toUpperCase();
+
+    const offlineRead =
+      method === "GET" &&
+      typeof navigator !== "undefined" &&
+      navigator.onLine === false;
     const url = cfg.url || "";
     console.log("[ATTENDANCE DEBUG]", {
       url: cfg.url,
@@ -223,6 +236,7 @@ api.interceptors.response.use(
     });
     if (
       error.response?.status === 401 &&
+      !offlineRead &&
       !isNetworkError(error) &&
       !isAuthRoute(url) &&
       !cfg.__fromOutbox
@@ -248,224 +262,228 @@ api.interceptors.response.use(
     if (isAuthRoute(url)) {
       return Promise.reject(error);
     }
-    const method = (cfg.method || "GET").toUpperCase();
+
     if (method === "GET") {
-    if (!isNetworkError(error)) {
-      return Promise.reject(error);
-    }
-    // Expenses: read the latest locally cached records.
-    const expensePath = String(cfg.url || "")
-      .split("?")[0]
-      .replace(/^\/api(?=\/)/, "");
-
-    if (expensePath === "/expense" || expensePath === "/expenses") {
-      const expenses = await getExpensesFromCache().catch((err) => {
-        console.error("[axios] Local expenses read failed:", err);
-        return null;
-      });
-
-      if (expenses) {
-        return {
-          data: {
-            success: true,
-            data: expenses,
-          },
-          status: 200,
-          statusText: "OK (local expenses)",
-          headers: {},
-          config: cfg,
-        };
+      if (!isNetworkError(error) && !offlineRead) {
+        return Promise.reject(error);
       }
-    }
 
-    const paymentPath = String(cfg.url || "")
-      .split("?")[0]
-      .replace(/^\/api(?=\/)/, "");
+      // Expenses: read the latest locally cached records.
+      const expensePath = String(cfg.url || "")
+        .split("?")[0]
+        .replace(/^\/api(?=\/)/, "");
 
-    // Payment list with search, mode, status and date filters.
-    if (
-      paymentPath === "/payment" ||
-      paymentPath === "/payments"
-    ) {
-      const payments = await getPaymentsFromCache({
-        search: cfg.params?.search,
-        paymentMode: cfg.params?.paymentMode,
-        status: cfg.params?.status,
-        from: cfg.params?.from,
-        to: cfg.params?.to,
-      }).catch((err) => {
-        console.error(
-          "[axios] Local payments read failed:",
-          err
-        );
-        return null;
-      });
+      if (expensePath === "/expense" || expensePath === "/expenses") {
+        const expenses = await getExpensesFromCache().catch((err) => {
+          console.error("[axios] Local expenses read failed:", err);
+          return null;
+        });
 
-      if (payments) {
-        return {
-          data: {
-            success: true,
-            data: payments,
-            pagination: {
-              page: Number(cfg.params?.page) || 1,
-              limit: Number(cfg.params?.limit) || payments.length,
-              total: payments.length,
-              totalPages: 1,
+        if (expenses) {
+          return {
+            data: {
+              success: true,
+              data: expenses,
             },
-          },
-          status: 200,
-          statusText: "OK (local payments)",
-          headers: {},
-          config: cfg,
-        };
+            status: 200,
+            statusText: "OK (local expenses)",
+            headers: {},
+            config: cfg,
+          };
+        }
       }
-    }
 
-    // Payment summary cards.
-    if (
-      paymentPath === "/payment/summary" ||
-      paymentPath === "/payments/summary"
-    ) {
-      const summary = await getPaymentSummaryFromCache().catch(
-        (err) => {
+      const paymentPath = String(cfg.url || "")
+        .split("?")[0]
+        .replace(/^\/api(?=\/)/, "");
+
+      // Payment list with search, mode, status and date filters.
+      if (
+        paymentPath === "/payment" ||
+        paymentPath === "/payments"
+      ) {
+        const payments = await getPaymentsFromCache({
+          search: cfg.params?.search,
+          paymentMode: cfg.params?.paymentMode,
+          status: cfg.params?.status,
+          from: cfg.params?.from,
+          to: cfg.params?.to,
+        }).catch((err) => {
           console.error(
-            "[axios] Local payment summary read failed:",
+            "[axios] Local payments read failed:",
             err
           );
           return null;
+        });
+
+        if (payments) {
+          return {
+            data: {
+              success: true,
+              data: payments,
+              pagination: {
+                page: Number(cfg.params?.page) || 1,
+                limit: Number(cfg.params?.limit) || payments.length,
+                total: payments.length,
+                totalPages: 1,
+              },
+            },
+            status: 200,
+            statusText: "OK (local payments)",
+            headers: {},
+            config: cfg,
+          };
         }
+      }
+
+      // Payment summary cards.
+      if (
+        paymentPath === "/payment/summary" ||
+        paymentPath === "/payments/summary"
+      ) {
+        const summary = await getPaymentSummaryFromCache().catch(
+          (err) => {
+            console.error(
+              "[axios] Local payment summary read failed:",
+              err
+            );
+            return null;
+          }
+        );
+
+        if (summary) {
+          return {
+            data: {
+              success: true,
+              data: summary,
+            },
+            status: 200,
+            statusText: "OK (local payment summary)",
+            headers: {},
+            config: cfg,
+          };
+        }
+      }
+
+      const paymentByOrderMatch = paymentPath.match(
+        /^\/payments?\/order\/([^/]+)$/
       );
 
-      if (summary) {
-        return {
-          data: {
-            success: true,
-            data: summary,
-          },
-          status: 200,
-          statusText: "OK (local payment summary)",
-          headers: {},
-          config: cfg,
-        };
+      if (paymentByOrderMatch) {
+        const result = await getPaymentsByOrderFromCache(
+          decodeURIComponent(paymentByOrderMatch[1])
+        ).catch((err) => {
+          console.error(
+            "[axios] Local order payments read failed:",
+            err
+          );
+          return null;
+        });
+
+        if (result) {
+          return {
+            data: {
+              success: true,
+              ...result,
+            },
+            status: 200,
+            statusText: "OK (local order payments)",
+            headers: {},
+            config: cfg,
+          };
+        }
       }
-    }
 
-    const paymentByOrderMatch = paymentPath.match(
-      /^\/payments?\/order\/([^/]+)$/
-    );
+      const paymentByIdMatch = paymentPath.match(
+        /^\/payments?\/([^/]+)$/
+      );
 
-    if (paymentByOrderMatch) {
-      const result = await getPaymentsByOrderFromCache(
-        decodeURIComponent(paymentByOrderMatch[1])
-      ).catch((err) => {
-        console.error(
-          "[axios] Local order payments read failed:",
-          err
-        );
-        return null;
-      });
+      if (
+        paymentByIdMatch &&
+        paymentByIdMatch[1] !== "summary"
+      ) {
+        const payment = await getPaymentByIdFromCache(
+          decodeURIComponent(paymentByIdMatch[1])
+        ).catch((err) => {
+          console.error(
+            "[axios] Local payment lookup failed:",
+            err
+          );
+          return null;
+        });
 
-      if (result) {
-        return {
-          data: {
-            success: true,
-            ...result,
-          },
-          status: 200,
-          statusText: "OK (local order payments)",
-          headers: {},
-          config: cfg,
-        };
+        if (payment) {
+          return {
+            data: {
+              success: true,
+              data: payment,
+            },
+            status: 200,
+            statusText: "OK (local payment)",
+            headers: {},
+            config: cfg,
+          };
+        }
       }
-    }
 
-    const paymentByIdMatch = paymentPath.match(
-      /^\/payments?\/([^/]+)$/
-    );
+      // Attendance must read the latest dedicated local record first.
+      if (
+        String(cfg.url || "").split("?")[0] === "/workers/attendance" &&
+        cfg.params?.date
+      ) {
+        const attendance = await getAttendanceFromCache(
+          cfg.params.date
+        ).catch(() => null);
 
-    if (
-      paymentByIdMatch &&
-      paymentByIdMatch[1] !== "summary"
-    ) {
-      const payment = await getPaymentByIdFromCache(
-        decodeURIComponent(paymentByIdMatch[1])
-      ).catch((err) => {
-        console.error(
-          "[axios] Local payment lookup failed:",
-          err
-        );
-        return null;
-      });
-
-      if (payment) {
-        return {
-          data: {
-            success: true,
-            data: payment,
-          },
-          status: 200,
-          statusText: "OK (local payment)",
-          headers: {},
-          config: cfg,
-        };
+        if (attendance) {
+          return {
+            data: {
+              success: true,
+              data: attendance,
+            },
+            status: 200,
+            statusText: "OK (local attendance)",
+            headers: {},
+            config: cfg,
+          };
+        }
       }
-    }
 
-    // Attendance must read the latest dedicated local record first.
-    if (
-      String(cfg.url || "").split("?")[0] === "/workers/attendance" &&
-      cfg.params?.date
-    ) {
-      const attendance = await getAttendanceFromCache(
-        cfg.params.date
+      // Attendance history: read the latest locally saved records.
+      if (
+        String(cfg.url || "").split("?")[0] ===
+        "/workers/attendance/history"
+      ) {
+        const history = await getAttendanceHistoryPageFromCache({
+          page: Number(cfg.params?.page) || 1,
+          limit: Number(cfg.params?.limit) || 8,
+        }).catch((err) => {
+          console.error(
+            "[axios] Local attendance history read failed:",
+            err
+          );
+          return null;
+        });
+
+        console.log("[ATTENDANCE HISTORY CACHE RESULT]", history);
+
+        if (history) {
+          console.log("[axios] Returning cached attendance history");
+
+          return {
+            data: history,
+            status: 200,
+            statusText: "OK",
+            headers: {},
+            config: cfg,
+          };
+        }
+      }
+
+      const cached = await readCachedResponse(
+        cfg.url,
+        cfg.params
       ).catch(() => null);
-
-      if (attendance) {
-        return {
-          data: {
-            success: true,
-            data: attendance,
-          },
-          status: 200,
-          statusText: "OK (local attendance)",
-          headers: {},
-          config: cfg,
-        };
-      }
-    }
-    // Attendance history: read the latest locally saved records.
-if (
-  String(cfg.url || "").split("?")[0] ===
-  "/workers/attendance/history"
-) {
-  
-  const history = await getAttendanceHistoryPageFromCache({
-    page: Number(cfg.params?.page) || 1,
-    limit: Number(cfg.params?.limit) || 8,
-  }).catch((err) => {
-    console.error("[axios] Local attendance history read failed:", err);
-    return null;
-  });
-
-  console.log("[ATTENDANCE HISTORY CACHE RESULT]", history);
-
-  if (history) {
-    console.log("[axios] Returning cached attendance history");
-
-    return {
-      data: history,
-      status: 200,
-      statusText: "OK",
-      headers: {},
-      config: cfg,
-    };
-  }
-}
-
-    const cached = await readCachedResponse(
-      cfg.url,
-      cfg.params
-    ).catch(() => null);
 
       if (cached != null) {
         return {
@@ -519,7 +537,6 @@ if (
           config: cfg,
         };
       } catch (offlineError) {
-        
         console.error(
           "[axios] Could not save offline operation:",
           offlineError?.message
@@ -532,4 +549,4 @@ if (
     return Promise.reject(error);
   }
 );
-export default api; 
+export default api;

@@ -5,6 +5,7 @@ import {
   Save, X, Loader2, CheckCircle2, AlertCircle, LogOut, Clock,
 } from "lucide-react";
 import { getSettings, updateSettings, logout } from "../api/api";
+import { getSettingsFromCache } from "../offline";
 
 const TABS = [
   { id: "seller",      label: "Business Profile", icon: Building2 },
@@ -66,25 +67,51 @@ function Settings() {
   useEffect(() => { load(); }, []);
 
   const load = async () => {
-    try {
-      setLoading(true);
-      const res = await getSettings();
-      const d = res?.data?.data || {};
-      setForm({
-        seller: { ...EMPTY.seller, ...(d.seller || {}) },
-        bank: { ...EMPTY.bank, ...(d.bank || {}) },
-        invoice: { ...EMPTY.invoice, ...(d.invoice || {}) },
-        numbering: { ...EMPTY.numbering, ...(d.numbering || {}) },
-        preferences: { ...EMPTY.preferences, ...(d.preferences || {}) },
-        attendance: { ...EMPTY.attendance, ...(d.attendance || {}) },
-      });
-      setDirty(false);
-    } catch (err) {
-      setToast({ type: "error", msg: "Failed to load settings" });
-    } finally {
-      setLoading(false);
+  try {
+    setLoading(true);
+
+    let d = {};
+
+    if (!navigator.onLine) {
+      const cached = await getSettingsFromCache();
+
+      if (!cached?.data) {
+        throw new Error("Settings have not been saved on this device yet.");
+      }
+
+      d = cached.data;
+    } else {
+      try {
+        const res = await getSettings();
+        d = res?.data?.data || {};
+      } catch (error) {
+        const cached = await getSettingsFromCache();
+
+        if (!cached?.data) throw error;
+
+        d = cached.data;
+      }
     }
-  };
+
+    setForm({
+      seller: { ...EMPTY.seller, ...(d.seller || {}) },
+      bank: { ...EMPTY.bank, ...(d.bank || {}) },
+      invoice: { ...EMPTY.invoice, ...(d.invoice || {}) },
+      numbering: { ...EMPTY.numbering, ...(d.numbering || {}) },
+      preferences: { ...EMPTY.preferences, ...(d.preferences || {}) },
+      attendance: { ...EMPTY.attendance, ...(d.attendance || {}) },
+    });
+
+    setDirty(false);
+  } catch (err) {
+    setToast({
+      type: "error",
+      msg: err?.message || "Failed to load settings",
+    });
+  } finally {
+    setLoading(false);
+  }
+};
 
   const onChange = (section, field, value) => {
     setForm((f) => ({ ...f, [section]: { ...f[section], [field]: value } }));
@@ -157,8 +184,6 @@ function Settings() {
       setLoggingOut(false);
     }
   };
-
-  /* ---------- SAVE ---------- */
 
   const save = async () => {
     try {

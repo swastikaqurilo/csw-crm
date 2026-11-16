@@ -33,4 +33,5 @@ export {
   getPaymentsFromCache,
   getExpensesFromCache,
   getExpenseByIdFromCache,
+  getSettingsFromCache,
 } from "./reads.js";
