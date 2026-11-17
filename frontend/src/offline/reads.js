@@ -456,11 +456,6 @@ export async function getAttendanceHistoryPageFromCache({
 
     const totalWorkers = eligibleWorkers.length;
 
-      console.log("[ATTENDANCE TRACE] Final page:", {
-        total: enriched.length,
-        dates: enriched.slice(start, start + limit).map(r => r.date),
-      });
-
     return {
       ...record,
       totalWorkers,
