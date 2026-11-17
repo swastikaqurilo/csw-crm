@@ -166,27 +166,27 @@ export async function flush({ send } = {}) {
       const parentTempId = findParentTempId(row);
 
       if (parentTempId) {
-        const parent = await db.syncQueue
-          .where("operationId")
-          .equals(parentTempId)
-          .first();
+      const parent = await db.syncQueue
+        .where("operationId")
+        .equals(parentTempId)
+        .first();
 
-        if (parent?.status === "failed") {
-          await onFailure(row);
+      if (parent?.status === "failed") {
+        await onFailure(row);
 
-          await db.syncQueue.update(row.id, {
-            status: "failed",
-            lastError: "The record this action belongs to failed to sync.",
-            nextAttemptAt: 0,
-          });
+        await db.syncQueue.update(row.id, {
+          status: "failed",
+          lastError: "The record this action belongs to failed to sync.",
+          nextAttemptAt: 0,
+        });
 
-          failed += 1;
-          continue;
-        }
-
-        deferred += 1;
-        break;
+        failed += 1;
+        continue;
       }
+      
+      deferred += 1;
+      continue;
+    }
 
       try {
         const response = await sender(row);

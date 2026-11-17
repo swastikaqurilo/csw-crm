@@ -1,6 +1,7 @@
 
 import { db, openDb } from "../db/database.js";
 
+
 import {
   nowIso,
   safeDecode,
@@ -11,6 +12,7 @@ import {
   patchCachedCollections,
   upsertDedicatedRecord,
   removeDedicatedRecord,
+  rewriteQueuedReferences,
 } from "./cache.js";
 
 const REEL_STEEL_KG = {
@@ -110,7 +112,11 @@ export function getProductStockItem(id) {
 
 /* ─────────────── raw-material mutations ─────────────── */
 
-export async function applyRawMaterialCreate({ data, operationId }) {
+
+export async function applyRawMaterialCreate({
+  data,
+  operationId,
+}) {
   const optimistic = {
     ...(data || {}),
     _id: `pending:${operationId}`,
@@ -123,10 +129,17 @@ export async function applyRawMaterialCreate({ data, operationId }) {
     createdAt: nowIso(),
   };
 
-  await patchCachedCollections("/raw-material/stock", (list) => [
-    optimistic,
-    ...list.filter((item) => item.__opId !== operationId),
-  ]);
+  await patchCachedCollections(
+    "/raw-material/stock",
+    (list) => [
+      optimistic,
+      ...list.filter(
+        (item) =>
+          item.__opId !== operationId &&
+          String(item._id) !== String(optimistic._id)
+      ),
+    ]
+  );
 
   await upsertDedicatedRecord("rawStock", optimistic);
 
@@ -1075,7 +1088,6 @@ export async function reconcileProductStockAction({
 }
 
 /* ─────────────── raw-material reconciliation ─────────────── */
-
 export async function reconcileRawMaterialCreate({
   url,
   operationId,
@@ -1083,30 +1095,53 @@ export async function reconcileRawMaterialCreate({
 }) {
   const path = String(url || "").split("?")[0];
 
-  if (!/^\/raw-material\/stock\/?$/.test(path)) return;
+  if (!/^\/raw-material\/stock\/?$/.test(path)) {
+    return;
+  }
 
   const created = response?.data?.data;
-  if (!created?._id) return;
 
-  await patchCachedCollections("/raw-material/stock", (list) =>
-    list.map((item) =>
-      item.__opId === operationId
-        ? {
-            ...created,
-            __pending: false,
-            __opId: undefined,
-          }
-        : item
-    )
-  );
+  if (!created?._id) {
+    throw new Error(
+      "Raw-material creation response did not contain a valid ID."
+    );
+  }
 
-  await removeDedicatedRecord("rawStock", `pending:${operationId}`);
+  const temporaryId = `pending:${operationId}`;
+  const realId = String(created._id);
 
-  await upsertDedicatedRecord("rawStock", {
+  const reconciled = {
     ...created,
     __pending: false,
     __opId: undefined,
-  });
+  };
+
+  await patchCachedCollections(
+    "/raw-material/stock",
+    (list) => [
+      reconciled,
+      ...list.filter(
+        (item) =>
+          item.__opId !== operationId &&
+          String(item._id) !== realId &&
+          String(item._id) !== temporaryId
+      ),
+    ]
+  );
+
+  await removeDedicatedRecord(
+    "rawStock",
+    temporaryId
+  );
+
+  await upsertDedicatedRecord(
+    "rawStock",
+    reconciled
+  );
+  await rewriteQueuedReferences(
+    temporaryId,
+    realId
+  );
 }
 
 export async function reconcileRawStockUpdate({

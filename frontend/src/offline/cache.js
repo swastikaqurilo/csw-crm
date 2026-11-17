@@ -247,33 +247,70 @@ export async function patchCachedCollections(url, apply) {
   });
 }
 
-/* ───────────── rewrite queued references ───────────────── */
+
+function replaceTempReference(value, tempId, realId) {
+  if (typeof value === "string") {
+    return value.split(tempId).join(realId);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) =>
+      replaceTempReference(item, tempId, realId)
+    );
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        replaceTempReference(item, tempId, realId),
+      ])
+    );
+  }
+
+  return value;
+}
 
 export async function rewriteQueuedReferences(tempId, realId) {
   if (!tempId || !realId || tempId === realId) return;
 
   await openDb();
 
+  const temporaryId = String(tempId);
+  const permanentId = String(realId);
+  const encodedTemp = encodeURIComponent(temporaryId);
+
   await db.transaction("rw", db.syncQueue, async () => {
     const queued = await db.syncQueue.toArray();
-    const encodedTemp = encodeURIComponent(tempId);
 
     for (const op of queued) {
-      const url = String(op.url || "");
-      const nextUrl = url
-        .split(tempId)
-        .join(realId)
-        .split(encodedTemp)
-        .join(realId);
+      const oldUrl = String(op.url || "");
+
+      const newUrl = oldUrl
+        .split(temporaryId).join(permanentId)
+        .split(encodedTemp).join(permanentId);
+
+      const newData =
+        op.data && typeof op.data === "object"
+          ? replaceTempReference(
+              op.data,
+              temporaryId,
+              permanentId
+            )
+          : op.data;
 
       const updates = {};
-      if (nextUrl !== url) updates.url = nextUrl;
+
+      if (newUrl !== oldUrl) {
+        updates.url = newUrl;
+      }
+
       if (
         op.data &&
         typeof op.data === "object" &&
-        String(op.data.order) === tempId
+        JSON.stringify(newData) !== JSON.stringify(op.data)
       ) {
-        updates.data = { ...op.data, order: realId };
+        updates.data = newData;
       }
 
       if (Object.keys(updates).length > 0) {
