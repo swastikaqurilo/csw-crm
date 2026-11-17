@@ -18,7 +18,6 @@ router.get("/attendance/history", getAttendanceHistory);
 router.get("/attendance", getAttendance);
 
 router.get("/", getWorkers);
-router.post("/", createWorker);
 
 router.post("/attendance", idempotency(), saveAttendance);
 router.post("/", idempotency(), createWorker);
