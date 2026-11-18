@@ -10,13 +10,14 @@ import { toast } from "react-toastify";
 import {
   getOrders, getOrderById, createOrder, updateOrder, updateOrderStatus,
   deleteOrder, getContacts, generateInvoice, getOrderInvoice,
-  getPaymentsByOrder, createPayment,
+  getPaymentsByOrder, createPayment, getSettings,
 } from "../api/api";
 import {
   getOrdersFromCache,
   getOrderByIdFromCache,
   getPaymentsByOrderFromCache,
   getContactsFromCache,
+  getSettingsFromCache,
 } from "../offline/index.js";
 
 /* ================================================================
@@ -467,9 +468,48 @@ fetchContactsRef.current = fetchContacts;
 
   const closeView = () => setView(null);
 
-  const openCreateModal = () => setModal({
-    editing: null, form: emptyOrderForm(), customerMode: "existing", newName: "", newPhone: "",
+ const openCreateModal = async () => {
+  let defaultGstRate = 18;
+
+  try {
+    let settings;
+
+    if (navigator.onLine) {
+      try {
+        const response = await getSettings();
+        settings = response?.data?.data;
+      } catch {
+        const cached = await getSettingsFromCache();
+        settings = cached?.data;
+      }
+    } else {
+      const cached = await getSettingsFromCache();
+      settings = cached?.data;
+    }
+
+    const savedRate = Number(settings?.invoice?.defaultGstRate);
+
+    if (
+      Number.isFinite(savedRate) &&
+      savedRate >= 0
+    ) {
+      defaultGstRate = savedRate;
+    }
+  } catch (error) {
+    console.error("Could not load invoice defaults:", error);
+  }
+
+  setModal({
+    editing: null,
+    form: {
+      ...emptyOrderForm(),
+      taxPercent: String(defaultGstRate),
+    },
+    customerMode: "existing",
+    newName: "",
+    newPhone: "",
   });
+};
 
   const openEditModal = (order) => {
     if (!order) return;
