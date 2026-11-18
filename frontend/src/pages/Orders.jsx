@@ -1402,11 +1402,33 @@ fetchContactsRef.current = fetchContacts;
                               {item.size && (() => {
                                 const s = getReelSpecs(item.size);
                                 if (!s.kg) return null;
+
+                                const quantity = Math.max(0, Number(item.quantity) || 0);
+                                const totalSpoolWeight = s.spoolKg * quantity;
+                                const totalSteelWeight = s.steelKg * quantity;
+
+                                const formatWeight = (value) =>
+                                  Number(value.toFixed(2)).toLocaleString("en-IN", {
+                                    maximumFractionDigits: 2,
+                                  });
+
                                 return (
                                   <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px]">
-                                    <span className="text-slate-500">Spool weight <span className="ml-1 font-bold text-slate-800">{s.spoolKg} kg</span></span>
+                                    <span className="text-slate-500">
+                                      Spool weight
+                                      <span className="ml-1 font-bold text-slate-800">
+                                        {formatWeight(totalSpoolWeight)} kg
+                                      </span>
+                                    </span>
+
                                     <span className="text-slate-300">·</span>
-                                    <span className="text-slate-500">Steel content <span className="ml-1 font-bold text-slate-800">{s.steelKg.toFixed(2)} kg</span></span>
+
+                                    <span className="text-slate-500">
+                                      Steel content
+                                      <span className="ml-1 font-bold text-slate-800">
+                                        {formatWeight(totalSteelWeight)} kg
+                                      </span>
+                                    </span>
                                   </div>
                                 );
                               })()}
