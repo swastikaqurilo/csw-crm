@@ -9,7 +9,10 @@ import {
   getHttpRowByBasePath,
   rewriteQueuedReferences,
   patchDedicatedRecordsByModule,
+  listDedicatedRecords,
 } from "./cache.js";
+
+import { getPaymentsFromCache } from "./reads.js";
 
 const STOCK_DEDUCTED = new Set([
   "Confirmed",
@@ -252,16 +255,88 @@ export async function applyPaymentCreate({ data, operationId }) {
   const amount = Number(data.amount);
   const status = data.status || "Completed";
 
-  if (!Number.isFinite(amount) || amount <= 0) {
+    if (
+    !Number.isFinite(amount) ||
+    amount <= 0 ||
+    amount > 10000000000
+  ) {
     throw new Error("Payment amount must be greater than zero.");
   }
 
-  if (!["Pending", "Completed", "Cancelled"].includes(status)) {
-    throw new Error("Invalid payment status.");
+    if (["Draft", "Cancelled"].includes(order.status)) {
+    throw new Error(
+      `Cannot record a payment for a ${order.status} order.`
+    );
+  }
+
+  if (!order.contact) {
+    throw new Error("Order has no linked contact.");
+  }
+
+  const validModes = [
+    "Bank Transfer",
+    "UPI",
+    "Cheque",
+    "Cash",
+    "NEFT",
+    "RTGS",
+    "Other",
+  ];
+
+  if (!validModes.includes(data.paymentMode)) {
+    throw new Error("Invalid payment mode.");
+  }
+
+  if (
+    data.paymentMode === "Cheque" &&
+    (!String(data.chequeNumber || "").trim() ||
+      !String(data.bankName || "").trim())
+  ) {
+    throw new Error("Cheque number and bank name are required.");
+  }
+
+  if (
+    ["UPI", "NEFT", "RTGS", "Bank Transfer"].includes(data.paymentMode) &&
+    !String(data.transactionId || "").trim()
+  ) {
+    throw new Error(
+      `Transaction ID is required for ${data.paymentMode}.`
+    );
   }
 
   const total = Number(order.grandTotal) || 0;
   const currentPaid = Number(order.amountPaid) || 0;
+
+  // Match backend validation for existing Pending payments.
+if (status === "Pending") {
+  const cachedPayments = await getPaymentsFromCache();
+
+  const existingPending = cachedPayments
+    .filter((payment) => {
+      const paymentOrderId =
+        payment.order?._id || payment.order;
+
+      return (
+        payment.status === "Pending" &&
+        payment.isActive !== false &&
+        String(paymentOrderId) === String(orderId) &&
+        payment.__opId !== operationId
+      );
+    })
+    .reduce(
+      (sum, payment) => sum + (Number(payment.amount) || 0),
+      0
+    );
+
+  const remaining =
+    total - currentPaid - existingPending;
+
+  if (amount > remaining + 0.01) {
+    throw new Error(
+      `Pending payments would exceed remaining balance of ₹${remaining.toFixed(2)}`
+    );
+  }
+}
 
   // Only Completed payments affect the order balance.
   const amountPaid =
@@ -296,6 +371,7 @@ export async function applyPaymentCreate({ data, operationId }) {
       _id: orderId,
     },
     status,
+    appliedToOrder: status === "Completed",
     __opId: operationId,
     __pending: true,
     createdAt: nowIso(),
@@ -312,6 +388,155 @@ export async function applyPaymentCreate({ data, operationId }) {
   await upsertDedicatedRecord("payments", optimisticPayment);
 
   return optimisticPayment;
+}
+
+export async function applyPaymentUpdate({ id, data, operationId }) {
+  const payment = await getCachedByModuleAndId(
+    "payments",
+    "/payments",
+    id
+  );
+
+  if (!payment) {
+    throw new Error("Payment not cached — open it once online first.");
+  }
+
+  const orderId = payment.order?._id || payment.order;
+  const order = await getCachedOrder(orderId);
+
+  if (!order) {
+    throw new Error("Order not cached — open it once online first.");
+  }
+
+  const previousApplied =
+  payment.appliedToOrder === true ||
+  (
+    payment.appliedToOrder === undefined &&
+    (payment.status || "Completed") === "Completed"
+  );
+  const previousStatus = payment.status || "Completed";
+  const nextStatus = data?.status ?? previousStatus;
+
+  if (!["Pending", "Completed", "Cancelled"].includes(nextStatus)) {
+    throw new Error("Invalid payment status.");
+  }
+
+  const amount = Number(payment.amount) || 0;
+  let amountPaid = Number(order.amountPaid) || 0;
+
+  if (!previousApplied && nextStatus === "Completed") {
+    if (["Draft", "Cancelled"].includes(order.status)) {
+      throw new Error(
+        `Cannot complete a payment for a ${order.status} order.`
+      );
+    }
+
+    if (amountPaid + amount > Number(order.grandTotal || 0) + 0.01) {
+      throw new Error("Payment exceeds the remaining order balance.");
+    }
+
+    amountPaid += amount;
+  } else if (previousApplied && nextStatus !== "Completed")  {
+    if (amountPaid + 0.01 < amount) {
+      throw new Error("Cannot reverse this payment from the order balance.");
+    }
+
+    amountPaid = Math.max(0, amountPaid - amount);
+  }
+
+  const updatedOrder = {
+    ...order,
+    amountPaid,
+    paymentStatus:
+      amountPaid >= Number(order.grandTotal || 0)
+        ? "Paid"
+        : amountPaid > 0
+          ? "Partial"
+          : "Pending",
+    __pending: true,
+    __opId: operationId,
+  };
+
+  const updatedPayment = {
+    ...payment,
+    ...data,
+    _id: String(id),
+    order: payment.order,
+    amount: payment.amount,
+    status: nextStatus,
+    appliedToOrder: nextStatus === "Completed",
+    __pending: true,
+    __opId: operationId,
+  };
+
+  await patchOrderCaches(orderId, () => updatedOrder);
+  await upsertDedicatedRecord("orders", updatedOrder);
+
+  await patchCachedCollections("/payments", (list) =>
+    list.map((item) =>
+      String(item._id) === String(id) ? updatedPayment : item
+    )
+  );
+
+  await upsertDedicatedRecord("payments", updatedPayment);
+
+  return updatedPayment;
+}
+
+export async function applyPaymentDelete({ id, operationId }) {
+  const payment = await getCachedByModuleAndId(
+    "payments",
+    "/payments",
+    id
+  );
+
+  if (!payment) {
+    throw new Error("Payment not cached — open it once online first.");
+  }
+
+  const orderId = payment.order?._id || payment.order;
+  const order = await getCachedOrder(orderId);
+
+  if (!order) {
+    throw new Error("Order not cached — open it once online first.");
+  }
+
+  let updatedOrder = order;
+
+  if (payment.appliedToOrder === true)  {
+    const amount = Number(payment.amount) || 0;
+    const amountPaid = Number(order.amountPaid) || 0;
+
+    if (amountPaid + 0.01 < amount) {
+      throw new Error("Cannot reverse this payment from the order balance.");
+    }
+
+    const remainingPaid = Math.max(0, amountPaid - amount);
+
+    updatedOrder = {
+      ...order,
+      amountPaid: remainingPaid,
+      paymentStatus:
+        remainingPaid >= Number(order.grandTotal || 0)
+          ? "Paid"
+          : remainingPaid > 0
+            ? "Partial"
+            : "Pending",
+      __pending: true,
+      __opId: operationId,
+    };
+
+    await patchOrderCaches(orderId, () => updatedOrder);
+    await upsertDedicatedRecord("orders", updatedOrder);
+  }
+
+  await patchCachedCollections("/payments", (list) =>
+    list.filter((item) => String(item._id) !== String(id))
+  );
+
+  await removeDedicatedRecord("payments", id);
+
+  return null;
 }
 
 function withContact(created, optimisticContact) {
@@ -513,5 +738,103 @@ export async function reconcilePaymentCreate({
     if (updated) {
       await upsertDedicatedRecord("orders", updated);
     }
+  }
+}
+
+export async function reconcilePaymentUpdate({ url, response }) {
+  const path = String(url || "").split("?")[0];
+  const match = path.match(/^\/(?:api\/)?payments?\/([^/]+)\/?$/);
+
+  if (!match) return;
+
+  const id = safeDecode(match[1]);
+  const returned = response?.data?.data;
+
+  if (!returned?._id) return;
+
+  const reconciled = {
+    ...returned,
+    __pending: false,
+    __opId: undefined,
+  };
+
+  await patchCachedCollections("/payments", (list) =>
+    list.map((payment) =>
+      String(payment._id) === id ? reconciled : payment
+    )
+  );
+
+  await upsertDedicatedRecord("payments", reconciled);
+
+  const orderId = returned.order?._id || returned.order;
+
+  if (orderId && typeof returned.order === "object") {
+    await patchOrderCaches(orderId, (current) => ({
+      ...current,
+      ...returned.order,
+      _id: orderId,
+      __pending: false,
+      __opId: undefined,
+    }));
+
+    const updatedOrder = await getCachedOrder(orderId);
+
+    if (updatedOrder) {
+      await upsertDedicatedRecord("orders", updatedOrder);
+    }
+  }
+}
+
+export async function reconcilePaymentDelete({
+  url,
+  operationId,
+}) {
+  const path = String(url || "").split("?")[0];
+
+  const match = path.match(
+    /^\/(?:api\/)?payments?\/([^/]+)\/?$/
+  );
+
+  if (!match) return;
+
+  const id = safeDecode(match[1]);
+
+  // Remove the deleted payment from cached collections.
+  await patchCachedCollections("/payments", (list) =>
+    list.filter(
+      (payment) => String(payment._id) !== id
+    )
+  );
+
+  await removeDedicatedRecord("payments", id);
+
+  // Find the order updated by this exact delete operation.
+  const orders = await listDedicatedRecords("orders");
+
+  const affectedOrder = orders.find(
+    (row) => row.data?.__opId === operationId
+  );
+
+  if (!affectedOrder) return;
+
+  const orderId = affectedOrder.recordId;
+
+  // Clear markers only if this operation still owns them.
+  await patchOrderCaches(orderId, (current) => {
+    if (current?.__opId !== operationId) {
+      return current;
+    }
+
+    return {
+      ...current,
+      __pending: false,
+      __opId: undefined,
+    };
+  });
+
+  const updatedOrder = await getCachedOrder(orderId);
+
+  if (updatedOrder) {
+    await upsertDedicatedRecord("orders", updatedOrder);
   }
 }

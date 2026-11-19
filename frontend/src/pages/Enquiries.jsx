@@ -433,6 +433,8 @@ function Enquiries() {
     ) {
       setSelectedId(null);
     }
+
+    return localTotal;
   };
   
   const loadEnquiries = async () => {
@@ -482,18 +484,24 @@ function Enquiries() {
         (typeof navigator !== "undefined" && !navigator.onLine);
 
       if (isNetworkFailure) {
-        await loadLocalEnquiries(params);
+        try {
+          const localCount = await loadLocalEnquiries(params);
+
+          if (localCount === 0) {
+            toast.error(
+              "No saved enquiries are available for these filters."
+            );
+          }
+        } catch (cacheError) {
+          console.error("LOCAL ENQUIRY LOAD ERROR:", cacheError);
+          toast.error("Unable to load saved enquiries.");
+        }
       } else {
         toast.error(
-          err?.response?.data?.message || "Unable to load enquiries."
+          err?.response?.data?.message ||
+          "Unable to load enquiries."
         );
       }
-
-      toast.error(
-        isNetworkFailure
-          ? "No saved enquiries are available for these filters."
-          : err?.response?.data?.message || "Failed to load enquiries."
-      );
     } finally {
       setLoading(false);
     }
@@ -706,6 +714,62 @@ function Enquiries() {
         err?.response?.data?.message ||
         err?.message ||
         "Unable to save enquiry."
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleStatusChange = async (newStatus) => {
+    if (!selectedEnquiry?.mongoId || !newStatus) return;
+    if (newStatus === selectedEnquiry.status) return;
+
+    const previousStatus = selectedEnquiry.status;
+
+    try {
+      setSaving(true);
+
+      const response = await updateEnquiry(
+        selectedEnquiry.mongoId,
+        { status: newStatus }
+      );
+
+      const updatedRecord = response?.data?.data;
+
+      if (updatedRecord) {
+        const updated = mapEnquiry(updatedRecord);
+
+        setEnquiries((current) =>
+          current.map((item) =>
+            item.mongoId === updated.mongoId ? updated : item
+          )
+        );
+      } else {
+        setEnquiries((current) =>
+          current.map((item) =>
+            item.mongoId === selectedEnquiry.mongoId
+              ? { ...item, status: newStatus }
+              : item
+          )
+        );
+      }
+
+      toast.success("Enquiry status updated.");
+    } catch (err) {
+      console.error("ENQUIRY STATUS UPDATE ERROR:", err);
+
+      toast.error(
+        err?.response?.data?.message ||
+        "Unable to update enquiry status."
+      );
+
+      // Restore the previous status if the update failed.
+      setEnquiries((current) =>
+        current.map((item) =>
+          item.mongoId === selectedEnquiry.mongoId
+            ? { ...item, status: previousStatus }
+            : item
+        )
       );
     } finally {
       setSaving(false);

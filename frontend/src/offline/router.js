@@ -9,6 +9,7 @@ import * as attendance from "./attendance.js";
 import * as enquiries from "./enquiries.js";
 import * as contacts from "./contacts.js";
 import * as settings from "./settings.js";
+import * as followups from "./followups.js";
 
 const NOOP = () => null;
 
@@ -57,6 +58,25 @@ const APPLY = [
     v: ["POST"],
     p: /^\/(?:api\/)?enquiries\/([^/]+)\/notes\/?$/,
     h: enquiries.applyNote,
+    k: ["id"],
+  },
+
+    /* Follow-ups */
+  {
+    v: ["POST"],
+    p: /^\/(?:api\/)?follow-ups\/?$/,
+    h: followups.applyCreate,
+  },
+  {
+    v: ["PUT", "PATCH"],
+    p: /^\/(?:api\/)?follow-ups\/([^/]+)\/?$/,
+    h: followups.applyUpdate,
+    k: ["id"],
+  },
+  {
+    v: ["DELETE"],
+    p: /^\/(?:api\/)?follow-ups\/([^/]+)\/?$/,
+    h: followups.applyDelete,
     k: ["id"],
   },
   /* Purchases */
@@ -289,6 +309,25 @@ const RECONCILE = [
     p: /^\/(?:api\/)?enquiries\/([^/]+)\/notes\/?$/,
     h: enquiries.reconcileNote,
   },
+
+    /* Follow-ups */
+  {
+    v: ["POST"],
+    p: /^\/(?:api\/)?follow-ups\/?$/,
+    h: followups.reconcileCreate,
+  },
+  {
+    v: ["PUT", "PATCH"],
+    p: /^\/(?:api\/)?follow-ups\/([^/]+)\/?$/,
+    h: followups.reconcileUpdate,
+  },
+  {
+    v: ["DELETE"],
+    p: /^\/(?:api\/)?follow-ups\/([^/]+)\/?$/,
+    h: followups.reconcileDelete,
+  },
+
+  
   {
     v: ["POST", "DELETE"],
     p: /^\/raw-material\/purchases\/([^/]+)\/(receive|cancel|payments)(?:\/([^/]+))?\/?$/,
@@ -325,7 +364,22 @@ const RECONCILE = [
     p: /^\/products\/?$/,
     h: stock.reconcileProductionCreate,
   },
-
+  {
+    v: ["PUT", "PATCH"],
+    p: /^\/products\/([^/]+)\/?$/,
+    h: stock.reconcileProductionEdit,
+  },
+  {
+    v: ["DELETE"],
+    p: /^\/products\/([^/]+)\/?$/,
+    h: stock.reconcileProductionDelete,
+  },
+  {
+    v: ["PUT", "PATCH"],
+    p: /^\/products\/stock\/([^/]+)\/(reserved|adjust|scrap)\/?$/,
+    h: stock.reconcileProductStockAction,
+  },
+  
   /* Orders */
   {
     v: ["PATCH", "PUT"],

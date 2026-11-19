@@ -3,6 +3,7 @@ import Pagination from "../components/Pagination";
 import DateFilter from "../components/DateFilter";
 import { db } from "../db/database";
 import { flush, outboxCounts, OUTBOX_EVENT } from "../offline/index.js";
+import { getAttendanceByDate } from "../offline/attendance.js";
 import {
   Package, Plus, X, RefreshCw, Save, AlertTriangle, CheckCircle2,
   CalendarRange, Pencil, Trash2, Layers, Boxes, PackageX, CloudOff,
@@ -480,16 +481,37 @@ const applyOfflineStockDelta = useCallback(async (payload, oldEntry) => {
   }, []);
 
   const loadAttendance = useCallback(async (date) => {
-    if (!date) return setAbsentIds(new Set());
+    if (!date) {
+      setAbsentIds(new Set());
+      return;
+    }
+
     try {
       setAttendanceLoading(true);
-      const rec = (await getAttendance(date))?.data?.data;
-      const ids = rec && !rec.allPresent
-        ? (rec.absentWorkers || []).map((w) => String(typeof w === "object" ? w._id : w))
-        : [];
+
+      let rec;
+
+      try {
+        rec = (await getAttendance(date))?.data?.data;
+      } catch (err) {
+        console.warn("Using cached attendance:", err);
+        rec = await getAttendanceByDate(date);
+      }
+
+      const ids =
+        rec && !rec.allPresent
+          ? (rec.absentWorkers || []).map((worker) =>
+              String(
+                typeof worker === "object"
+                  ? worker._id
+                  : worker
+              )
+            )
+          : [];
+
       setAbsentIds(new Set(ids));
     } catch (err) {
-      // offline / failure → don't block submission; server will validate
+      console.error("Attendance could not be loaded:", err);
       setAbsentIds(new Set());
     } finally {
       setAttendanceLoading(false);
@@ -903,21 +925,48 @@ const handleDelete = async (entry) => {
 
   const confirmReserved = async () => {
     if (!conflict) return;
+
     setSaving(true);
     flashMsg({ error: "" });
+
     const { pending } = conflict;
+
     try {
+      let response;
+
       if (pending.kind === "adjust") {
-        const response = await adjustProductStock(pending.id, { ...pending.payload, allowReserved: true });
-        flashMsg({ success: isQueued(response) ? "Dispatch saved — will sync." : "Dispatch recorded — reserved stock was used" });
+        response = await adjustProductStock(
+          pending.id,
+          { ...pending.payload, allowReserved: true }
+        );
+
+        flashMsg({
+          success: isQueued(response)
+            ? "Dispatch saved — will sync."
+            : "Dispatch recorded — reserved stock was used",
+        });
       } else {
-        const response = pending.isEdit
-          ? await updateProductProduction(pending.id, { ...pending.payload, allowReserved: true })
-          : await createProductProduction({ ...pending.payload, allowReserved: true });
-        flashMsg({ success: isQueued(response) ? "Entry saved — will sync." : "Production entry saved — reserved stock was used" });
+        response = pending.isEdit
+          ? await updateProductProduction(
+              pending.id,
+              { ...pending.payload, allowReserved: true }
+            )
+          : await createProductProduction(
+              { ...pending.payload, allowReserved: true }
+            );
+
+        flashMsg({
+          success: isQueued(response)
+            ? "Entry saved — will sync."
+            : "Production entry saved — reserved stock was used",
+        });
       }
+
       setConflict(null);
-      if (!isQueued({ data: { offline: true } })) await refreshAll();
+
+      if (!isQueued(response)) {
+        await refreshAll();
+      }
     } catch (err) {
       flashMsg({ error: errMsg(err, "Failed to save") });
     } finally {

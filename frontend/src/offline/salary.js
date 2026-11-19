@@ -6,11 +6,16 @@ import {
   httpRowsForBasePath,
   listKeyOf,
 } from "./cache.js";
+
 import {
   getWorkersFromCache,
   getProductionsFromCache,
   getSalariesFromCache,
+  getAttendanceFromCache,
+  getSettingsFromCache,
 } from "./reads.js";
+
+import { readCachedResponse } from "../db/httpCache.js";
 
 import { getCachedWorker } from "./workers.js";
 
@@ -653,6 +658,249 @@ export async function reconcileDelete({ id }) {
   return { _id: id, deleted: true };
 }
 
+function getWorkingDates(start, end) {
+  const [sy, sm, sd] = start.split("-").map(Number);
+  const [ey, em, ed] = end.split("-").map(Number);
+
+  const current = new Date(sy, sm - 1, sd);
+  const last = new Date(ey, em - 1, ed);
+
+  const dates = [];
+
+  while (current <= last) {
+    // Backend excludes Sundays.
+    if (current.getDay() !== 0) {
+      const year = current.getFullYear();
+      const month = String(current.getMonth() + 1).padStart(2, "0");
+      const day = String(current.getDate()).padStart(2, "0");
+
+      dates.push(`${year}-${month}-${day}`);
+    }
+
+    current.setDate(current.getDate() + 1);
+  }
+
+  return dates;
+}
+
+function timeToMinutes(value) {
+  if (!value) return null;
+
+  const match = String(value).trim().match(/^(\d{1,2}):(\d{2})/);
+
+  if (!match) return null;
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+
+  if (hours > 23 || minutes > 59) return null;
+
+  return hours * 60 + minutes;
+}
+
+async function getAttendanceSnapshot(date) {
+  // Prefer a locally saved attendance record.
+  const local = await getAttendanceFromCache(date);
+
+  if (local) return local;
+
+  // Otherwise check the previously cached GET response.
+  const cached = await readCachedResponse(
+    "/workers/attendance",
+    { date }
+  );
+
+  if (!cached) {
+    throw new Error(
+      `Attendance for ${date} is not available offline. Load this date's attendance while online before generating fixed salaries.`
+    );
+  }
+
+  // A cached null means the server confirmed no attendance
+  // record existed for this date.
+  return cached.data ?? null;
+}
+
+async function calculateFixedSalaryOffline({
+  worker,
+  periodStart,
+  periodEnd,
+  settings,
+}) {
+  const joiningDate = String(worker.joiningDate || "").slice(0, 10);
+
+  const effectiveStart =
+    joiningDate && joiningDate > periodStart
+      ? joiningDate
+      : periodStart;
+
+  const fullPeriodDates = getWorkingDates(
+    periodStart,
+    periodEnd
+  );
+
+  const employedDates = getWorkingDates(
+    effectiveStart,
+    periodEnd
+  );
+
+  const fullPeriodWorkingDays = fullPeriodDates.length;
+  const workingDays = employedDates.length;
+
+  if (workingDays <= 0) {
+    return {
+      basicSalary: 0,
+      attendance: {
+        workingDays: 0,
+        fullPeriodWorkingDays,
+        presentDays: 0,
+        absentDays: 0,
+        halfDays: 0,
+        dailyRate: 0,
+        absenceDeduction: 0,
+        proratedBase: 0,
+        employedRatio: 0,
+      },
+    };
+  }
+
+  const attendanceByDate = new Map();
+
+  // Load every required working day's attendance.
+  for (const date of employedDates) {
+    attendanceByDate.set(
+      date,
+      await getAttendanceSnapshot(date)
+    );
+  }
+
+  const policy = settings?.attendance || {};
+
+  const lateCutoff = timeToMinutes(
+    policy.lateLoginCutoff || "09:30"
+  );
+
+  const earlyCutoff = timeToMinutes(
+    policy.earlyLogoutCutoff || "18:00"
+  );
+
+  let absentDays = 0;
+  let halfDays = 0;
+
+  for (const date of employedDates) {
+    const attendance = attendanceByDate.get(date);
+
+    // Same behavior as the backend:
+    // no attendance document means no absence deduction.
+    if (!attendance) continue;
+
+    let record = null;
+
+    if (
+      Array.isArray(attendance.records) &&
+      attendance.records.length
+    ) {
+      record = attendance.records.find(
+        (item) =>
+          String(item.worker?._id || item.worker) ===
+          String(worker._id)
+      );
+    }
+
+    if (record) {
+      if (record.status === "Absent") {
+        absentDays++;
+        continue;
+      }
+
+      const loginMinutes = timeToMinutes(record.loginTime);
+      const logoutMinutes = timeToMinutes(record.logoutTime);
+
+      const isLate =
+        loginMinutes !== null &&
+        lateCutoff !== null &&
+        loginMinutes > lateCutoff;
+
+      const isEarly =
+        logoutMinutes !== null &&
+        earlyCutoff !== null &&
+        logoutMinutes < earlyCutoff;
+
+      // Being both late and early still counts as one half-day,
+      // matching the current backend calculation.
+      if (isLate || isEarly) {
+        halfDays++;
+      }
+
+      continue;
+    }
+
+    if (attendance.allPresent === true) continue;
+
+    const isAbsent =
+      Array.isArray(attendance.absentWorkers) &&
+      attendance.absentWorkers.some(
+        (item) =>
+          String(item?._id || item) === String(worker._id)
+      );
+
+    if (isAbsent) absentDays++;
+  }
+
+  const monthlySalary = Number(worker.fixedPay?.amount) || 0;
+
+  const dayBasis =
+    fullPeriodWorkingDays > 0
+      ? fullPeriodWorkingDays
+      : 30;
+
+  const dailyRate = monthlySalary / dayBasis;
+
+  // This mirrors the backend's current setting behavior.
+  const prorateMidMonthJoins = Boolean(
+    policy.prorateMidMonthJoins
+  );
+
+  const employedRatio =
+    prorateMidMonthJoins && fullPeriodWorkingDays > 0
+      ? workingDays / fullPeriodWorkingDays
+      : 1;
+
+  const proratedBase = monthlySalary * employedRatio;
+
+  const deductionUnits = absentDays + halfDays * 0.5;
+
+  const absenceDeduction = dailyRate * deductionUnits;
+
+  const adjustedBasic = Math.max(
+    0,
+    proratedBase - absenceDeduction
+  );
+
+  return {
+    basicSalary: money(adjustedBasic),
+
+    attendance: {
+      workingDays,
+      fullPeriodWorkingDays,
+
+      presentDays: money(
+        Math.max(
+          workingDays - absentDays - halfDays * 0.5,
+          0
+        )
+      ),
+
+      absentDays,
+      halfDays,
+      dailyRate: money(dailyRate),
+      absenceDeduction: money(absenceDeduction),
+      proratedBase: money(proratedBase),
+      employedRatio:
+        Math.round(employedRatio * 10000) / 10000,
+    },
+  };
+}
 
 export async function applyGenerate({ data, operationId }) {
   const start = getDateOnly(data?.periodStart);
@@ -691,38 +939,52 @@ export async function applyGenerate({ data, operationId }) {
   const results = [];
 
   for (const worker of activeWorkers) {
-    if (worker.payType !== "Variable") {
-      results.push({
-        worker: worker._id,
-        name: worker.name,
-        status: "skipped",
-        reason: "Fixed salary calculation is not yet supported by this offline generation handler.",
-      });
-      continue;
-    }
+  const workerId = String(worker._id);
+  const workerPhone = String(worker.phone || "").replace(/\D/g, "");
 
-    const workerId = String(worker._id);
-    const workerPhone = String(worker.phone || "").replace(/\D/g, "");
+  let basicSalary = 0;
+  let attendance = null;
+  let production = null;
 
-    const workerProductions = productions.filter((production) => {
-      const date = String(production.date || "").slice(0, 10);
+  if (worker.payType === "Fixed") {
+    const settingsResult = await getSettingsFromCache();
+
+    const settings =
+      settingsResult?.data?.data ||
+      settingsResult?.data ||
+      null;
+
+    const calculation = await calculateFixedSalaryOffline({
+      worker,
+      periodStart: start,
+      periodEnd: end,
+      settings,
+    });
+
+    basicSalary = calculation.basicSalary;
+    attendance = calculation.attendance;
+  } else {
+    const workerProductions = productions.filter((item) => {
+      const date = String(item.date || "").slice(0, 10);
 
       return (
-        production.isActive !== false &&
+        item.isActive !== false &&
         date >= start &&
         date <= end &&
-        Array.isArray(production.workers) &&
-        production.workers.some(
-          (entry) => String(entry.worker?._id || entry.worker) === workerId
+        Array.isArray(item.workers) &&
+        item.workers.some(
+          (entry) =>
+            String(entry.worker?._id || entry.worker) === workerId
         )
       );
     });
 
     let totalKg = 0;
 
-    for (const production of workerProductions) {
-      const entry = production.workers.find(
-        (item) => String(item.worker?._id || item.worker) === workerId
+    for (const item of workerProductions) {
+      const entry = item.workers.find(
+        (record) =>
+          String(record.worker?._id || record.worker) === workerId
       );
 
       totalKg += Number(entry?.kg || 0);
@@ -731,7 +993,15 @@ export async function applyGenerate({ data, operationId }) {
     totalKg = Math.round(totalKg * 1000) / 1000;
 
     const ratePerKg = money(worker.variablePay?.ratePerKg);
-    const basicSalary = money(totalKg * ratePerKg);
+
+    basicSalary = money(totalKg * ratePerKg);
+
+    production = {
+      totalKg,
+      ratePerKg,
+      totalEarnings: basicSalary,
+    };
+  }
 
     // Find every existing salary for this worker and period.
     const existingMatches = existingSalaries.filter((salary) => {
@@ -857,7 +1127,7 @@ export async function applyGenerate({ data, operationId }) {
       ...(existing || {}),
       _id: existing?._id || `pending:${operationId}:${workerId}`,
       worker,
-      payType: "Variable",
+      payType:  worker.payType,
       periodStart: start,
       periodEnd: end,
       basicSalary,
@@ -868,11 +1138,8 @@ export async function applyGenerate({ data, operationId }) {
       advanceAmount: money(existing?.advanceAmount),
       payments: existing?.payments || [],
       advances: existing?.advances || [],
-      production: {
-        totalKg,
-        ratePerKg,
-        totalEarnings: basicSalary,
-      },
+      ...(attendance ? { attendance } : {}),
+      ...(production ? { production } : {}),
       paymentStatus: calculateStatus({
         netSalary,
         paidAmount: existing?.paidAmount,
