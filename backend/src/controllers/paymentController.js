@@ -533,6 +533,8 @@ const getPaymentSummary = async (req, res) => {
 const createPayment = async (req, res) => {
   const session = await mongoose.startSession();
 
+  const isOfflineQueue = req.get('X-CSW-Offline-Queue') === 'true';
+
   try {
     const {
       order: orderId,
@@ -582,7 +584,7 @@ const createPayment = async (req, res) => {
         .json({ success: false, message: 'Invalid status' });
     }
 
-    if (paymentMode === 'Cheque') {
+    if (!isOfflineQueue && paymentMode === 'Cheque')  {
       if (!safeString(chequeNumber, 50)) {
         return res.status(400).json({
           success: false,
@@ -597,7 +599,11 @@ const createPayment = async (req, res) => {
       }
     }
 
-    if (NEEDS_TXN_ID.includes(paymentMode) && !safeString(transactionId, 100)) {
+    if (
+  !isOfflineQueue &&
+  NEEDS_TXN_ID.includes(paymentMode) &&
+  !safeString(transactionId, 100)
+) {
       return res.status(400).json({
         success: false,
         message: `Transaction ID is required for ${paymentMode}`,
@@ -718,32 +724,31 @@ const createPayment = async (req, res) => {
 
       const paymentNumber = await generatePaymentNumber(session);
 
-      const [payment] = await Payment.create(
-        [
-          {
-            paymentNumber,
-            order: order._id,
-            contact: order.contact,
-            amount: numericAmount,
-            currency: finalCurrency,
-            paymentDate: cleanPaymentDate,
-            paymentMode,
-            paidFrom: safeString(paidFrom, 150) || undefined,
-            transactionId: safeString(transactionId, 100) || undefined,
-            chequeNumber: safeString(chequeNumber, 50) || undefined,
-            bankName: safeString(bankName, 150) || undefined,
-            status,
-            notes: safeString(notes, 2000) || undefined,
-            attachmentUrl: safeString(attachmentUrl, 500) || undefined,
-            appliedToOrder: status === 'Completed',
-            idempotencyKey: cleanIdempotencyKey || undefined,
-            createdBy: req.user?._id,
-          },
-        ],
-        { session }
-      );
+      const payment = new Payment({
+      paymentNumber,
+      order: order._id,
+      contact: order.contact,
+      amount: numericAmount,
+      currency: finalCurrency,
+      paymentDate: cleanPaymentDate,
+      paymentMode,
+      paidFrom: safeString(paidFrom, 150) || undefined,
+      transactionId: safeString(transactionId, 100) || undefined,
+      chequeNumber: safeString(chequeNumber, 50) || undefined,
+      bankName: safeString(bankName, 150) || undefined,
+      status,
+      notes: safeString(notes, 2000) || undefined,
+      attachmentUrl: safeString(attachmentUrl, 500) || undefined,
+      appliedToOrder: status === 'Completed',
+      idempotencyKey: cleanIdempotencyKey || undefined,
+      createdBy: req.user?._id,
+    });
 
-      createdPayment = payment;
+    payment.$locals.allowIncompletePaymentDetails = isOfflineQueue;
+
+    await payment.save({ session });
+
+    createdPayment = payment;
     });
 
     if (idempotentReplayId) {

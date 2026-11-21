@@ -313,34 +313,6 @@ export async function applyPaymentCreate({ data, operationId }) {
   const chequeNumber = safeString(data.chequeNumber, 50);
   const bankName = safeString(data.bankName, 150);
 
-  // Cheque validation.
-  if (paymentMode === "Cheque") {
-    if (!chequeNumber) {
-      throw new Error("Cheque number is required.");
-    }
-
-    if (!bankName) {
-      throw new Error("Bank name is required.");
-    }
-  }
-
-  // Transaction ID validation.
-  const modesRequiringTransactionId = [
-    "UPI",
-    "NEFT",
-    "RTGS",
-    "Bank Transfer",
-  ];
-
-  if (
-    modesRequiringTransactionId.includes(paymentMode) &&
-    !transactionId
-  ) {
-    throw new Error(
-      `Transaction ID is required for ${paymentMode}.`
-    );
-  }
-
   // Prevent duplicate transaction IDs in cached payments.
   if (transactionId) {
     const cachedPayments = await getPaymentsFromCache();
@@ -1236,3 +1208,82 @@ export async function reconcilePaymentDelete({
     list.filter((item) => String(item._id) !== id)
   );
 }
+
+
+export async function reconcilePaymentUpdate({
+  url,
+  operationId,
+  response,
+}) {
+  const path = String(url || "").split("?")[0];
+
+  const match = path.match(
+    /^\/(?:api\/)?payments?\/([^/]+)\/?$/
+  );
+
+  if (!match) return;
+
+  const id = safeDecode(match[1]);
+  const returned = response?.data?.data;
+
+  if (!returned?._id) return;
+
+  const realId = String(returned._id);
+
+  let reconciledPayment = null;
+
+  await patchCachedCollections("/payments", (list) =>
+    list.map((payment) => {
+      if (String(payment._id) !== id) return payment;
+
+      reconciledPayment = {
+        ...payment,
+        ...returned,
+        __pending: false,
+        __opId: undefined,
+      };
+
+      return reconciledPayment;
+    })
+  );
+
+  const existing = await getCachedByModuleAndId(
+    "payments",
+    "/payments",
+    realId
+  );
+
+  const finalPayment = {
+    ...existing,
+    ...reconciledPayment,
+    ...returned,
+    __pending: false,
+    __opId: undefined,
+  };
+
+  await upsertDedicatedRecord("payments", finalPayment);
+
+  const orderId = returned.order?._id || returned.order;
+
+  const returnedOrder =
+    returned.order && typeof returned.order === "object"
+      ? returned.order
+      : null;
+
+  if (orderId && returnedOrder) {
+    await patchOrderCaches(orderId, (current) => ({
+      ...current,
+      ...returnedOrder,
+      _id: orderId,
+      __pending: false,
+      __opId: undefined,
+    }));
+
+    const updatedOrder = await getCachedOrder(orderId);
+
+    if (updatedOrder) {
+      await upsertDedicatedRecord("orders", updatedOrder);
+    }
+  }
+}
+

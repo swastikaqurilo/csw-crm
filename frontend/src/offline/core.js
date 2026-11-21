@@ -115,13 +115,28 @@ export const applyOptimistic = routerApply;
 
 /* ─────────────── sender ─────────────── */
 
+
 async function defaultSender(operation) {
   const { default: api } = await import("../api/axios.js");
+
+  const paymentPath = String(operation.url || "")
+    .split("?")[0]
+    .replace(/^\/api(?=\/)/, "");
+
+  const isQueuedPaymentCreate =
+    operation.method === "POST" &&
+    /^\/payments?\/?$/i.test(paymentPath);
+
   return api.request({
     method: operation.method,
     url: operation.url,
     data: operation.data ?? undefined,
-    headers: { "Idempotency-Key": operation.operationId },
+    headers: {
+      "Idempotency-Key": operation.operationId,
+      ...(isQueuedPaymentCreate
+        ? { "X-CSW-Offline-Queue": "true" }
+        : {}),
+    },
     __fromOutbox: true,
   });
 }

@@ -851,8 +851,14 @@ fetchContactsRef.current = fetchContacts;
 
       await fetchOrders();
     } catch (err) {
-      toast.error(err?.response?.data?.message || "Could not record payment.");
-    }
+  console.error("[PAYMENT CREATE DEBUG]", err);
+  console.error("[PAYMENT CREATE MESSAGE]", err?.message);
+  toast.error(
+    err?.response?.data?.message ||
+    err?.message ||
+    "Could not record payment."
+  );
+}
   };
 
   const firstShown = pagination.total === 0 ? 0 : (pagination.page - 1) * ORDERS_PER_PAGE + 1;

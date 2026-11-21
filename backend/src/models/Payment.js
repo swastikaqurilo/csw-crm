@@ -148,6 +148,9 @@ paymentSchema.pre('validate', function () {
   if (!this.isReconciled) {
     this.reconciledDate = null;
   }
+    if (this.$locals?.allowIncompletePaymentDetails) {
+    return;
+  }
   if (this.paymentMode === 'Cheque') {
     if (!this.chequeNumber) {
       this.invalidate('chequeNumber', 'Cheque number is required for Cheque payments');
