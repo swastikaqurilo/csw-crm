@@ -137,8 +137,9 @@ export async function getPaymentsFromCache({
 } = {}) {
   let list = await collectModule("payments", "/payment");
 
-  // Attach cached order details when payment.order contains only an ID.
   const orders = await collectModule("orders", "/order");
+
+  list = list.filter((payment) => payment.isActive !== false);
 
   list = list.map((payment) => {
     const orderId =
@@ -217,6 +218,7 @@ export async function getPaymentByIdFromCache(id) {
   return getCachedByModuleAndId("payments", "/payment", id);
 }
 
+
 export async function getPaymentSummaryFromCache() {
   const payments = await getPaymentsFromCache();
 
@@ -224,56 +226,139 @@ export async function getPaymentSummaryFromCache() {
   const today =
     `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 
-  const completed = payments.filter(
-    (payment) => payment.status === "Completed"
+  const activePayments = payments.filter(
+    (payment) => payment.isActive !== false
   );
 
-  const todayPayments = completed.filter(
-    (payment) => paymentDateKey(payment.paymentDate) === today
-  );
+  const currencies = {};
+
+  const currencyList = [
+    ...new Set(
+      activePayments.map((payment) => payment.currency || "INR")
+    ),
+  ];
+
+  for (const currency of currencyList) {
+    const currencyPayments = activePayments.filter(
+      (payment) => (payment.currency || "INR") === currency
+    );
+
+    const completed = currencyPayments.filter(
+      (payment) => payment.status === "Completed"
+    );
+
+    const todayPayments = completed.filter(
+      (payment) => paymentDateKey(payment.paymentDate) === today
+    );
+
+    currencies[currency] = {
+      totalCollected: completed.reduce(
+        (sum, payment) => sum + (Number(payment.amount) || 0),
+        0
+      ),
+
+      totalCollectedCount: completed.length,
+
+      totalToday: todayPayments.reduce(
+        (sum, payment) => sum + (Number(payment.amount) || 0),
+        0
+      ),
+
+      totalTodayCount: todayPayments.length,
+
+      byStatus: ["Completed", "Pending", "Cancelled"].map(
+        (status) => {
+          const rows = currencyPayments.filter(
+            (payment) => payment.status === status
+          );
+
+          return {
+            status,
+            total: rows.reduce(
+              (sum, payment) => sum + (Number(payment.amount) || 0),
+              0
+            ),
+            count: rows.length,
+          };
+        }
+      ),
+    };
+  }
 
   return {
-    totalCollected: completed.reduce(
-      (sum, payment) => sum + (Number(payment.amount) || 0),
-      0
-    ),
+    totalCollected:
+      currencies.INR?.totalCollected ||
+      Object.values(currencies)[0]?.totalCollected ||
+      0,
 
-    totalCollectedCount: completed.length,
+    totalCollectedCount:
+      currencies.INR?.totalCollectedCount ||
+      Object.values(currencies)[0]?.totalCollectedCount ||
+      0,
 
-    totalToday: todayPayments.reduce(
-      (sum, payment) => sum + (Number(payment.amount) || 0),
-      0
-    ),
+    totalToday:
+      currencies.INR?.totalToday ||
+      Object.values(currencies)[0]?.totalToday ||
+      0,
 
-    totalTodayCount: todayPayments.length,
+    totalTodayCount:
+      currencies.INR?.totalTodayCount ||
+      Object.values(currencies)[0]?.totalTodayCount ||
+      0,
 
-    byStatus: ["Completed", "Pending", "Cancelled"].map((name) => {
-      const rows = payments.filter(
-        (payment) => payment.status === name
-      );
-
-      return {
-        _id: name,
-        count: rows.length,
-        amount: rows.reduce(
-          (sum, payment) => sum + (Number(payment.amount) || 0),
-          0
-        ),
-      };
-    }),
+    currencies,
   };
 }
 
 export async function getPaymentsByOrderFromCache(orderId) {
   const strId = String(orderId);
-  const order = await getCachedByModuleAndId("orders", "/order", strId);
+
+  const order = await getCachedByModuleAndId(
+    "orders",
+    "/order",
+    strId
+  );
 
   const payments = await collectModule("payments", "/payment");
+
   const list = payments
-    .filter((p) => String(p.order?._id || p.order) === strId)
+    .filter(
+      (payment) =>
+        payment.isActive !== false &&
+        String(payment.order?._id || payment.order) === strId
+    )
     .sort(byDateDesc("createdAt"));
 
-  return { order, data: list };
+  const orderTotal = Number(order?.grandTotal) || 0;
+  const totalPaid = Number(order?.amountPaid) || 0;
+
+  const pendingAmount = list
+    .filter((payment) => payment.status === "Pending")
+    .reduce(
+      (total, payment) => total + (Number(payment.amount) || 0),
+      0
+    );
+
+  const remainingAmount = Math.max(0, orderTotal - totalPaid);
+
+  const availableForPayment = Math.max(
+    0,
+    orderTotal - totalPaid - pendingAmount
+  );
+
+  return {
+    count: list.length,
+    order,
+    summary: {
+      orderTotal,
+      totalPaid,
+      pendingAmount,
+      remainingAmount,
+      availableForPayment,
+      paymentStatus: order?.paymentStatus,
+    },
+    data: list,
+  };
 }
 
 /* ─────────────── contacts ─────────────── */
